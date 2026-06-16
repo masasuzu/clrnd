@@ -75,13 +75,12 @@ func GetService(ctx context.Context, project, region, service string) (*run.Serv
 // 置換する。created は新規作成だったかを表す。dryRun が true の場合はサーバ側で検証のみ行い、
 // 実際の変更は行わない。
 func Deploy(ctx context.Context, project, region, service string, manifest []byte, dryRun bool) (created bool, err error) {
-	if err := Validate(manifest, service); err != nil {
+	svc, err := parseManifest(manifest)
+	if err != nil {
 		return false, err
 	}
-
-	var svc run.Service
-	if err := yaml.Unmarshal(manifest, &svc); err != nil {
-		return false, fmt.Errorf("failed to parse the manifest: %w", err)
+	if err := validate(svc, service); err != nil {
+		return false, err
 	}
 	// 送信先プロジェクトと body の namespace を一致させる。
 	if svc.Metadata != nil {
@@ -106,14 +105,14 @@ func Deploy(ctx context.Context, project, region, service string, manifest []byt
 		}
 		// 未存在なので新規作成する。
 		parent := fmt.Sprintf("namespaces/%s", project)
-		if _, err := client.Namespaces.Services.Create(parent, &svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+		if _, err := client.Namespaces.Services.Create(parent, svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
 			return false, fmt.Errorf("failed to create service %q: %w", service, err)
 		}
 		return true, nil
 	}
 
 	// 既存なので置換する。
-	if _, err := client.Namespaces.Services.ReplaceService(name, &svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+	if _, err := client.Namespaces.Services.ReplaceService(name, svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
 		return false, fmt.Errorf("failed to update service %q: %w", service, err)
 	}
 	return false, nil
@@ -168,12 +167,25 @@ func Normalize(manifest []byte) ([]byte, error) {
 // API へはアクセスせず、構造とデプロイに必須のフィールドだけを確認する。問題が無ければ
 // nil を、複数の問題があればまとめたエラーを返す。
 func Validate(manifest []byte, service string) error {
-	var svc run.Service
-	// UnmarshalStrict は未知フィールド (フィールド名の打ち間違いなど) も検出する。
-	if err := yaml.UnmarshalStrict(manifest, &svc); err != nil {
-		return fmt.Errorf("failed to parse the manifest: %w", err)
+	svc, err := parseManifest(manifest)
+	if err != nil {
+		return err
 	}
+	return validate(svc, service)
+}
 
+// parseManifest はマニフェストを run.Service に厳密にパースする。UnmarshalStrict は
+// 未知フィールド (フィールド名の打ち間違いなど) も検出する。
+func parseManifest(manifest []byte) (*run.Service, error) {
+	var svc run.Service
+	if err := yaml.UnmarshalStrict(manifest, &svc); err != nil {
+		return nil, fmt.Errorf("failed to parse the manifest: %w", err)
+	}
+	return &svc, nil
+}
+
+// validate はパース済みのサービス定義を検証する。
+func validate(svc *run.Service, service string) error {
 	var errs []error
 	if svc.ApiVersion != manifestAPIVersion {
 		errs = append(errs, fmt.Errorf("apiVersion must be %q, got %q", manifestAPIVersion, svc.ApiVersion))
@@ -189,12 +201,15 @@ func Validate(manifest []byte, service string) error {
 		errs = append(errs, fmt.Errorf("metadata.name %q does not match service argument %q", svc.Metadata.Name, service))
 	}
 
-	containers := serviceContainers(&svc)
+	containers := serviceContainers(svc)
 	if len(containers) == 0 {
 		errs = append(errs, errors.New("spec.template.spec.containers must define at least one container"))
 	}
 	for i, c := range containers {
-		if c.Image == "" {
+		switch {
+		case c == nil:
+			errs = append(errs, fmt.Errorf("spec.template.spec.containers[%d] must not be null", i))
+		case c.Image == "":
 			errs = append(errs, fmt.Errorf("spec.template.spec.containers[%d].image is required", i))
 		}
 	}
