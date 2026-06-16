@@ -6,8 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `crner` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `diff`, `deploy`, and `load`
-subcommands. `load`, `diff`, and `verify` are implemented; `deploy` is a stub that currently
-just prints its own name.
+subcommands. All four (`load`, `diff`, `verify`, `deploy`) are implemented.
 
 ## Commands
 
@@ -35,10 +34,14 @@ gofmt -w .              # format
 
 ### internal/cloudrun (the core logic)
 
-- `GetService(ctx, project, region, service)` — fetches a `*run.Service` using **Application
+- `newClient` builds the API client; `GetService`/`Deploy` share it. Auth is **Application
   Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.
+- `Deploy` validates locally (`Validate`), then `Get`s the service to decide between `Create`
+  (404 → new) and `ReplaceService` (exists → update); `isNotFound` distinguishes the 404 via
+  `googleapi.Error`. A `--dry-run` flag passes `dryRun=all` for server-side validation with no
+  mutation.
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
   via `option.WithEndpoint`), so `--region` must be a required flag, not optional.
 - `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,

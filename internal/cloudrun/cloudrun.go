@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/pmezard/go-difflib/difflib"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
@@ -43,14 +44,23 @@ var serverManagedMetaFields = []string{
 	"namespace",
 }
 
-// GetService はローカルの Application Default Credentials を使い、指定したサービスの定義を
-// Cloud Run Admin API から取得する。ADC は run.NewService が自動的に検出する。
-func GetService(ctx context.Context, project, region, service string) (*run.Service, error) {
-	// v1 namespaces API はリージョナルエンドポイントを必要とする。
+// newClient はローカルの Application Default Credentials を使う Cloud Run Admin API
+// クライアントを生成する。ADC は run.NewService が自動的に検出する。
+// v1 namespaces API はリージョナルエンドポイントを必要とする。
+func newClient(ctx context.Context, region string) (*run.APIService, error) {
 	endpoint := fmt.Sprintf("https://%s-run.googleapis.com", region)
 	client, err := run.NewService(ctx, option.WithEndpoint(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize the Cloud Run client: %w", err)
+	}
+	return client, nil
+}
+
+// GetService は指定したサービスの定義を Cloud Run Admin API から取得する。
+func GetService(ctx context.Context, project, region, service string) (*run.Service, error) {
+	client, err := newClient(ctx, region)
+	if err != nil {
+		return nil, err
 	}
 
 	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
@@ -59,6 +69,63 @@ func GetService(ctx context.Context, project, region, service string) (*run.Serv
 		return nil, fmt.Errorf("failed to get service %q: %w", service, err)
 	}
 	return obj, nil
+}
+
+// Deploy はマニフェストを Cloud Run に適用する。サービスが存在しなければ作成し、存在すれば
+// 置換する。created は新規作成だったかを表す。dryRun が true の場合はサーバ側で検証のみ行い、
+// 実際の変更は行わない。
+func Deploy(ctx context.Context, project, region, service string, manifest []byte, dryRun bool) (created bool, err error) {
+	if err := Validate(manifest, service); err != nil {
+		return false, err
+	}
+
+	var svc run.Service
+	if err := yaml.Unmarshal(manifest, &svc); err != nil {
+		return false, fmt.Errorf("failed to parse the manifest: %w", err)
+	}
+	// 送信先プロジェクトと body の namespace を一致させる。
+	if svc.Metadata != nil {
+		svc.Metadata.Namespace = project
+	}
+
+	client, err := newClient(ctx, region)
+	if err != nil {
+		return false, err
+	}
+
+	var dryRunVal string
+	if dryRun {
+		dryRunVal = "all"
+	}
+
+	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
+	_, getErr := client.Namespaces.Services.Get(name).Context(ctx).Do()
+	if getErr != nil {
+		if !isNotFound(getErr) {
+			return false, fmt.Errorf("failed to check service %q: %w", service, getErr)
+		}
+		// 未存在なので新規作成する。
+		parent := fmt.Sprintf("namespaces/%s", project)
+		if _, err := client.Namespaces.Services.Create(parent, &svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+			return false, fmt.Errorf("failed to create service %q: %w", service, err)
+		}
+		return true, nil
+	}
+
+	// 既存なので置換する。
+	if _, err := client.Namespaces.Services.ReplaceService(name, &svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+		return false, fmt.Errorf("failed to update service %q: %w", service, err)
+	}
+	return false, nil
+}
+
+// isNotFound は googleapi の 404 エラーかどうかを判定する。
+func isNotFound(err error) bool {
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		return gerr.Code == 404
+	}
+	return false
 }
 
 // ToManifest はサーバ側が付与する read-only フィールドを取り除き、デプロイに使える

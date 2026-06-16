@@ -2,7 +2,7 @@
 
 `crner` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
 It takes a service name and a manifest file as arguments and provides subcommands to verify, diff,
-deploy, and load Cloud Run services.
+deploy, and load Cloud Run services. 
 
 ## Installation
 
@@ -43,6 +43,66 @@ crner [command]
 | `load`   | Load the manifest of an existing service.                 |
 
 Run `crner [command] --help` for details on a specific command.
+
+All commands that take a `<service>` and `<manifest>` expect the service name to match the
+manifest's `metadata.name`. A typical workflow is `load` → edit → `verify` → `diff` → `deploy`.
+
+### verify
+
+Validate that a manifest is a well-formed Cloud Run service definition and contains the fields
+required to deploy. This is a local check: it does not access the API and needs no credentials,
+so it is safe to run in CI. Nothing is printed when the manifest is valid; problems are reported
+to stderr with a non-zero exit code.
+
+```sh
+crner verify <service> <manifest>
+```
+
+```sh
+crner verify my-service service.yaml
+```
+
+### diff
+
+Fetch the live definition of the service from Cloud Run and show a unified diff against the given
+manifest file. Both sides are normalized (read-only fields removed) before comparison, so a
+manifest produced by `load` compares cleanly. Nothing is printed when there is no difference.
+
+```sh
+crner diff <service> <manifest> --project <PROJECT> --region <REGION>
+```
+
+| Flag        | Description                                          |
+| ----------- | ---------------------------------------------------- |
+| `--project` | GCP project ID. (required)                           |
+| `--region`  | Cloud Run region, e.g. `asia-northeast1`. (required) |
+
+```sh
+crner diff my-service service.yaml --project my-project --region asia-northeast1
+```
+
+### deploy
+
+Apply the manifest to Cloud Run, creating the service if it does not exist or replacing it
+otherwise. The manifest is validated locally before the request is sent.
+
+```sh
+crner deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-run]
+```
+
+| Flag        | Description                                                    |
+| ----------- | ------------------------------------------------------------- |
+| `--project` | GCP project ID. (required)                                    |
+| `--region`  | Cloud Run region, e.g. `asia-northeast1`. (required)          |
+| `--dry-run` | Validate the request server-side without applying any changes. |
+
+```sh
+# Validate against the server without changing anything
+crner deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
+
+# Deploy for real
+crner deploy my-service service.yaml --project my-project --region asia-northeast1
+```
 
 ### load
 
