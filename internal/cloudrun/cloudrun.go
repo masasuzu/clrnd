@@ -4,12 +4,18 @@ package cloudrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/pmezard/go-difflib/difflib"
 	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
+)
+
+const (
+	manifestAPIVersion = "serving.knative.dev/v1"
+	manifestKind       = "Service"
 )
 
 // サーバ側が付与する read-only なアノテーション。デプロイ用マニフェストには不要。
@@ -89,6 +95,52 @@ func Normalize(manifest []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to convert the manifest to YAML: %w", err)
 	}
 	return out, nil
+}
+
+// Validate はローカルのマニフェストが Cloud Run のサービス定義として妥当かを検証する。
+// API へはアクセスせず、構造とデプロイに必須のフィールドだけを確認する。問題が無ければ
+// nil を、複数の問題があればまとめたエラーを返す。
+func Validate(manifest []byte, service string) error {
+	var svc run.Service
+	// UnmarshalStrict は未知フィールド (フィールド名の打ち間違いなど) も検出する。
+	if err := yaml.UnmarshalStrict(manifest, &svc); err != nil {
+		return fmt.Errorf("failed to parse the manifest: %w", err)
+	}
+
+	var errs []error
+	if svc.ApiVersion != manifestAPIVersion {
+		errs = append(errs, fmt.Errorf("apiVersion must be %q, got %q", manifestAPIVersion, svc.ApiVersion))
+	}
+	if svc.Kind != manifestKind {
+		errs = append(errs, fmt.Errorf("kind must be %q, got %q", manifestKind, svc.Kind))
+	}
+
+	switch {
+	case svc.Metadata == nil || svc.Metadata.Name == "":
+		errs = append(errs, errors.New("metadata.name is required"))
+	case svc.Metadata.Name != service:
+		errs = append(errs, fmt.Errorf("metadata.name %q does not match service argument %q", svc.Metadata.Name, service))
+	}
+
+	containers := serviceContainers(&svc)
+	if len(containers) == 0 {
+		errs = append(errs, errors.New("spec.template.spec.containers must define at least one container"))
+	}
+	for i, c := range containers {
+		if c.Image == "" {
+			errs = append(errs, fmt.Errorf("spec.template.spec.containers[%d].image is required", i))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。
+func serviceContainers(svc *run.Service) []*run.Container {
+	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Spec == nil {
+		return nil
+	}
+	return svc.Spec.Template.Spec.Containers
 }
 
 // Diff は current と desired の統一 diff を返す。差分が無ければ空文字列を返す。

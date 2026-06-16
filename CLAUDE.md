@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `crner` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `diff`, `deploy`, and `load`
-subcommands. `load` and `diff` are implemented; `verify` and `deploy` are stubs that currently
-just print their own name.
+subcommands. `load`, `diff`, and `verify` are implemented; `deploy` is a stub that currently
+just prints its own name.
 
 ## Commands
 
@@ -48,6 +48,10 @@ gofmt -w .              # format
   keys alphabetically.
 - `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical. `diff`
   normalizes both the live service and the local manifest before comparing.
+- `Validate` checks a local manifest with no API access: strict YAML unmarshal into `run.Service`
+  (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
+  service argument. Returns `errors.Join` of all problems so the user sees them at once. `verify`
+  needs no `--project`/`--region` and no credentials.
 
 ## Conventions
 
