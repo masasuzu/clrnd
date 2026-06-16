@@ -3,6 +3,7 @@ module github.com/masasuzu/crner
 go 1.25.8
 
 require (
+	github.com/pmezard/go-difflib v1.0.0
 	github.com/spf13/cobra v1.8.1
 	google.golang.org/api v0.284.0
 	sigs.k8s.io/yaml v1.6.0

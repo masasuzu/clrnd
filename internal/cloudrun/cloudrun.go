@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/pmezard/go-difflib/difflib"
 	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
@@ -57,29 +58,57 @@ func GetService(ctx context.Context, project, region, service string) (*run.Serv
 // ToManifest はサーバ側が付与する read-only フィールドを取り除き、デプロイに使える
 // Knative 形式の YAML マニフェストを返す。
 func ToManifest(obj *run.Service) ([]byte, error) {
-	cleaned, err := sanitize(obj)
+	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sanitize the manifest: %w", err)
 	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("failed to sanitize the manifest: %w", err)
+	}
+	sanitizeMap(m)
 
-	manifest, err := yaml.Marshal(cleaned)
+	manifest, err := yaml.Marshal(m)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert the manifest to YAML: %w", err)
 	}
 	return manifest, nil
 }
 
-// sanitize はサーバ側が付与する read-only なフィールドを取り除いた map を返す。
-func sanitize(obj *run.Service) (map[string]interface{}, error) {
-	raw, err := json.Marshal(obj)
-	if err != nil {
-		return nil, err
-	}
+// Normalize はローカルのマニフェスト YAML を、リモート取得時 (ToManifest) と同じ正規化
+// (read-only フィールド除去・キー整列) にそろえる。diff を公平に比較するために使う。
+func Normalize(manifest []byte) ([]byte, error) {
 	var m map[string]interface{}
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, err
+	if err := yaml.Unmarshal(manifest, &m); err != nil {
+		return nil, fmt.Errorf("failed to parse the manifest: %w", err)
 	}
+	sanitizeMap(m)
 
+	out, err := yaml.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert the manifest to YAML: %w", err)
+	}
+	return out, nil
+}
+
+// Diff は current と desired の統一 diff を返す。差分が無ければ空文字列を返す。
+func Diff(current, desired []byte, currentName, desiredName string) (string, error) {
+	d := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(string(current)),
+		B:        difflib.SplitLines(string(desired)),
+		FromFile: currentName,
+		ToFile:   desiredName,
+		Context:  3,
+	}
+	out, err := difflib.GetUnifiedDiffString(d)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute the diff: %w", err)
+	}
+	return out, nil
+}
+
+// sanitizeMap はサーバ側が付与する read-only なフィールドを map から取り除く。
+func sanitizeMap(m map[string]interface{}) {
 	// status はすべてサーバ側の状態情報なので丸ごと削除する。
 	delete(m, "status")
 
@@ -100,8 +129,6 @@ func sanitize(obj *run.Service) (map[string]interface{}, error) {
 			}
 		}
 	}
-
-	return m, nil
 }
 
 // deleteMapKeys は parent[field] (map) から指定キーを削除し、空になったら field 自体も削除する。

@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `crner` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `diff`, `deploy`, and `load`
-subcommands. Only `load` is fully implemented; `verify`, `diff`, and `deploy` are stubs that
-currently just print their own name.
+subcommands. `load` and `diff` are implemented; `verify` and `deploy` are stubs that currently
+just print their own name.
 
 ## Commands
 
@@ -29,22 +29,25 @@ gofmt -w .              # format
   `*cobra.Command` var, following the standard cobra layout.
 - Invocation form is `crner <subcommand> <service> [<manifest>]`. `verify`/`diff`/`deploy` take
   two positional args (`cobra.ExactArgs(2)`); `load` takes one (`cobra.ExactArgs(1)`).
+- All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
+  Subcommands in `cmd/` only parse flags and do I/O, then call into this package — this is the
+  layering to follow for `verify`/`deploy`.
 
-### load (the reference implementation)
+### internal/cloudrun (the core logic)
 
-[cmd/load.go](cmd/load.go) is the model for how real subcommands talk to Cloud Run:
-
-- Auth is **Application Default Credentials**, picked up automatically by
-  `run.NewService` (`google.golang.org/api/run/v1`). No credentials are passed explicitly — the
-  user runs `gcloud auth application-default login` once.
-- The v1 namespaces API requires a **regional endpoint**, constructed as
-  `https://<region>-run.googleapis.com` via `option.WithEndpoint`. The region therefore must be a
-  required flag, not optional.
-- The fetched `*run.Service` is round-tripped through JSON into a `map[string]interface{}`, then
-  `sanitizeManifest` strips server-managed read-only fields (`status`, `metadata.uid`,
-  `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices) so the
-  output is a re-deployable manifest. Output YAML is produced with `sigs.k8s.io/yaml` (JSON tags →
-  YAML), which sorts keys alphabetically.
+- `GetService(ctx, project, region, service)` — fetches a `*run.Service` using **Application
+  Default Credentials**, picked up automatically by `run.NewService`
+  (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
+  no credentials are passed explicitly.
+- The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
+  via `option.WithEndpoint`), so `--region` must be a required flag, not optional.
+- `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
+  `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices). `ToManifest`
+  applies it to a fetched service; `Normalize` applies the same to a local manifest file so the two
+  sides are comparable. YAML is produced with `sigs.k8s.io/yaml` (JSON tags → YAML), which sorts
+  keys alphabetically.
+- `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical. `diff`
+  normalizes both the live service and the local manifest before comparing.
 
 ## Conventions
 
