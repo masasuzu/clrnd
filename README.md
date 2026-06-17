@@ -30,8 +30,9 @@ gcloud auth application-default login
 ## Templating with Terraform state
 
 Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
-so you can fill placeholders from Terraform state outputs (or any resource attribute), similar to
-[ecspresso](https://github.com/kayac/ecspresso). This applies to `verify`, `diff`, and `deploy`.
+so you can fill placeholders from Terraform state outputs (or any resource attribute) and from
+environment variables, using the same notation as [ecspresso](https://github.com/kayac/ecspresso).
+This applies to `verify`, `diff`, and `deploy`.
 
 ```yaml
 spec:
@@ -39,10 +40,12 @@ spec:
     spec:
       serviceAccountName: '{{ tfstate "output.run_service_account" }}'
       containers:
-      - image: '{{ tfstate "output.image_url" }}'
+      - image: '{{ must_env "IMAGE" }}'
         env:
         - name: DB_HOST
           value: '{{ tfstate "google_sql_database_instance.main.private_ip_address" }}'
+        - name: LOG_LEVEL
+          value: '{{ env "LOG_LEVEL" "info" }}'
 ```
 
 Provide the state location with `--tfstate` (repeatable). A state can be a local path or a remote
@@ -65,7 +68,8 @@ Template functions:
 | -------- | ----------- |
 | `{{ tfstate "<addr>" }}` | Look up `<addr>` in the default state (the `--tfstate` given without a name). |
 | `{{ tfstate "<name>" "<addr>" }}` | Look up `<addr>` in the named state `--tfstate <name>=<location>`. |
-| `{{ env "<VAR>" }}` | Value of environment variable `<VAR>`. |
+| `{{ env "<VAR>" "<default>" }}` | Value of environment variable `<VAR>`, or `<default>` if it is unset or empty (the default is optional). |
+| `{{ must_env "<VAR>" }}` | Value of environment variable `<VAR>`; errors if it is not defined. |
 
 ### Example: remote state on GCS
 

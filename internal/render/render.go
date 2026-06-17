@@ -44,7 +44,8 @@ func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, err
 			}
 			return ldr.lookup(addr)
 		},
-		"env": os.Getenv,
+		"env":      envFunc,
+		"must_env": mustEnvFunc,
 	}
 
 	tmpl, err := template.New("manifest").Funcs(funcs).Parse(string(manifest))
@@ -57,6 +58,27 @@ func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, err
 		return nil, fmt.Errorf("failed to render manifest: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// envFunc は環境変数 name の値を返す (ecspresso 互換の {{ env "NAME" "default" }})。
+// 未設定または空文字の場合は default を返す。default 省略時は空文字。
+func envFunc(name string, def ...string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	if len(def) > 0 {
+		return def[0]
+	}
+	return ""
+}
+
+// mustEnvFunc は環境変数 name の値を返す (ecspresso 互換の {{ must_env "NAME" }})。
+// 変数が未定義の場合はエラー。空文字でも「定義済み」なら許容する。
+func mustEnvFunc(name string) (string, error) {
+	if v, ok := os.LookupEnv(name); ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("environment variable %q is not defined", name)
 }
 
 // tfstateArgs は {{ tfstate "addr" }} と {{ tfstate "name" "addr" }} の両形を受ける。

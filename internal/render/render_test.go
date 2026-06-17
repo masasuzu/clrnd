@@ -86,6 +86,58 @@ func TestRenderNoPlaceholdersNeedsNoState(t *testing.T) {
 	}
 }
 
+func TestRenderEnv(t *testing.T) {
+	t.Run("env uses value when set", func(t *testing.T) {
+		t.Setenv("CLRND_TEST_VAR", "from-env")
+		out, err := Render(context.Background(), []byte(`x: '{{ env "CLRND_TEST_VAR" "fallback" }}'`), nil)
+		if err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		if !strings.Contains(string(out), "x: 'from-env'") {
+			t.Errorf("got %s", out)
+		}
+	})
+
+	t.Run("env falls back to default when empty", func(t *testing.T) {
+		t.Setenv("CLRND_TEST_VAR", "")
+		out, err := Render(context.Background(), []byte(`x: '{{ env "CLRND_TEST_VAR" "fallback" }}'`), nil)
+		if err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		if !strings.Contains(string(out), "x: 'fallback'") {
+			t.Errorf("got %s", out)
+		}
+	})
+
+	t.Run("env without default yields empty", func(t *testing.T) {
+		out, err := Render(context.Background(), []byte(`x: '{{ env "CLRND_UNSET_VAR" }}'`), nil)
+		if err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		if !strings.Contains(string(out), "x: ''") {
+			t.Errorf("got %s", out)
+		}
+	})
+
+	t.Run("must_env returns value when set", func(t *testing.T) {
+		t.Setenv("CLRND_TEST_VAR", "present")
+		out, err := Render(context.Background(), []byte(`x: '{{ must_env "CLRND_TEST_VAR" }}'`), nil)
+		if err != nil {
+			t.Fatalf("Render() error = %v", err)
+		}
+		if !strings.Contains(string(out), "x: 'present'") {
+			t.Errorf("got %s", out)
+		}
+	})
+
+	t.Run("must_env errors when undefined", func(t *testing.T) {
+		_, err := Render(context.Background(), []byte(`x: '{{ must_env "CLRND_UNSET_VAR" }}'`), nil)
+		if err == nil || !strings.Contains(err.Error(), "is not defined") {
+			t.Fatalf("Render() error = %v, want 'is not defined'", err)
+		}
+	})
+}
+
 func TestRenderErrors(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
 
