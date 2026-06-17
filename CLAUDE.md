@@ -26,8 +26,10 @@ gofmt -w .              # format
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
-- Invocation form is `clrnd <subcommand> <service> [<manifest>]`. `verify`/`diff`/`deploy` take
-  two positional args (`cobra.ExactArgs(2)`); `load` takes one (`cobra.ExactArgs(1)`).
+- Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional
+  (`cobra.MaximumNArgs(2)` for verify/diff/deploy, `MaximumNArgs(1)` for load); `resolveService`/
+  `resolveManifest` fill them from the config file when absent (positional → config). args fill
+  service first, then manifest.
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
   Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
 - Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
@@ -52,10 +54,17 @@ gofmt -w .              # format
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
   via `option.WithEndpoint`), so a region is mandatory.
 - `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and
-  resolved by `resolveProject`/`resolveRegion`, which fall back to gcloud-compatible env vars
-  (`CLOUDSDK_CORE_PROJECT`→`GOOGLE_CLOUD_PROJECT`, `CLOUDSDK_RUN_REGION`→`GOOGLE_CLOUD_REGION`) and
-  error if neither flag nor env is set. They are NOT `MarkFlagRequired` (that would reject the
-  env-only case). `verify` needs neither.
+  resolved by `resolveProject`/`resolveRegion` with precedence **flag → env → config file**
+  (matching gcloud): env vars are `CLOUDSDK_CORE_PROJECT`→`GOOGLE_CLOUD_PROJECT` and
+  `CLOUDSDK_RUN_REGION`→`GOOGLE_CLOUD_REGION`; the config file (see below) is the lowest fallback.
+  Error if none is set. NOT `MarkFlagRequired` (that would reject the env/config-only case).
+  `verify` needs neither.
+- The `-c`/`--config` persistent flag loads a YAML config via [internal/config](internal/config/config.go)
+  in the root's `PersistentPreRunE` (`loadConfig`), into the package var `cfg`. When `--config` is
+  omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
+  an explicit missing `--config` IS an error). Config holds `project`, `region`, `service`,
+  `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
+  replaces the config list, otherwise the config list is used.
 - `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
   `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices). `ToManifest`
   applies it to a fetched service; `Normalize` applies the same to a local manifest file so the two

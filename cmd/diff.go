@@ -16,12 +16,13 @@ var (
 )
 
 var diffCmd = &cobra.Command{
-	Use:   "diff <service> <manifest>",
+	Use:   "diff [service] [manifest]",
 	Short: "Show the diff between an existing service and a manifest",
 	Long: "Fetch the live definition of the service from Cloud Run and show a unified diff\n" +
 		"against the given manifest file. Both sides are normalized (read-only fields removed)\n" +
-		"before comparison. Nothing is printed when there is no difference.",
-	Args: cobra.ExactArgs(2),
+		"before comparison. Nothing is printed when there is no difference.\n" +
+		"service and manifest may be omitted when set in the config file.",
+	Args: cobra.MaximumNArgs(2),
 	RunE: runDiff,
 }
 
@@ -31,7 +32,14 @@ func init() {
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
-	service, manifestPath := args[0], args[1]
+	service, err := resolveService(args)
+	if err != nil {
+		return err
+	}
+	manifestPath, err := resolveManifest(args)
+	if err != nil {
+		return err
+	}
 
 	project, err := resolveProject(diffProject)
 	if err != nil {

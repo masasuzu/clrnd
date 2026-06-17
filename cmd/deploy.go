@@ -17,12 +17,13 @@ var (
 )
 
 var deployCmd = &cobra.Command{
-	Use:   "deploy <service> <manifest>",
+	Use:   "deploy [service] [manifest]",
 	Short: "Deploy a manifest to Cloud Run",
 	Long: "Apply the manifest to Cloud Run, creating the service if it does not exist or\n" +
 		"replacing it otherwise. The manifest is validated locally before the request is sent.\n" +
-		"Use --dry-run to validate server-side without applying any changes.",
-	Args: cobra.ExactArgs(2),
+		"Use --dry-run to validate server-side without applying any changes.\n" +
+		"service and manifest may be omitted when set in the config file.",
+	Args: cobra.MaximumNArgs(2),
 	RunE: runDeploy,
 }
 
@@ -33,7 +34,14 @@ func init() {
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	service, manifestPath := args[0], args[1]
+	service, err := resolveService(args)
+	if err != nil {
+		return err
+	}
+	manifestPath, err := resolveManifest(args)
+	if err != nil {
+		return err
+	}
 
 	project, err := resolveProject(deployProject)
 	if err != nil {

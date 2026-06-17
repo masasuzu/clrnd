@@ -29,20 +29,43 @@ func addTargetFlags(cmd *cobra.Command, project, region *string) {
 		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s)", envRegionPrimary, envRegionSecondary))
 }
 
-// resolveProject はフラグ値が空なら環境変数にフォールバックする。どちらも無ければエラー。
-func resolveProject(flag string) (string, error) {
-	if v := firstNonEmpty(flag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary)); v != "" {
-		return v, nil
+// resolveService は位置引数 args[0] > config service の順で解決する。
+func resolveService(args []string) (string, error) {
+	if len(args) >= 1 && args[0] != "" {
+		return args[0], nil
 	}
-	return "", fmt.Errorf("project is required: set --project or $%s / $%s", envProjectPrimary, envProjectSecondary)
+	if cfg.Service != "" {
+		return cfg.Service, nil
+	}
+	return "", fmt.Errorf("service is required: pass it as an argument or set service in the config file")
 }
 
-// resolveRegion はフラグ値が空なら環境変数にフォールバックする。どちらも無ければエラー。
-func resolveRegion(flag string) (string, error) {
-	if v := firstNonEmpty(flag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary)); v != "" {
+// resolveManifest は位置引数 args[1] > config manifest の順で解決する。
+func resolveManifest(args []string) (string, error) {
+	if len(args) >= 2 && args[1] != "" {
+		return args[1], nil
+	}
+	if cfg.Manifest != "" {
+		return cfg.Manifest, nil
+	}
+	return "", fmt.Errorf("manifest is required: pass it as an argument or set manifest in the config file")
+}
+
+// resolveProject はフラグ > 環境変数 > config の順で解決する (gcloud と同じ優先順位)。
+// どこにも無ければエラー。
+func resolveProject(flag string) (string, error) {
+	if v := firstNonEmpty(flag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project); v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("region is required: set --region or $%s / $%s", envRegionPrimary, envRegionSecondary)
+	return "", fmt.Errorf("project is required: set --project, $%s / $%s, or project in the config file", envProjectPrimary, envProjectSecondary)
+}
+
+// resolveRegion はフラグ > 環境変数 > config の順で解決する。どこにも無ければエラー。
+func resolveRegion(flag string) (string, error) {
+	if v := firstNonEmpty(flag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region); v != "" {
+		return v, nil
+	}
+	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
 }
 
 // tfstateName は --tfstate の "name=location" 形式で name として認める文字列。
@@ -55,13 +78,44 @@ func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 			"(repeatable; local path or s3://, gs://, ... URL)")
 }
 
-// renderManifest は --tfstate 指定を解釈し、マニフェストのプレースホルダーを埋める。
+// renderManifest は tfstate 指定 (フラグ優先、無ければ config) を解釈し、マニフェストの
+// プレースホルダーを埋める。
 func renderManifest(ctx context.Context, manifest []byte, tfstateSpecs []string) ([]byte, error) {
-	sources, err := parseTfstateSources(tfstateSpecs)
+	sources, err := resolveTfstateSources(tfstateSpecs)
 	if err != nil {
 		return nil, err
 	}
 	return render.Render(ctx, manifest, sources)
+}
+
+// resolveTfstateSources は --tfstate フラグが指定されていればそれを使い、無ければ config の
+// tfstate を使う (フラグが config を置き換える)。
+func resolveTfstateSources(specs []string) ([]render.Source, error) {
+	if len(specs) > 0 {
+		return parseTfstateSources(specs)
+	}
+	return configTfstateSources()
+}
+
+// configTfstateSources は config の tfstate を render.Source に変換する。
+func configTfstateSources() ([]render.Source, error) {
+	var out []render.Source
+	seen := make(map[string]bool)
+	for _, t := range cfg.Tfstate {
+		name := t.Name
+		if name == "" {
+			name = "default"
+		}
+		if t.Location == "" {
+			return nil, fmt.Errorf("config tfstate %q: location is required", name)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate tfstate name %q in config", name)
+		}
+		seen[name] = true
+		out = append(out, render.Source{Name: name, Location: t.Location})
+	}
+	return out, nil
 }
 
 // parseTfstateSources は --tfstate の各指定を render.Source に変換する。

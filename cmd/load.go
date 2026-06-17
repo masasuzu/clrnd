@@ -16,11 +16,12 @@ var (
 )
 
 var loadCmd = &cobra.Command{
-	Use:   "load <service>",
+	Use:   "load [service]",
 	Short: "Load the manifest of an existing service",
 	Long: "Access the Cloud Run Admin API using the local Application Default\n" +
-		"Credentials and fetch the manifest (Knative-style YAML) of the given service.",
-	Args: cobra.ExactArgs(1),
+		"Credentials and fetch the manifest (Knative-style YAML) of the given service.\n" +
+		"service may be omitted when set in the config file.",
+	Args: cobra.MaximumNArgs(1),
 	RunE: runLoad,
 }
 
@@ -30,6 +31,10 @@ func init() {
 }
 
 func runLoad(cmd *cobra.Command, args []string) error {
+	service, err := resolveService(args)
+	if err != nil {
+		return err
+	}
 	project, err := resolveProject(loadProject)
 	if err != nil {
 		return err
@@ -40,7 +45,7 @@ func runLoad(cmd *cobra.Command, args []string) error {
 	}
 	ctx := context.Background()
 
-	obj, err := cloudrun.GetService(ctx, project, region, args[0])
+	obj, err := cloudrun.GetService(ctx, project, region, service)
 	if err != nil {
 		return err
 	}

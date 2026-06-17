@@ -12,13 +12,14 @@ import (
 var verifyTfstate []string
 
 var verifyCmd = &cobra.Command{
-	Use:   "verify <service> <manifest>",
+	Use:   "verify [service] [manifest]",
 	Short: "Verify a manifest",
 	Long: "Validate that the manifest file is a well-formed Cloud Run service definition and\n" +
 		"contains the fields required to deploy. This is a local check; it does not access the API\n" +
 		"(unless the manifest uses {{ tfstate }} placeholders backed by a remote state).\n" +
-		"Nothing is printed when the manifest is valid.",
-	Args: cobra.ExactArgs(2),
+		"Nothing is printed when the manifest is valid.\n" +
+		"service and manifest may be omitted when set in the config file.",
+	Args: cobra.MaximumNArgs(2),
 	RunE: runVerify,
 }
 
@@ -27,7 +28,14 @@ func init() {
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {
-	service, manifestPath := args[0], args[1]
+	service, err := resolveService(args)
+	if err != nil {
+		return err
+	}
+	manifestPath, err := resolveManifest(args)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	manifest, err := os.ReadFile(manifestPath)

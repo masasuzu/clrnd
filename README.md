@@ -27,6 +27,41 @@ to access the Cloud Run Admin API. Authenticate once with:
 gcloud auth application-default login
 ```
 
+## Configuration file
+
+To avoid repeating arguments and flags, put them in a config file and pass it with `-c` /
+`--config`. If `--config` is omitted, `clrnd` looks for `clrnd.yml` then `clrnd.yaml` in the current
+directory.
+
+```yaml
+# clrnd.yml
+project: my-project
+region: asia-northeast1
+service: my-svc            # optional; overridable by the positional argument
+manifest: manifest.yaml    # optional; overridable by the positional argument
+tfstate:
+  - location: gs://my-tf-state/app/default.tfstate        # default state (name omitted)
+  - name: network                                         # named state
+    location: gs://my-tf-state/network/default.tfstate
+```
+
+With the service and manifest in the config, commands need no positional arguments:
+
+```sh
+clrnd deploy -c clrnd.yml              # uses service + manifest from the config
+clrnd deploy other-svc -c clrnd.yml    # override just the service (positional args fill service, then manifest)
+```
+
+Resolution order (highest first), matching gcloud:
+
+| Setting  | Order |
+| -------- | ----- |
+| project  | `--project` → `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` → config `project` |
+| region   | `--region` → `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` → config `region` |
+| service  | positional `[service]` → config `service` |
+| manifest | positional `[manifest]` → config `manifest` |
+| tfstate  | `--tfstate` (if any given, replaces config) → config `tfstate` |
+
 ## Templating with Terraform state
 
 Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
