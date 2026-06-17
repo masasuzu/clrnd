@@ -1,6 +1,9 @@
 # Compiled binary (e.g. `go build -o clrnd .`)
 /clrnd
 
+# GoReleaser build output
+/dist/
+
 # Test and coverage artifacts
 *.test
 *.out
