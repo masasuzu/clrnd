@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
@@ -14,13 +15,14 @@ var (
 	configPath string
 	// cfg は読み込んだ設定。未指定なら空 (nil セーフ)。
 	cfg = &config.Config{}
+	// configDir は読み込んだ設定ファイルのディレクトリ。config 由来の相対パスの基準。
+	configDir string
 )
 
 var rootCmd = &cobra.Command{
 	Use:               "clrnd",
 	Short:             "A CLI for deploying to Cloud Run",
 	PersistentPreRunE: loadConfig,
-	SilenceUsage:      false,
 }
 
 // Execute はルートコマンドを実行する。
@@ -52,6 +54,7 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	cfg = c
+	configDir = filepath.Dir(path)
 	return nil
 }
 

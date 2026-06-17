@@ -14,6 +14,58 @@ func withConfig(t *testing.T, c *config.Config) {
 	t.Cleanup(func() { cfg = prev })
 }
 
+// withConfigDir は configDir を一時的に差し替え、テスト後に元へ戻す。
+func withConfigDir(t *testing.T, dir string) {
+	t.Helper()
+	prev := configDir
+	configDir = dir
+	t.Cleanup(func() { configDir = prev })
+}
+
+func TestResolveConfigPath(t *testing.T) {
+	withConfigDir(t, "/etc/app")
+	cases := []struct {
+		in, want string
+	}{
+		{"manifest.yaml", "/etc/app/manifest.yaml"}, // 相対 → config dir 基準
+		{"sub/m.yaml", "/etc/app/sub/m.yaml"},
+		{"/abs/m.yaml", "/abs/m.yaml"},                                  // 絶対はそのまま
+		{"gs://bucket/state.tfstate", "gs://bucket/state.tfstate"},      // URL はそのまま
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := resolveConfigPath(c.in); got != c.want {
+			t.Errorf("resolveConfigPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	t.Run("empty configDir leaves relative path as-is", func(t *testing.T) {
+		withConfigDir(t, "")
+		if got := resolveConfigPath("manifest.yaml"); got != "manifest.yaml" {
+			t.Errorf("got %q, want manifest.yaml", got)
+		}
+	})
+}
+
+func TestResolveManifestUsesConfigDir(t *testing.T) {
+	withConfig(t, &config.Config{Manifest: "manifest.yaml"})
+	withConfigDir(t, "/etc/app")
+
+	t.Run("config manifest resolved against config dir", func(t *testing.T) {
+		got, err := resolveManifest(nil)
+		if err != nil || got != "/etc/app/manifest.yaml" {
+			t.Fatalf("resolveManifest(nil) = %q, %v; want /etc/app/manifest.yaml", got, err)
+		}
+	})
+
+	t.Run("positional arg stays cwd-relative", func(t *testing.T) {
+		got, err := resolveManifest([]string{"svc", "arg.yaml"})
+		if err != nil || got != "arg.yaml" {
+			t.Fatalf("resolveManifest(args) = %q, %v; want arg.yaml", got, err)
+		}
+	})
+}
+
 func TestResolveUsesConfigFallback(t *testing.T) {
 	t.Run("config project used when flag and env empty", func(t *testing.T) {
 		t.Setenv(envProjectPrimary, "")

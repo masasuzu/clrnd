@@ -64,7 +64,9 @@ gofmt -w .              # format
   omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
   an explicit missing `--config` IS an error). Config holds `project`, `region`, `service`,
   `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
-  replaces the config list, otherwise the config list is used.
+  replaces the config list, otherwise the config list is used. Relative paths from the config
+  (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
+  `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
 - `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
   `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices). `ToManifest`
   applies it to a fetched service; `Normalize` applies the same to a local manifest file so the two

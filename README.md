@@ -45,6 +45,10 @@ tfstate:
     location: gs://my-tf-state/network/default.tfstate
 ```
 
+Relative paths in the config (`manifest`, and local `tfstate` locations) are resolved relative to
+the config file's directory, so the config works from any working directory. Paths passed as CLI
+arguments stay relative to the current directory.
+
 With the service and manifest in the config, commands need no positional arguments:
 
 ```sh

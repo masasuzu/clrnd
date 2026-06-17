@@ -14,8 +14,8 @@ import (
 	"github.com/fujiwara/tfstate-lookup/tfstate"
 )
 
-// defaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
-const defaultStateName = "default"
+// DefaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
+const DefaultStateName = "default"
 
 // Source は名前付きの Terraform state の場所を表す。Location はローカルパスまたは
 // gs://, s3:// などの URL。
@@ -85,7 +85,7 @@ func mustEnvFunc(name string) (string, error) {
 func tfstateArgs(args []string) (name, addr string, err error) {
 	switch len(args) {
 	case 1:
-		return defaultStateName, args[0], nil
+		return DefaultStateName, args[0], nil
 	case 2:
 		return args[0], args[1], nil
 	default:

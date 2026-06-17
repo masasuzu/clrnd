@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -41,14 +42,24 @@ func resolveService(args []string) (string, error) {
 }
 
 // resolveManifest は位置引数 args[1] > config manifest の順で解決する。
+// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
 func resolveManifest(args []string) (string, error) {
 	if len(args) >= 2 && args[1] != "" {
 		return args[1], nil
 	}
 	if cfg.Manifest != "" {
-		return cfg.Manifest, nil
+		return resolveConfigPath(cfg.Manifest), nil
 	}
 	return "", fmt.Errorf("manifest is required: pass it as an argument or set manifest in the config file")
+}
+
+// resolveConfigPath は config に書かれた相対パスを config ファイルのディレクトリ基準に
+// 解決する。絶対パスとスキーム付き URL (gs://, s3:// など) はそのまま返す。
+func resolveConfigPath(p string) string {
+	if p == "" || configDir == "" || filepath.IsAbs(p) || strings.Contains(p, "://") {
+		return p
+	}
+	return filepath.Join(configDir, p)
 }
 
 // resolveProject はフラグ > 環境変数 > config の順で解決する (gcloud と同じ優先順位)。
@@ -104,7 +115,7 @@ func configTfstateSources() ([]render.Source, error) {
 	for _, t := range cfg.Tfstate {
 		name := t.Name
 		if name == "" {
-			name = "default"
+			name = render.DefaultStateName
 		}
 		if t.Location == "" {
 			return nil, fmt.Errorf("config tfstate %q: location is required", name)
@@ -113,7 +124,7 @@ func configTfstateSources() ([]render.Source, error) {
 			return nil, fmt.Errorf("duplicate tfstate name %q in config", name)
 		}
 		seen[name] = true
-		out = append(out, render.Source{Name: name, Location: t.Location})
+		out = append(out, render.Source{Name: name, Location: resolveConfigPath(t.Location)})
 	}
 	return out, nil
 }
@@ -126,7 +137,7 @@ func parseTfstateSources(specs []string) ([]render.Source, error) {
 	var out []render.Source
 	seen := make(map[string]bool)
 	for _, spec := range specs {
-		name, loc := "default", spec
+		name, loc := render.DefaultStateName, spec
 		if i := strings.Index(spec, "="); i > 0 && tfstateName.MatchString(spec[:i]) {
 			name, loc = spec[:i], spec[i+1:]
 		}
