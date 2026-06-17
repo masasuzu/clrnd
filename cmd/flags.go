@@ -92,9 +92,14 @@ func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 	return answer == "y" || answer == "yes", nil
 }
 
-// isInteractive は標準入力が端末 (対話可能) かを判定する。
-func isInteractive() bool {
-	info, err := os.Stdin.Stat()
+// isInteractive はコマンドの標準入力が端末 (対話可能) かを判定する。confirm と同じ入力
+// ソース (cmd.InOrStdin) を見るため、両者の判定が食い違わない。
+func isInteractive(cmd *cobra.Command) bool {
+	f, ok := cmd.InOrStdin().(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
 	if err != nil {
 		return false
 	}

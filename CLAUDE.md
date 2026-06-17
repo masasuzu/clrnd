@@ -85,8 +85,10 @@ gofmt -w .              # format
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
-- Subcommands succeed **silently**: on success they emit only data (e.g. the manifest), never a
-  confirmation message. Errors are returned from `RunE` so cobra prints them to stderr and sets a
-  non-zero exit code.
+- Subcommands succeed **silently**: on success they emit only data (e.g. the manifest) to stdout,
+  never a confirmation message. Errors are returned from `RunE` so cobra prints them to stderr and
+  sets a non-zero exit code. Exception: `deploy` is interactive — it prints the diff to stdout (data)
+  and status/prompt lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout
+  stays data-only. This is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).

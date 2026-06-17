@@ -70,16 +70,20 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 差分を表示する (stdout)。差分が無ければ何もしない。
+	// 差分を表示する (stdout)。差分が無ければ通常は何もしないが、--dry-run は
+	// サーバ側検証を行うため続行する。
 	if plan.Diff == "" {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No changes.")
-		return nil
+		if !deployDryRun {
+			return nil
+		}
+		return plan.Apply(ctx, deployDryRun)
 	}
 	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
 
 	// dry-run でなければ確認する。--auto-approve でスキップ。
 	if !deployDryRun && !deployAutoApprove {
-		if !isInteractive() {
+		if !isInteractive(cmd) {
 			return fmt.Errorf("refusing to apply without confirmation: re-run with --auto-approve (no interactive terminal)")
 		}
 		ok, err := confirm(cmd, "Apply these changes?")

@@ -250,6 +250,45 @@ status:
 	}
 }
 
+func TestNormalizeRejectsUnknownField(t *testing.T) {
+	// Normalize は parseManifest(strict) を通すため、diff も deploy と同様に未知
+	// フィールド (typo) を弾く。これで両コマンドの挙動が一致する。
+	manifest := []byte(`apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    spec:
+      containerConcurency: 80
+      containers:
+      - image: gcr.io/x/y
+`)
+	if _, err := Normalize(manifest); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Normalize() error = %v, want unknown field", err)
+	}
+}
+
+func TestNormalizeMatchesToManifest(t *testing.T) {
+	// diff (Normalize) と deploy (ToManifest(parseManifest)) が同一出力になることを保証する。
+	manifest := []byte(validManifest)
+	viaNormalize, err := Normalize(manifest)
+	if err != nil {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+	svc, err := parseManifest(manifest)
+	if err != nil {
+		t.Fatalf("parseManifest() error = %v", err)
+	}
+	viaToManifest, err := ToManifest(svc)
+	if err != nil {
+		t.Fatalf("ToManifest() error = %v", err)
+	}
+	if string(viaNormalize) != string(viaToManifest) {
+		t.Errorf("Normalize and ToManifest(parseManifest) diverge:\n--- Normalize ---\n%s\n--- ToManifest ---\n%s", viaNormalize, viaToManifest)
+	}
+}
+
 func TestNormalizeIsIdempotent(t *testing.T) {
 	manifest := []byte(validManifest)
 	first, err := Normalize(manifest)

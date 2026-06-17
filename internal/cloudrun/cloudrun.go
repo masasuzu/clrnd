@@ -183,20 +183,15 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 	return manifest, nil
 }
 
-// Normalize はローカルのマニフェスト YAML を、リモート取得時 (ToManifest) と同じ正規化
-// (read-only フィールド除去・キー整列) にそろえる。diff を公平に比較するために使う。
+// Normalize はローカルのマニフェスト YAML を、リモート取得時 (ToManifest) や deploy の
+// Plan と同じ正規化 (厳密パース・read-only フィールド除去・キー整列) にそろえる。
+// これにより `clrnd diff` と `clrnd deploy` が同一の差分を表示する。
 func Normalize(manifest []byte) ([]byte, error) {
-	var m map[string]interface{}
-	if err := yaml.Unmarshal(manifest, &m); err != nil {
-		return nil, fmt.Errorf("failed to parse the manifest: %w", err)
-	}
-	sanitizeMap(m)
-
-	out, err := yaml.Marshal(m)
+	svc, err := parseManifest(manifest)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert the manifest to YAML: %w", err)
+		return nil, err
 	}
-	return out, nil
+	return ToManifest(svc)
 }
 
 // Validate はローカルのマニフェストが Cloud Run のサービス定義として妥当かを検証する。
