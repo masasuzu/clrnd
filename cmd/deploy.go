@@ -13,6 +13,7 @@ var (
 	deployProject string
 	deployRegion  string
 	deployDryRun  bool
+	deployTfstate []string
 )
 
 var deployCmd = &cobra.Command{
@@ -27,6 +28,7 @@ var deployCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(deployCmd, &deployProject, &deployRegion)
+	addManifestFlags(deployCmd, &deployTfstate)
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "validate the request server-side without applying changes")
 }
 
@@ -46,6 +48,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
+	}
+	manifest, err = renderManifest(ctx, manifest, deployTfstate)
+	if err != nil {
+		return err
 	}
 
 	if _, err := cloudrun.Deploy(ctx, project, region, service, manifest, deployDryRun); err != nil {

@@ -29,8 +29,14 @@ gofmt -w .              # format
 - Invocation form is `clrnd <subcommand> <service> [<manifest>]`. `verify`/`diff`/`deploy` take
   two positional args (`cobra.ExactArgs(2)`); `load` takes one (`cobra.ExactArgs(1)`).
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
-  Subcommands in `cmd/` only parse flags and do I/O, then call into this package — this is the
-  layering to follow for `verify`/`deploy`.
+  Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
+- Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
+  BEFORE parsing/validation. `verify`/`diff`/`deploy` call `renderManifest` (in
+  [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. The `{{ tfstate ["name"] "addr" }}`
+  func resolves Terraform state via `fujiwara/tfstate-lookup`; states are declared with the
+  repeatable `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read
+  when a placeholder references it, so manifests without placeholders need no `--tfstate`). `load`
+  takes no manifest, so it is not rendered.
 
 ### internal/cloudrun (the core logic)
 

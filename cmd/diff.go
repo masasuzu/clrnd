@@ -12,6 +12,7 @@ import (
 var (
 	diffProject string
 	diffRegion  string
+	diffTfstate []string
 )
 
 var diffCmd = &cobra.Command{
@@ -26,6 +27,7 @@ var diffCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(diffCmd, &diffProject, &diffRegion)
+	addManifestFlags(diffCmd, &diffTfstate)
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
@@ -44,6 +46,10 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	local, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
+	}
+	local, err = renderManifest(ctx, local, diffTfstate)
+	if err != nil {
+		return err
 	}
 	desired, err := cloudrun.Normalize(local)
 	if err != nil {

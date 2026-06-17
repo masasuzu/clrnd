@@ -27,6 +27,74 @@ to access the Cloud Run Admin API. Authenticate once with:
 gcloud auth application-default login
 ```
 
+## Templating with Terraform state
+
+Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
+so you can fill placeholders from Terraform state outputs (or any resource attribute), similar to
+[ecspresso](https://github.com/kayac/ecspresso). This applies to `verify`, `diff`, and `deploy`.
+
+```yaml
+spec:
+  template:
+    spec:
+      serviceAccountName: '{{ tfstate "output.run_service_account" }}'
+      containers:
+      - image: '{{ tfstate "output.image_url" }}'
+        env:
+        - name: DB_HOST
+          value: '{{ tfstate "google_sql_database_instance.main.private_ip_address" }}'
+```
+
+Provide the state location with `--tfstate` (repeatable). A state can be a local path or a remote
+URL (`gs://`, `s3://`, …); it is only read when a placeholder actually references it.
+
+```sh
+# Single (default) state
+clrnd deploy my-svc manifest.yaml --project p --region r \
+  --tfstate gs://my-bucket/prod/terraform.tfstate
+
+# Multiple named states: {{ tfstate "<name>" "<addr>" }}
+clrnd deploy my-svc manifest.yaml --project p --region r \
+  --tfstate gs://my-bucket/app/terraform.tfstate \
+  --tfstate network=gs://my-bucket/network/terraform.tfstate
+```
+
+Template functions:
+
+| Function | Description |
+| -------- | ----------- |
+| `{{ tfstate "<addr>" }}` | Look up `<addr>` in the default state (the `--tfstate` given without a name). |
+| `{{ tfstate "<name>" "<addr>" }}` | Look up `<addr>` in the named state `--tfstate <name>=<location>`. |
+| `{{ env "<VAR>" }}` | Value of environment variable `<VAR>`. |
+
+### Example: remote state on GCS
+
+For a Terraform GCS backend, the state object lives at `gs://<bucket>/<prefix>/<workspace>.tfstate`:
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "my-tf-state"
+    prefix = "cloudrun/prod"
+  }
+}
+```
+
+The default workspace stores it at `gs://my-tf-state/cloudrun/prod/default.tfstate` — that path is
+the `--tfstate` URL:
+
+```sh
+gcloud auth application-default login   # GCS is read via ADC, same as the API access
+
+clrnd deploy my-svc manifest.yaml \
+  --project my-project --region asia-northeast1 \
+  --tfstate gs://my-tf-state/cloudrun/prod/default.tfstate
+```
+
+Reading the state needs `storage.objects.get` (e.g. `roles/storage.objectViewer`) on the bucket.
+If you use a non-default workspace, the object is `<prefix>/<workspace>.tfstate`; confirm the exact
+path with `gcloud storage ls gs://my-tf-state/cloudrun/prod/`.
+
 ## Usage
 
 ```
@@ -59,8 +127,11 @@ so it is safe to run in CI. Nothing is printed when the manifest is valid; probl
 to stderr with a non-zero exit code.
 
 ```sh
-clrnd verify <service> <manifest>
+clrnd verify <service> <manifest> [--tfstate <location>]
 ```
+
+`--tfstate` is accepted here too (see [Templating](#templating-with-terraform-state)); resolving a
+remote state still requires network access, otherwise `verify` stays fully offline.
 
 ```sh
 clrnd verify my-service service.yaml
@@ -80,6 +151,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | ----------- | ---------------------------------------------------- |
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 
 ```sh
 clrnd diff my-service service.yaml --project my-project --region asia-northeast1
@@ -98,6 +170,7 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-r
 | ----------- | ------------------------------------------------------------- |
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--dry-run` | Validate the request server-side without applying any changes. |
 
 ```sh

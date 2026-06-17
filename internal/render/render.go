@@ -1,0 +1,104 @@
+// Package render はマニフェストを text/template として評価し、Terraform state の値で
+// プレースホルダーを埋める。ecspresso の tfstate 連携と同様の仕組み。
+package render
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"text/template"
+
+	"github.com/fujiwara/tfstate-lookup/tfstate"
+)
+
+// defaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
+const defaultStateName = "default"
+
+// Source は名前付きの Terraform state の場所を表す。Location はローカルパスまたは
+// gs://, s3:// などの URL。
+type Source struct {
+	Name     string
+	Location string
+}
+
+// Render はマニフェストを text/template として評価する。テンプレート内で tfstate 関数が
+// 実際に使われた state だけが (初回参照時に) 読み込まれる。
+func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, error) {
+	loaders := make(map[string]*stateLoader, len(sources))
+	for _, s := range sources {
+		loaders[s.Name] = &stateLoader{ctx: ctx, loc: s.Location}
+	}
+
+	funcs := template.FuncMap{
+		"tfstate": func(args ...string) (string, error) {
+			name, addr, err := tfstateArgs(args)
+			if err != nil {
+				return "", err
+			}
+			ldr, ok := loaders[name]
+			if !ok {
+				return "", fmt.Errorf("tfstate %q is not configured; pass --tfstate %s=<location>", name, name)
+			}
+			return ldr.lookup(addr)
+		},
+		"env": os.Getenv,
+	}
+
+	tmpl, err := template.New("manifest").Funcs(funcs).Parse(string(manifest))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse manifest template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return nil, fmt.Errorf("failed to render manifest: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// tfstateArgs は {{ tfstate "addr" }} と {{ tfstate "name" "addr" }} の両形を受ける。
+func tfstateArgs(args []string) (name, addr string, err error) {
+	switch len(args) {
+	case 1:
+		return defaultStateName, args[0], nil
+	case 2:
+		return args[0], args[1], nil
+	default:
+		return "", "", fmt.Errorf("tfstate requires 1 (addr) or 2 (name, addr) arguments, got %d", len(args))
+	}
+}
+
+// stateLoader は state を遅延・一度きりで読み込み、属性を引く。
+type stateLoader struct {
+	ctx  context.Context
+	loc  string
+	once sync.Once
+	st   *tfstate.TFState
+	err  error
+}
+
+func (l *stateLoader) lookup(addr string) (string, error) {
+	l.once.Do(func() {
+		// スキーム付きは URL、そうでなければローカルファイルとして読む。
+		if strings.Contains(l.loc, "://") {
+			l.st, l.err = tfstate.ReadURL(l.ctx, l.loc)
+		} else {
+			l.st, l.err = tfstate.ReadFile(l.ctx, l.loc)
+		}
+	})
+	if l.err != nil {
+		return "", fmt.Errorf("failed to read tfstate %s: %w", l.loc, l.err)
+	}
+
+	obj, err := l.st.Lookup(addr)
+	if err != nil {
+		return "", fmt.Errorf("failed to look up %q in tfstate %s: %w", addr, l.loc, err)
+	}
+	if obj == nil || obj.Value == nil {
+		return "", fmt.Errorf("%q not found in tfstate %s", addr, l.loc)
+	}
+	return obj.String(), nil
+}
