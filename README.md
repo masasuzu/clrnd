@@ -202,26 +202,35 @@ clrnd diff my-service service.yaml --project my-project --region asia-northeast1
 
 ### deploy
 
-Apply the manifest to Cloud Run, creating the service if it does not exist or replacing it
-otherwise. The manifest is validated locally before the request is sent.
+Show the diff against the live service, ask for confirmation, then apply the manifest to Cloud Run
+— creating the service if it does not exist or replacing it otherwise. The manifest is validated
+locally before the request is sent. When there is no difference, nothing is applied.
 
 ```sh
-clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-run]
+clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]
 ```
 
-| Flag        | Description                                                    |
-| ----------- | ------------------------------------------------------------- |
-| `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
-| `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
-| `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
-| `--dry-run` | Validate the request server-side without applying any changes. |
+| Flag             | Description                                                    |
+| ---------------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
+| `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
+
+The diff is printed to stdout; the confirmation prompt is on stderr. Without `--auto-approve`, a
+non-interactive run (no TTY, e.g. a pipeline) refuses to apply and exits with an error — pass
+`--auto-approve` there.
 
 ```sh
+# Interactive: shows the diff, asks "Apply these changes? [y/N]"
+clrnd deploy my-service service.yaml --project my-project --region asia-northeast1
+
+# CI/CD: skip the prompt
+clrnd deploy my-service service.yaml --project my-project --region asia-northeast1 --auto-approve
+
 # Validate against the server without changing anything
 clrnd deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
-
-# Deploy for real
-clrnd deploy my-service service.yaml --project my-project --region asia-northeast1
 ```
 
 ### load

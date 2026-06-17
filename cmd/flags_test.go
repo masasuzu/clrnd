@@ -1,10 +1,49 @@
 package cmd
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/masasuzu/clrnd/internal/config"
+	"github.com/spf13/cobra"
 )
+
+func TestConfirm(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"y\n", true},
+		{"Y\n", true},
+		{"yes\n", true},
+		{"  yes  \n", true},
+		{"n\n", false},
+		{"no\n", false},
+		{"\n", false},  // 空回答 → デフォルト No
+		{"", false},    // EOF (パイプ等) → No
+		{"maybe\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(strings.TrimSpace(tt.input), func(t *testing.T) {
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(tt.input))
+			var errOut bytes.Buffer
+			cmd.SetErr(&errOut)
+
+			got, err := confirm(cmd, "Apply?")
+			if err != nil {
+				t.Fatalf("confirm() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("confirm(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			if !strings.Contains(errOut.String(), "Apply? [y/N]:") {
+				t.Errorf("prompt not written to stderr: %q", errOut.String())
+			}
+		})
+	}
+}
 
 // withConfig は cfg を一時的に差し替え、テスト後に元へ戻す。
 func withConfig(t *testing.T, c *config.Config) {

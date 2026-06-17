@@ -71,16 +71,25 @@ func GetService(ctx context.Context, project, region, service string) (*run.Serv
 	return obj, nil
 }
 
-// Deploy はマニフェストを Cloud Run に適用する。サービスが存在しなければ作成し、存在すれば
-// 置換する。created は新規作成だったかを表す。dryRun が true の場合はサーバ側で検証のみ行い、
-// 実際の変更は行わない。
-func Deploy(ctx context.Context, project, region, service string, manifest []byte, dryRun bool) (created bool, err error) {
+// DeployPlan は適用予定の内容。Plan で算出し、Apply で適用する。
+type DeployPlan struct {
+	Service string // サービス名
+	Create  bool   // 未存在で新規作成になるか
+	Diff    string // live と desired の統一 diff (差分が無ければ空)
+
+	client  *run.APIService
+	project string
+	desired *run.Service
+}
+
+// Plan はマニフェストを検証し、live サービスとの差分を算出する (変更はしない)。
+func Plan(ctx context.Context, project, region, service string, manifest []byte) (*DeployPlan, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if err := validate(svc, service); err != nil {
-		return false, err
+		return nil, err
 	}
 	// 送信先プロジェクトと body の namespace を一致させる。
 	if svc.Metadata != nil {
@@ -89,33 +98,60 @@ func Deploy(ctx context.Context, project, region, service string, manifest []byt
 
 	client, err := newClient(ctx, region)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
+	desiredYAML, err := ToManifest(svc)
+	if err != nil {
+		return nil, err
+	}
+
+	plan := &DeployPlan{Service: service, client: client, project: project, desired: svc}
+
+	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
+	current, getErr := client.Namespaces.Services.Get(name).Context(ctx).Do()
+	if getErr != nil {
+		if !isNotFound(getErr) {
+			return nil, fmt.Errorf("failed to check service %q: %w", service, getErr)
+		}
+		// 未存在: 新規作成。current 側は空として diff を取る。
+		plan.Create = true
+		if plan.Diff, err = Diff(nil, desiredYAML, "live/"+service, service); err != nil {
+			return nil, err
+		}
+		return plan, nil
+	}
+
+	currentYAML, err := ToManifest(current)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Diff, err = Diff(currentYAML, desiredYAML, "live/"+service, service); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// Apply は Plan の内容を Cloud Run に適用する。dryRun が true の場合はサーバ側で検証のみ行う。
+func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) error {
 	var dryRunVal string
 	if dryRun {
 		dryRunVal = "all"
 	}
 
-	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
-	_, getErr := client.Namespaces.Services.Get(name).Context(ctx).Do()
-	if getErr != nil {
-		if !isNotFound(getErr) {
-			return false, fmt.Errorf("failed to check service %q: %w", service, getErr)
+	name := fmt.Sprintf("namespaces/%s/services/%s", p.project, p.Service)
+	if p.Create {
+		parent := fmt.Sprintf("namespaces/%s", p.project)
+		if _, err := p.client.Namespaces.Services.Create(parent, p.desired).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+			return fmt.Errorf("failed to create service %q: %w", p.Service, err)
 		}
-		// 未存在なので新規作成する。
-		parent := fmt.Sprintf("namespaces/%s", project)
-		if _, err := client.Namespaces.Services.Create(parent, svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
-			return false, fmt.Errorf("failed to create service %q: %w", service, err)
-		}
-		return true, nil
+		return nil
 	}
 
-	// 既存なので置換する。
-	if _, err := client.Namespaces.Services.ReplaceService(name, svc).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
-		return false, fmt.Errorf("failed to update service %q: %w", service, err)
+	if _, err := p.client.Namespaces.Services.ReplaceService(name, p.desired).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("failed to update service %q: %w", p.Service, err)
 	}
-	return false, nil
+	return nil
 }
 
 // isNotFound は googleapi の 404 エラーかどうかを判定する。

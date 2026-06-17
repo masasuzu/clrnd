@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -77,6 +79,26 @@ func resolveRegion(flag string) (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
+}
+
+// confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
+func confirm(cmd *cobra.Command, prompt string) (bool, error) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
+}
+
+// isInteractive は標準入力が端末 (対話可能) かを判定する。
+func isInteractive() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // tfstateName は --tfstate の "name=location" 形式で name として認める文字列。

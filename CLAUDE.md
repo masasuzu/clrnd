@@ -47,10 +47,12 @@ gofmt -w .              # format
   Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.
-- `Deploy` validates locally (`Validate`), then `Get`s the service to decide between `Create`
-  (404 → new) and `ReplaceService` (exists → update); `isNotFound` distinguishes the 404 via
-  `googleapi.Error`. A `--dry-run` flag passes `dryRun=all` for server-side validation with no
-  mutation.
+- Deploy is split into `Plan` (validate locally, `Get` the live service, compute the `Diff` of
+  live vs desired; `Create` when 404 via `isNotFound`/`googleapi.Error`) and `DeployPlan.Apply`
+  (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
+  `confirm`s on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
+  (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. Empty diff →
+  skip apply. `--dry-run` passes `dryRun=all` for server-side validation with no mutation.
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
   via `option.WithEndpoint`), so a region is mandatory.
 - `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and
