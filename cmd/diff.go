@@ -25,14 +25,20 @@ var diffCmd = &cobra.Command{
 }
 
 func init() {
-	diffCmd.Flags().StringVar(&diffProject, "project", "", "GCP project ID")
-	diffCmd.Flags().StringVar(&diffRegion, "region", "", "Cloud Run region (e.g. asia-northeast1)")
-	_ = diffCmd.MarkFlagRequired("project")
-	_ = diffCmd.MarkFlagRequired("region")
+	addTargetFlags(diffCmd, &diffProject, &diffRegion)
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
 	service, manifestPath := args[0], args[1]
+
+	project, err := resolveProject(diffProject)
+	if err != nil {
+		return err
+	}
+	region, err := resolveRegion(diffRegion)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	local, err := os.ReadFile(manifestPath)
@@ -44,7 +50,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	obj, err := cloudrun.GetService(ctx, diffProject, diffRegion, service)
+	obj, err := cloudrun.GetService(ctx, project, region, service)
 	if err != nil {
 		return err
 	}

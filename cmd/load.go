@@ -25,17 +25,22 @@ var loadCmd = &cobra.Command{
 }
 
 func init() {
-	loadCmd.Flags().StringVar(&loadProject, "project", "", "GCP project ID")
-	loadCmd.Flags().StringVar(&loadRegion, "region", "", "Cloud Run region (e.g. asia-northeast1)")
+	addTargetFlags(loadCmd, &loadProject, &loadRegion)
 	loadCmd.Flags().StringVarP(&loadOutput, "output", "o", "", "output file (stdout if not set)")
-	_ = loadCmd.MarkFlagRequired("project")
-	_ = loadCmd.MarkFlagRequired("region")
 }
 
 func runLoad(cmd *cobra.Command, args []string) error {
+	project, err := resolveProject(loadProject)
+	if err != nil {
+		return err
+	}
+	region, err := resolveRegion(loadRegion)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
-	obj, err := cloudrun.GetService(ctx, loadProject, loadRegion, args[0])
+	obj, err := cloudrun.GetService(ctx, project, region, args[0])
 	if err != nil {
 		return err
 	}

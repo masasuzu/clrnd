@@ -43,7 +43,12 @@ gofmt -w .              # format
   `googleapi.Error`. A `--dry-run` flag passes `dryRun=all` for server-side validation with no
   mutation.
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
-  via `option.WithEndpoint`), so `--region` must be a required flag, not optional.
+  via `option.WithEndpoint`), so a region is mandatory.
+- `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and
+  resolved by `resolveProject`/`resolveRegion`, which fall back to gcloud-compatible env vars
+  (`CLOUDSDK_CORE_PROJECT`→`GOOGLE_CLOUD_PROJECT`, `CLOUDSDK_RUN_REGION`→`GOOGLE_CLOUD_REGION`) and
+  error if neither flag nor env is set. They are NOT `MarkFlagRequired` (that would reject the
+  env-only case). `verify` needs neither.
 - `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
   `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices). `ToManifest`
   applies it to a fetched service; `Normalize` applies the same to a local manifest file so the two

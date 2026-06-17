@@ -26,15 +26,21 @@ var deployCmd = &cobra.Command{
 }
 
 func init() {
-	deployCmd.Flags().StringVar(&deployProject, "project", "", "GCP project ID")
-	deployCmd.Flags().StringVar(&deployRegion, "region", "", "Cloud Run region (e.g. asia-northeast1)")
+	addTargetFlags(deployCmd, &deployProject, &deployRegion)
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "validate the request server-side without applying changes")
-	_ = deployCmd.MarkFlagRequired("project")
-	_ = deployCmd.MarkFlagRequired("region")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
 	service, manifestPath := args[0], args[1]
+
+	project, err := resolveProject(deployProject)
+	if err != nil {
+		return err
+	}
+	region, err := resolveRegion(deployRegion)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	manifest, err := os.ReadFile(manifestPath)
@@ -42,7 +48,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
 
-	if _, err := cloudrun.Deploy(ctx, deployProject, deployRegion, service, manifest, deployDryRun); err != nil {
+	if _, err := cloudrun.Deploy(ctx, project, region, service, manifest, deployDryRun); err != nil {
 		return err
 	}
 	return nil

@@ -47,6 +47,10 @@ Run `clrnd [command] --help` for details on a specific command.
 All commands that take a `<service>` and `<manifest>` expect the service name to match the
 manifest's `metadata.name`. A typical workflow is `load` → edit → `verify` → `diff` → `deploy`.
 
+`--project` and `--region` may be omitted when the corresponding environment variable is set
+(gcloud-compatible): project falls back to `$CLOUDSDK_CORE_PROJECT` then `$GOOGLE_CLOUD_PROJECT`,
+region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag always wins.
+
 ### verify
 
 Validate that a manifest is a well-formed Cloud Run service definition and contains the fields
@@ -74,8 +78,8 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 
 | Flag        | Description                                          |
 | ----------- | ---------------------------------------------------- |
-| `--project` | GCP project ID. (required)                           |
-| `--region`  | Cloud Run region, e.g. `asia-northeast1`. (required) |
+| `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 
 ```sh
 clrnd diff my-service service.yaml --project my-project --region asia-northeast1
@@ -92,8 +96,8 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-r
 
 | Flag        | Description                                                    |
 | ----------- | ------------------------------------------------------------- |
-| `--project` | GCP project ID. (required)                                    |
-| `--region`  | Cloud Run region, e.g. `asia-northeast1`. (required)          |
+| `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 | `--dry-run` | Validate the request server-side without applying any changes. |
 
 ```sh
@@ -118,8 +122,8 @@ Flags:
 
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
-| `--project`      | GCP project ID. (required)                           |
-| `--region`       | Cloud Run region, e.g. `asia-northeast1`. (required) |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 | `-o`, `--output` | Output file. Writes to stdout if not set.            |
 
 Examples:
