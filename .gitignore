@@ -1,0 +1,17 @@
+# Compiled binary (e.g. `go build -o clrnd .`)
+/clrnd
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Editor / OS files
+.DS_Store
+*.swp
+.idea/
+.vscode/
