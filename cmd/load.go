@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/masasuzu/crner/internal/cloudrun"
+	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
 )
 

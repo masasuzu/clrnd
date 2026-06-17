@@ -5,7 +5,7 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "crner",
+	Use:   "clrnd",
 	Short: "A CLI for deploying to Cloud Run",
 }
 

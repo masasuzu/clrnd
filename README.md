@@ -1,26 +1,26 @@
-# crner
+# clrnd
 
-`crner` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
+`clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
 It takes a service name and a manifest file as arguments and provides subcommands to verify, diff,
 deploy, and load Cloud Run services. 
 
 ## Installation
 
 ```sh
-go install github.com/masasuzu/crner@latest
+go install github.com/masasuzu/clrnd@latest
 ```
 
 Or build from source:
 
 ```sh
-git clone https://github.com/masasuzu/crner.git
-cd crner
-go build -o crner .
+git clone https://github.com/masasuzu/clrnd.git
+cd clrnd
+go build -o clrnd .
 ```
 
 ## Authentication
 
-`crner` uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials)
+`clrnd` uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials)
 to access the Cloud Run Admin API. Authenticate once with:
 
 ```sh
@@ -30,7 +30,7 @@ gcloud auth application-default login
 ## Usage
 
 ```
-crner [command]
+clrnd [command]
 ```
 
 ### Commands
@@ -42,7 +42,7 @@ crner [command]
 | `deploy` | Deploy a manifest to Cloud Run.                           |
 | `load`   | Load the manifest of an existing service.                 |
 
-Run `crner [command] --help` for details on a specific command.
+Run `clrnd [command] --help` for details on a specific command.
 
 All commands that take a `<service>` and `<manifest>` expect the service name to match the
 manifest's `metadata.name`. A typical workflow is `load` → edit → `verify` → `diff` → `deploy`.
@@ -55,11 +55,11 @@ so it is safe to run in CI. Nothing is printed when the manifest is valid; probl
 to stderr with a non-zero exit code.
 
 ```sh
-crner verify <service> <manifest>
+clrnd verify <service> <manifest>
 ```
 
 ```sh
-crner verify my-service service.yaml
+clrnd verify my-service service.yaml
 ```
 
 ### diff
@@ -69,7 +69,7 @@ manifest file. Both sides are normalized (read-only fields removed) before compa
 manifest produced by `load` compares cleanly. Nothing is printed when there is no difference.
 
 ```sh
-crner diff <service> <manifest> --project <PROJECT> --region <REGION>
+clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 ```
 
 | Flag        | Description                                          |
@@ -78,7 +78,7 @@ crner diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. (required) |
 
 ```sh
-crner diff my-service service.yaml --project my-project --region asia-northeast1
+clrnd diff my-service service.yaml --project my-project --region asia-northeast1
 ```
 
 ### deploy
@@ -87,7 +87,7 @@ Apply the manifest to Cloud Run, creating the service if it does not exist or re
 otherwise. The manifest is validated locally before the request is sent.
 
 ```sh
-crner deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-run]
+clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-run]
 ```
 
 | Flag        | Description                                                    |
@@ -98,10 +98,10 @@ crner deploy <service> <manifest> --project <PROJECT> --region <REGION> [--dry-r
 
 ```sh
 # Validate against the server without changing anything
-crner deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
+clrnd deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
 
 # Deploy for real
-crner deploy my-service service.yaml --project my-project --region asia-northeast1
+clrnd deploy my-service service.yaml --project my-project --region asia-northeast1
 ```
 
 ### load
@@ -111,7 +111,7 @@ read-only fields (such as `status`, `metadata.uid`, and `resourceVersion`) are s
 the output can be reused as a deployable manifest.
 
 ```sh
-crner load <service> --project <PROJECT> --region <REGION> [--output <FILE>]
+clrnd load <service> --project <PROJECT> --region <REGION> [--output <FILE>]
 ```
 
 Flags:
@@ -126,10 +126,10 @@ Examples:
 
 ```sh
 # Print the manifest to stdout
-crner load my-service --project my-project --region asia-northeast1
+clrnd load my-service --project my-project --region asia-northeast1
 
 # Write the manifest to a file
-crner load my-service --project my-project --region asia-northeast1 --output service.yaml
+clrnd load my-service --project my-project --region asia-northeast1 --output service.yaml
 ```
 
 ## License

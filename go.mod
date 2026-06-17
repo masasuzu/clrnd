@@ -1,4 +1,4 @@
-module github.com/masasuzu/crner
+module github.com/masasuzu/clrnd
 
 go 1.25.8
 

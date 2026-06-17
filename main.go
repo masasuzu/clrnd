@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/masasuzu/crner/cmd"
+	"github.com/masasuzu/clrnd/cmd"
 )
 
 func main() {

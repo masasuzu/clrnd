@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`crner` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
+`clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `diff`, `deploy`, and `load`
 subcommands. All four (`load`, `diff`, `verify`, `deploy`) are implemented.
 
@@ -13,9 +13,9 @@ subcommands. All four (`load`, `diff`, `verify`, `deploy`) are implemented.
 ```sh
 go build ./...          # build all packages
 go run . load <svc> --project <P> --region <R>   # run without installing
-go install .            # install the crner binary to $GOPATH/bin
-go test ./...           # run tests (none exist yet)
-go test -run TestName ./cmd   # run a single test
+go install .            # install the clrnd binary to $GOPATH/bin
+go test ./...           # run tests
+go test -run TestName ./internal/cloudrun   # run a single test
 go vet ./...            # static checks
 gofmt -w .              # format
 ```
@@ -26,7 +26,7 @@ gofmt -w .              # format
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
-- Invocation form is `crner <subcommand> <service> [<manifest>]`. `verify`/`diff`/`deploy` take
+- Invocation form is `clrnd <subcommand> <service> [<manifest>]`. `verify`/`diff`/`deploy` take
   two positional args (`cobra.ExactArgs(2)`); `load` takes one (`cobra.ExactArgs(1)`).
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
   Subcommands in `cmd/` only parse flags and do I/O, then call into this package — this is the
