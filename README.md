@@ -209,10 +209,11 @@ clrnd verify my-service service.yaml --project my-project --region asia-northeas
 
 Render the manifest as a Go template (`{{ tfstate }}`, `{{ env }}`, …) and print the expanded
 result without parsing or validating it. This is handy for debugging template output. It does not
-access the Cloud Run API and needs no `--project` / `--region`.
+access the Cloud Run API and needs no `--project` / `--region`. It checks no service name, so it
+takes only the manifest.
 
 ```sh
-clrnd render <service> <manifest> [--tfstate <location>] [--output <FILE>]
+clrnd render <manifest> [--tfstate <location>] [--output <FILE>]
 ```
 
 | Flag             | Description                                          |
@@ -221,7 +222,7 @@ clrnd render <service> <manifest> [--tfstate <location>] [--output <FILE>]
 | `-o`, `--output` | Output file. Writes to stdout if not set.            |
 
 ```sh
-clrnd render my-service service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
+clrnd render service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
 ```
 
 ### diff

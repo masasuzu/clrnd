@@ -42,11 +42,18 @@ func resolveService(args []string) (string, error) {
 	return "", fmt.Errorf("service is required: pass it as an argument or set service in the config file")
 }
 
-// resolveManifest は位置引数 args[1] > config manifest の順で解決する。
-// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
+// resolveManifest は位置引数 args[1] > config manifest の順で解決する
+// (service と manifest を取るサブコマンド用)。
 func resolveManifest(args []string) (string, error) {
-	if len(args) >= 2 && args[1] != "" {
-		return args[1], nil
+	return resolveManifestAt(args, 1)
+}
+
+// resolveManifestAt は位置引数 args[idx] > config manifest の順で manifest を解決する。
+// service を取らない render は idx=0 で、唯一の位置引数を manifest として扱う。
+// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
+func resolveManifestAt(args []string, idx int) (string, error) {
+	if len(args) > idx && args[idx] != "" {
+		return args[idx], nil
 	}
 	if cfg.Manifest != "" {
 		return resolveConfigPath(cfg.Manifest), nil

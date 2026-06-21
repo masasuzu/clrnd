@@ -14,13 +14,14 @@ var (
 )
 
 var renderCmd = &cobra.Command{
-	Use:   "render [service] [manifest]",
+	Use:   "render [manifest]",
 	Short: "Render the manifest with templates expanded",
 	Long: "Render the manifest as a Go template ({{ tfstate }}, {{ env }}, ...) and print the\n" +
 		"result without parsing or validating it. Useful for debugging template output.\n" +
 		"This does not access the Cloud Run API and needs no --project/--region.\n" +
+		"render does not check the service name, so it takes only the manifest (no service).\n" +
 		"manifest may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(2),
+	Args: cobra.MaximumNArgs(1),
 	RunE: runRender,
 }
 
@@ -30,8 +31,8 @@ func init() {
 }
 
 func runRender(cmd *cobra.Command, args []string) error {
-	// render は名前一致を検証しないので service は解決しない (引数は manifest 解決にだけ使う)。
-	manifestPath, err := resolveManifest(args)
+	// render は名前一致を検証しないので service を取らず、唯一の位置引数を manifest として扱う。
+	manifestPath, err := resolveManifestAt(args, 0)
 	if err != nil {
 		return err
 	}
