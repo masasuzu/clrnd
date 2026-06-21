@@ -78,19 +78,20 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte) 
 
 // serviceAccountName はマニフェストの実行サービスアカウントを nil セーフに取り出す。
 func serviceAccountName(svc *run.Service) string {
-	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Spec == nil {
+	spec := templateSpec(svc)
+	if spec == nil {
 		return ""
 	}
-	return svc.Spec.Template.Spec.ServiceAccountName
+	return spec.ServiceAccountName
 }
 
 // secretNames はマニフェストが参照する Secret Manager シークレット名を重複なく集める。
 // env の secretKeyRef と secret ボリュームの両方を見る。
 func secretNames(svc *run.Service) []string {
-	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Spec == nil {
+	spec := templateSpec(svc)
+	if spec == nil {
 		return nil
 	}
-	spec := svc.Spec.Template.Spec
 
 	seen := make(map[string]bool)
 	var out []string

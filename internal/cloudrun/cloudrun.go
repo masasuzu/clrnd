@@ -248,12 +248,22 @@ func validate(svc *run.Service, service string) error {
 	return errors.Join(errs...)
 }
 
-// serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。
-func serviceContainers(svc *run.Service) []*run.Container {
-	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Spec == nil {
+// templateSpec はサービス定義の spec.template.spec (RevisionSpec) を nil セーフに取り出す。
+// コンテナ・サービスアカウント・ボリュームなど template 配下を見る処理で共有する。
+func templateSpec(svc *run.Service) *run.RevisionSpec {
+	if svc.Spec == nil || svc.Spec.Template == nil {
 		return nil
 	}
-	return svc.Spec.Template.Spec.Containers
+	return svc.Spec.Template.Spec
+}
+
+// serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。
+func serviceContainers(svc *run.Service) []*run.Container {
+	spec := templateSpec(svc)
+	if spec == nil {
+		return nil
+	}
+	return spec.Containers
 }
 
 // Diff は current と desired の統一 diff を返す。差分が無ければ空文字列を返す。
