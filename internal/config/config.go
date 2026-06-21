@@ -10,12 +10,14 @@ import (
 )
 
 // Config は設定ファイルの内容。フィールドは sigs.k8s.io/yaml が JSON タグで解釈する。
+// omitempty は読み込み (UnmarshalStrict) には影響せず、init が Config をマーシャルして
+// clrnd.yml を生成する際に空フィールドを出さないために付けている。
 type Config struct {
-	Project  string    `json:"project"`
-	Region   string    `json:"region"`
-	Service  string    `json:"service"`
-	Manifest string    `json:"manifest"`
-	Tfstate  []Tfstate `json:"tfstate"`
+	Project  string    `json:"project,omitempty"`
+	Region   string    `json:"region,omitempty"`
+	Service  string    `json:"service,omitempty"`
+	Manifest string    `json:"manifest,omitempty"`
+	Tfstate  []Tfstate `json:"tfstate,omitempty"`
 }
 
 // Tfstate は名前付き Terraform state の宣言。Name 省略時は "default" 扱い。

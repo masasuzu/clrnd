@@ -6,7 +6,9 @@ import (
 	"os"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
+	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 )
 
 // init が生成する設定ファイル名。ルートの自動検出名 (defaultConfigFiles) の先頭に合わせる。
@@ -71,17 +73,32 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	configYAML, err := scaffoldConfig(project, region, service, initManifest)
+	if err != nil {
+		return err
+	}
+
 	if err := os.WriteFile(initManifest, manifest, 0o644); err != nil {
 		return fmt.Errorf("failed to write %s: %w", initManifest, err)
 	}
-	if err := os.WriteFile(initConfigFile, scaffoldConfig(project, region, service, initManifest), 0o644); err != nil {
+	if err := os.WriteFile(initConfigFile, configYAML, 0o644); err != nil {
 		return fmt.Errorf("failed to write %s: %w", initConfigFile, err)
 	}
 	return nil
 }
 
-// scaffoldConfig は init が生成する clrnd.yml の中身を組み立てる。
-func scaffoldConfig(project, region, service, manifest string) []byte {
-	return []byte(fmt.Sprintf("project: %s\nregion: %s\nservice: %s\nmanifest: %s\n",
-		project, region, service, manifest))
+// scaffoldConfig は init が生成する clrnd.yml の中身を組み立てる。手書きせず config.Config を
+// マーシャルすることで、値のエスケープ (パスにコロン等が含まれる場合) を YAML 側に任せ、
+// clrnd.yml を読む側 (config.Load) とスキーマがずれないようにする。
+func scaffoldConfig(project, region, service, manifest string) ([]byte, error) {
+	out, err := yaml.Marshal(config.Config{
+		Project:  project,
+		Region:   region,
+		Service:  service,
+		Manifest: manifest,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build %s: %w", initConfigFile, err)
+	}
+	return out, nil
 }
