@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
@@ -68,7 +69,25 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	// 検証を壊さないため、解決できなければローカル検証だけで成功とする)。
 	project, region, ok := resolveTargetOptional(verifyProject, verifyRegion)
 	if !ok {
+		// 片方だけ明示的に指定された場合は、リモートチェックを黙ってスキップせず知らせる。
+		if cmd.Flags().Changed("project") || cmd.Flags().Changed("region") {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"warning: skipping API existence checks: both --project and --region must be set")
+		}
 		return nil
 	}
-	return cloudrun.VerifyRemote(ctx, project, region, manifest)
+
+	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest)
+	if err != nil {
+		return err
+	}
+	// 確認できなかったもの (権限不足・API 未到達など) は警告に留め、verify は失敗させない。
+	for _, u := range res.Unchecked {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not verify %s\n", u)
+	}
+	// 実在しないと確定したものだけを失敗として返す。
+	if len(res.Missing) > 0 {
+		return fmt.Errorf("%s", strings.Join(res.Missing, "\n"))
+	}
+	return nil
 }

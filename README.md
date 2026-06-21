@@ -186,6 +186,11 @@ the service account (`spec.template.spec.serviceAccountName`) and the Secret Man
 `secretKeyRef` and secret volumes. Unlike ecspresso's `verify` this remote check is opt-in by
 availability — when no project/region is set it is skipped and `verify` stays a fully offline lint.
 
+The remote check only **fails** verify when a resource is confirmed missing (the API returns
+not-found). When it cannot reach the API to decide — no credentials, the API is disabled, or the
+caller lacks read permission — it prints a `warning:` to stderr and does **not** fail, so an
+ambient project/region in CI never turns a passing offline lint red.
+
 ```sh
 clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--local-only] [--tfstate <location>]
 ```
