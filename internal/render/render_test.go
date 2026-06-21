@@ -112,6 +112,19 @@ func TestRenderSingleQuoteAddr(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsInvalidName(t *testing.T) {
+	path := writeFixture(t, tfstateFixture)
+	// 名前は関数名 (<name>tfstate) になるため、Go 識別子として不正な名前は panic ではなく
+	// クリーンなエラーで弾く (config 経路から不正名が来ても落ちないこと)。
+	for _, name := range []string{"net-prod", "1state", "has space"} {
+		manifest := []byte("kind: Service\n")
+		_, err := Render(context.Background(), manifest, []Source{{Name: name, Location: path}})
+		if err == nil || !strings.Contains(err.Error(), "invalid tfstate name") {
+			t.Errorf("Render() with name %q error = %v, want 'invalid tfstate name'", name, err)
+		}
+	}
+}
+
 func TestRenderNoPlaceholdersNeedsNoState(t *testing.T) {
 	// state を一切渡さなくても、プレースホルダーが無ければ成功する (遅延ロード)。
 	manifest := []byte("kind: Service\nmetadata:\n  name: svc\n")

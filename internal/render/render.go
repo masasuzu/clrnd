@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"text/template"
@@ -16,6 +17,17 @@ import (
 
 // DefaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
 const DefaultStateName = "default"
+
+// validName は名前付き state の名前として認める文字列。名前はそのまま {{ <name>tfstate }} の
+// テンプレート関数名のプレフィックスになるため、Go 識別子として有効な文字列 (先頭は英字か _、
+// 以降は英数字か _) に限る。不正な名前のまま登録すると text/template が panic する。
+var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// IsValidName は name が名前付き state の名前 (= テンプレート関数名のプレフィックス) として
+// 有効かを返す。フラグ経路・config 経路の双方でこの制約を共有する。
+func IsValidName(name string) bool {
+	return validName.MatchString(name)
+}
 
 // Source は名前付きの Terraform state の場所を表す。Location はローカルパスまたは
 // gs://, s3:// などの URL。
@@ -37,12 +49,17 @@ func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, err
 	}
 
 	for _, s := range sources {
-		ldr := &stateLoader{ctx: ctx, loc: s.Location}
 		// デフォルト state はプレフィックス無し、それ以外は名前をそのままプレフィックスに使う。
+		// 名前はテンプレート関数名 (<name>tfstate) になるため、Go 識別子として不正だと
+		// template.Funcs が panic する。ここで弾いて分かりやすいエラーにする。
 		prefix := ""
 		if s.Name != DefaultStateName {
+			if !IsValidName(s.Name) {
+				return nil, fmt.Errorf("invalid tfstate name %q: must be a valid identifier (letters, digits, _, not starting with a digit)", s.Name)
+			}
 			prefix = s.Name
 		}
+		ldr := &stateLoader{ctx: ctx, loc: s.Location}
 		funcs[prefix+"tfstate"] = func(addr string) (string, error) {
 			return ldr.lookup(addr)
 		}

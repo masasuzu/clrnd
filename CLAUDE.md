@@ -43,7 +43,10 @@ gofmt -w .              # format
   follows ecspresso's `func_prefix` model: the `<name>` is used verbatim as the function-name prefix,
   so `--tfstate net_=<loc>` registers `{{ net_tfstate "addr" }}` / `{{ net_tfstatef "fmt" args }}`
   (NOT a 2-arg `{{ tfstate "name" "addr" }}` form, which does not exist). `<name>` must be a valid Go
-  identifier prefix (`^[A-Za-z_][A-Za-z0-9_]*$`, enforced by `tfstateName` in `cmd/flags.go`).
+  identifier prefix (`^[A-Za-z_][A-Za-z0-9_]*$`); this is validated in `render.Render` via
+  `render.IsValidName` (a clean error, not a `template.Funcs` panic) so it covers BOTH the flag and
+  config paths. The flag parser (`parseTfstateSources`) also uses `render.IsValidName` to decide
+  whether `name=` is a name or part of the location.
   Per-state registration in `render.Render` means referencing an unconfigured prefix is a
   `text/template` parse error ("function ... not defined"), matching ecspresso. `'` in an address is
   rewritten to `"` for convenience. `load` takes no manifest, so it is not rendered.

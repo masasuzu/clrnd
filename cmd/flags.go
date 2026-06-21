@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/masasuzu/clrnd/internal/render"
@@ -106,11 +105,6 @@ func isInteractive(cmd *cobra.Command) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// tfstateName は --tfstate の "name=location" 形式で name として認める文字列。
-// name はそのまま {{ <name>tfstate }} のテンプレート関数名のプレフィックスになるため、
-// Go の識別子として有効な文字列 (先頭は英字か _、以降は英数字か _) に限る。
-var tfstateName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
 // addManifestFlags は --tfstate フラグを登録する。繰り返し指定可能。
 func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 	cmd.Flags().StringArrayVar(tfstate, "tfstate", nil,
@@ -168,7 +162,7 @@ func parseTfstateSources(specs []string) ([]render.Source, error) {
 	seen := make(map[string]bool)
 	for _, spec := range specs {
 		name, loc := render.DefaultStateName, spec
-		if i := strings.Index(spec, "="); i > 0 && tfstateName.MatchString(spec[:i]) {
+		if i := strings.Index(spec, "="); i > 0 && render.IsValidName(spec[:i]) {
 			name, loc = spec[:i], spec[i+1:]
 		}
 		if loc == "" {
