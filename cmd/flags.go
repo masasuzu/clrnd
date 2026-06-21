@@ -80,6 +80,18 @@ func resolveRegion(flag string) (string, error) {
 	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
 }
 
+// resolveTargetOptional は resolveProject/resolveRegion と同じ優先順位で project/region を
+// 解決するが、どちらかが欠けてもエラーにせず ok=false を返す。verify の API 実在チェックを
+// 「対象が解決できるときだけ」走らせる (オフライン検証を壊さない) ために使う。
+func resolveTargetOptional(projectFlag, regionFlag string) (project, region string, ok bool) {
+	project = firstNonEmpty(projectFlag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project)
+	region = firstNonEmpty(regionFlag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region)
+	if project == "" || region == "" {
+		return "", "", false
+	}
+	return project, region, true
+}
+
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
 func confirm(cmd *cobra.Command, prompt string) (bool, error) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)

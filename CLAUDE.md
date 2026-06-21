@@ -5,14 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
-manifest file (Knative-style Service YAML) and exposes `verify`, `diff`, `deploy`, and `load`
-subcommands. All four (`load`, `diff`, `verify`, `deploy`) are implemented.
+manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`, and
+`init` subcommands. All five are implemented. (`init` was formerly `load`; `load` remains a cobra
+alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
+(ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
 ## Commands
 
 ```sh
 go build ./...          # build all packages
-go run . load <svc> --project <P> --region <R>   # run without installing
+go run . init <svc> --project <P> --region <R>   # run without installing
 go install .            # install the clrnd binary to $GOPATH/bin
 go test ./...           # run tests
 go test -run TestName ./internal/cloudrun   # run a single test
@@ -27,14 +29,16 @@ gofmt -w .              # format
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
 - Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional
-  (`cobra.MaximumNArgs(2)` for verify/diff/deploy, `MaximumNArgs(1)` for load); `resolveService`/
+  (`cobra.MaximumNArgs(2)` for verify/render/diff/deploy, `MaximumNArgs(1)` for init); `resolveService`/
   `resolveManifest` fill them from the config file when absent (positional → config). args fill
-  service first, then manifest.
+  service first, then manifest. `render` does not match the service name, so it calls only
+  `resolveManifest` (the `[service]` slot is still accepted for positional consistency).
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
   Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
 - Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
-  BEFORE parsing/validation. `verify`/`diff`/`deploy` call `renderManifest` (in
-  [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. Template funcs (ecspresso-compatible):
+  BEFORE parsing/validation. `verify`/`render`/`diff`/`deploy` call `renderManifest` (in
+  [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. The `render` subcommand prints this
+  rendered output as-is (no parse/normalize), for debugging template output. Template funcs (ecspresso-compatible):
   `{{ tfstate "addr" }}`, `{{ tfstatef "fmt" args }}`, `{{ env "VAR" ["default"] }}`,
   `{{ must_env "VAR" }}`. The `tfstate`/`tfstatef` funcs resolve Terraform state via
   `fujiwara/tfstate-lookup`; states are declared with the repeatable
@@ -49,7 +53,7 @@ gofmt -w .              # format
   whether `name=` is a name or part of the location.
   Per-state registration in `render.Render` means referencing an unconfigured prefix is a
   `text/template` parse error ("function ... not defined"), matching ecspresso. `'` in an address is
-  rewritten to `"` for convenience. `load` takes no manifest, so it is not rendered.
+  rewritten to `"` for convenience. `init` takes no manifest, so it is not rendered.
 
 ### internal/cloudrun (the core logic)
 
@@ -70,7 +74,9 @@ gofmt -w .              # format
   (matching gcloud): env vars are `CLOUDSDK_CORE_PROJECT`→`GOOGLE_CLOUD_PROJECT` and
   `CLOUDSDK_RUN_REGION`→`GOOGLE_CLOUD_REGION`; the config file (see below) is the lowest fallback.
   Error if none is set. NOT `MarkFlagRequired` (that would reject the env/config-only case).
-  `verify` needs neither.
+  `render` needs neither; `verify` accepts them optionally — `resolveTargetOptional` (in
+  [cmd/flags.go](cmd/flags.go)) resolves with the same precedence but returns `ok=false` instead of
+  erroring, so the API existence check runs only when a target is available.
 - The `-c`/`--config` persistent flag loads a YAML config via [internal/config](internal/config/config.go)
   in the root's `PersistentPreRunE` (`loadConfig`), into the package var `cfg`. When `--config` is
   omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
@@ -88,8 +94,19 @@ gofmt -w .              # format
   normalizes both the live service and the local manifest before comparing.
 - `Validate` checks a local manifest with no API access: strict YAML unmarshal into `run.Service`
   (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
-  service argument. Returns `errors.Join` of all problems so the user sees them at once. `verify`
-  needs no `--project`/`--region` and no credentials.
+  service argument. Returns `errors.Join` of all problems so the user sees them at once. The local
+  `Validate` needs no `--project`/`--region` and no credentials.
+- `VerifyRemote` (in [internal/cloudrun/verify.go](internal/cloudrun/verify.go)) complements
+  `Validate` with API existence checks, aligning `verify`'s semantics with ecspresso. It confirms
+  the manifest's service account (IAM `projects.serviceAccounts.get`) and the Secret Manager secrets
+  used by `secretKeyRef`/secret volumes (`projects.secrets.get`) exist, collecting all problems with
+  `errors.Join`. Auth is the same ADC; the IAM/Secret Manager clients are subpackages of
+  `google.golang.org/api` (no new module). `cmd/verify.go` runs it only when a target resolves and
+  `--local-only` is off. Image (Artifact Registry) checks are a deliberate future second stage
+  (`region` is already plumbed through for them); see the TODO in `verify.go`.
+- `init` (in [cmd/init.go](cmd/init.go), formerly `load`) fetches a service via `GetService`/
+  `ToManifest` and scaffolds `manifest.yaml` (the `--output` file) plus `clrnd.yml` (project/region/
+  service/manifest), refusing to overwrite existing files without `--force`.
 
 ## Conventions
 
