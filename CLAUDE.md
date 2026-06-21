@@ -35,11 +35,18 @@ gofmt -w .              # format
 - Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
   BEFORE parsing/validation. `verify`/`diff`/`deploy` call `renderManifest` (in
   [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. Template funcs (ecspresso-compatible):
-  `{{ tfstate ["name"] "addr" }}`, `{{ env "VAR" ["default"] }}`, `{{ must_env "VAR" }}`. The
-  `tfstate` func resolves Terraform state via `fujiwara/tfstate-lookup`; states are declared with the
-  repeatable `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read
-  when a placeholder references it, so manifests without placeholders need no `--tfstate`). `load`
-  takes no manifest, so it is not rendered.
+  `{{ tfstate "addr" }}`, `{{ tfstatef "fmt" args }}`, `{{ env "VAR" ["default"] }}`,
+  `{{ must_env "VAR" }}`. The `tfstate`/`tfstatef` funcs resolve Terraform state via
+  `fujiwara/tfstate-lookup`; states are declared with the repeatable
+  `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read when a
+  placeholder references it, so manifests without placeholders need no `--tfstate`). A *named* state
+  follows ecspresso's `func_prefix` model: the `<name>` is used verbatim as the function-name prefix,
+  so `--tfstate net_=<loc>` registers `{{ net_tfstate "addr" }}` / `{{ net_tfstatef "fmt" args }}`
+  (NOT a 2-arg `{{ tfstate "name" "addr" }}` form, which does not exist). `<name>` must be a valid Go
+  identifier prefix (`^[A-Za-z_][A-Za-z0-9_]*$`, enforced by `tfstateName` in `cmd/flags.go`).
+  Per-state registration in `render.Render` means referencing an unconfigured prefix is a
+  `text/template` parse error ("function ... not defined"), matching ecspresso. `'` in an address is
+  rewritten to `"` for convenience. `load` takes no manifest, so it is not rendered.
 
 ### internal/cloudrun (the core logic)
 

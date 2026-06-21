@@ -20,8 +20,8 @@ func TestConfirm(t *testing.T) {
 		{"  yes  \n", true},
 		{"n\n", false},
 		{"no\n", false},
-		{"\n", false},  // 空回答 → デフォルト No
-		{"", false},    // EOF (パイプ等) → No
+		{"\n", false}, // 空回答 → デフォルト No
+		{"", false},   // EOF (パイプ等) → No
 		{"maybe\n", false},
 	}
 	for _, tt := range tests {
@@ -68,8 +68,8 @@ func TestResolveConfigPath(t *testing.T) {
 	}{
 		{"manifest.yaml", "/etc/app/manifest.yaml"}, // 相対 → config dir 基準
 		{"sub/m.yaml", "/etc/app/sub/m.yaml"},
-		{"/abs/m.yaml", "/abs/m.yaml"},                                  // 絶対はそのまま
-		{"gs://bucket/state.tfstate", "gs://bucket/state.tfstate"},      // URL はそのまま
+		{"/abs/m.yaml", "/abs/m.yaml"},                             // 絶対はそのまま
+		{"gs://bucket/state.tfstate", "gs://bucket/state.tfstate"}, // URL はそのまま
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -237,6 +237,28 @@ func TestParseTfstateSources(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 		if got[0].Name != "network" || got[0].Location != "gs://bucket/net.tfstate" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("hyphen name is not a valid prefix, treated as location", func(t *testing.T) {
+		// name はテンプレート関数のプレフィックスになるため Go 識別子に限る。
+		// ハイフンを含む左辺は name として採用されず、全体が location 扱いになる。
+		got, err := parseTfstateSources([]string{"my-state=loc"})
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if got[0].Name != "default" || got[0].Location != "my-state=loc" {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
+	t.Run("leading-digit name is not a valid prefix, treated as location", func(t *testing.T) {
+		got, err := parseTfstateSources([]string{"1state=loc"})
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if got[0].Name != "default" || got[0].Location != "1state=loc" {
 			t.Fatalf("got %+v", got)
 		}
 	})

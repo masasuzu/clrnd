@@ -107,13 +107,16 @@ func isInteractive(cmd *cobra.Command) bool {
 }
 
 // tfstateName は --tfstate の "name=location" 形式で name として認める文字列。
-var tfstateName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// name はそのまま {{ <name>tfstate }} のテンプレート関数名のプレフィックスになるため、
+// Go の識別子として有効な文字列 (先頭は英字か _、以降は英数字か _) に限る。
+var tfstateName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // addManifestFlags は --tfstate フラグを登録する。繰り返し指定可能。
 func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 	cmd.Flags().StringArrayVar(tfstate, "tfstate", nil,
 		"Terraform state for {{ tfstate }} placeholders: <location> or <name>=<location> "+
-			"(repeatable; local path or s3://, gs://, ... URL)")
+			"(<name> becomes the {{ <name>tfstate }} function prefix; repeatable; "+
+			"local path or s3://, gs://, ... URL)")
 }
 
 // renderManifest は tfstate 指定 (フラグ優先、無ければ config) を解釈し、マニフェストの
