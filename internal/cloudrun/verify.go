@@ -51,6 +51,7 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte) 
 	}
 
 	if len(secrets) > 0 {
+		aliases := secretAliases(svc)
 		smSvc, err := secretmanager.NewService(ctx)
 		if err != nil {
 			for _, s := range secrets {
@@ -58,7 +59,7 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte) 
 			}
 		} else {
 			for _, s := range secrets {
-				name := secretResourceName(project, s)
+				name := secretResourceName(project, s, aliases)
 				if _, err := smSvc.Projects.Secrets.Get(name).Context(ctx).Do(); err != nil {
 					if isNotFound(err) {
 						res.Missing = append(res.Missing, fmt.Sprintf("secret %q does not exist", s))
@@ -118,14 +119,46 @@ func secretNames(svc *run.Service) []string {
 	return out
 }
 
+// secretAliasAnnotation は別プロジェクトのシークレット参照のエイリアス定義を持つ
+// アノテーションキー。値は "<alias>:projects/<p>/secrets/<s>" をカンマ区切りで並べたもの。
+const secretAliasAnnotation = "run.googleapis.com/secrets"
+
+// secretAliases は spec.template.metadata の run.googleapis.com/secrets アノテーションを
+// パースし、エイリアス名 -> 実体パス (projects/<p>/secrets/<s>) のマップを返す。
+// 別プロジェクトのシークレットは secretKeyRef.name にエイリアスだけが入り、実体パスは
+// このアノテーションにあるため、これを引かないと存在チェックが誤判定する。
+func secretAliases(svc *run.Service) map[string]string {
+	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Metadata == nil {
+		return nil
+	}
+	raw := svc.Spec.Template.Metadata.Annotations[secretAliasAnnotation]
+	if raw == "" {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		// "<alias>:projects/<p>/secrets/<s>" を最初の ":" で分割する (実体パスに ":" は無い)。
+		if i := strings.Index(entry, ":"); i > 0 {
+			out[entry[:i]] = entry[i+1:]
+		}
+	}
+	return out
+}
+
 // secretResourceName はシークレット名を Secret Manager の resource 名に整える。
 // 既に projects/.../secrets/... 形式ならそのまま (末尾の /versions/... は落とす)。
-func secretResourceName(project, name string) string {
+// 別プロジェクトのエイリアスは aliases から実体パスへ解決する。それ以外は同一プロジェクト
+// のシークレットとみなす。
+func secretResourceName(project, name string, aliases map[string]string) string {
 	if strings.HasPrefix(name, "projects/") {
 		if i := strings.Index(name, "/versions/"); i >= 0 {
 			return name[:i]
 		}
 		return name
+	}
+	if path, ok := aliases[name]; ok {
+		return secretResourceName(project, path, nil)
 	}
 	return fmt.Sprintf("projects/%s/secrets/%s", project, name)
 }
