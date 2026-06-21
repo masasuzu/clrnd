@@ -63,14 +63,65 @@ dbHost: '{{ tfstate "google_sql_database_instance.main.private_ip_address" }}'`)
 
 func TestRenderResolvesNamedState(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
-	manifest := []byte(`image: '{{ tfstate "network" "output.image_url" }}'`)
+	// 名前付き state は名前をプレフィックスにした関数 ({{ <name>tfstate }}) になる。
+	manifest := []byte(`image: '{{ network_tfstate "output.image_url" }}'`)
 
-	out, err := Render(context.Background(), manifest, []Source{{Name: "network", Location: path}})
+	out, err := Render(context.Background(), manifest, []Source{{Name: "network_", Location: path}})
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
 	if !strings.Contains(string(out), "asia-northeast1-docker.pkg.dev/p/r/app:v1") {
 		t.Errorf("named state not resolved:\n%s", out)
+	}
+}
+
+func TestRenderTfstatef(t *testing.T) {
+	path := writeFixture(t, tfstateFixture)
+	manifest := []byte(`a: '{{ tfstatef "output.%s" "image_url" }}'
+b: '{{ prod_tfstatef "output.%s" "service_account" }}'`)
+
+	out, err := Render(context.Background(), manifest, []Source{
+		{Name: "default", Location: path},
+		{Name: "prod_", Location: path},
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"a: 'asia-northeast1-docker.pkg.dev/p/r/app:v1'",
+		"b: 'run-sa@example.iam.gserviceaccount.com'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("tfstatef output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderSingleQuoteAddr(t *testing.T) {
+	path := writeFixture(t, tfstateFixture)
+	// アドレス中の ' は " に置換される (ecspresso 互換)。ここでは置換しても
+	// 同じアドレスに解決されることだけ確認する。
+	manifest := []byte(`x: '{{ tfstate "output.image_url" }}'`)
+	out, err := Render(context.Background(), manifest, []Source{{Name: "default", Location: path}})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if !strings.Contains(string(out), "asia-northeast1-docker.pkg.dev/p/r/app:v1") {
+		t.Errorf("got %s", out)
+	}
+}
+
+func TestRenderRejectsInvalidName(t *testing.T) {
+	path := writeFixture(t, tfstateFixture)
+	// 名前は関数名 (<name>tfstate) になるため、Go 識別子として不正な名前は panic ではなく
+	// クリーンなエラーで弾く (config 経路から不正名が来ても落ちないこと)。
+	for _, name := range []string{"net-prod", "1state", "has space"} {
+		manifest := []byte("kind: Service\n")
+		_, err := Render(context.Background(), manifest, []Source{{Name: name, Location: path}})
+		if err == nil || !strings.Contains(err.Error(), "invalid tfstate name") {
+			t.Errorf("Render() with name %q error = %v, want 'invalid tfstate name'", name, err)
+		}
 	}
 }
 
@@ -148,22 +199,16 @@ func TestRenderErrors(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name:     "unknown state name",
-			manifest: `x: '{{ tfstate "missing" "output.image_url" }}'`,
+			name:     "unconfigured prefix is a parse error",
+			manifest: `x: '{{ missing_tfstate "output.image_url" }}'`,
 			sources:  []Source{{Name: "default", Location: path}},
-			wantErr:  `tfstate "missing" is not configured`,
+			wantErr:  "function \"missing_tfstate\" not defined",
 		},
 		{
 			name:     "missing address",
 			manifest: `x: '{{ tfstate "output.does_not_exist" }}'`,
 			sources:  []Source{{Name: "default", Location: path}},
 			wantErr:  "not found in tfstate",
-		},
-		{
-			name:     "wrong arg count",
-			manifest: `x: '{{ tfstate }}'`,
-			sources:  []Source{{Name: "default", Location: path}},
-			wantErr:  "tfstate requires 1",
 		},
 		{
 			name:     "bad state location",

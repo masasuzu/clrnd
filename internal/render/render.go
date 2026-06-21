@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"text/template"
@@ -17,6 +18,17 @@ import (
 // DefaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
 const DefaultStateName = "default"
 
+// validName は名前付き state の名前として認める文字列。名前はそのまま {{ <name>tfstate }} の
+// テンプレート関数名のプレフィックスになるため、Go 識別子として有効な文字列 (先頭は英字か _、
+// 以降は英数字か _) に限る。不正な名前のまま登録すると text/template が panic する。
+var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// IsValidName は name が名前付き state の名前 (= テンプレート関数名のプレフィックス) として
+// 有効かを返す。フラグ経路・config 経路の双方でこの制約を共有する。
+func IsValidName(name string) bool {
+	return validName.MatchString(name)
+}
+
 // Source は名前付きの Terraform state の場所を表す。Location はローカルパスまたは
 // gs://, s3:// などの URL。
 type Source struct {
@@ -26,26 +38,34 @@ type Source struct {
 
 // Render はマニフェストを text/template として評価する。テンプレート内で tfstate 関数が
 // 実際に使われた state だけが (初回参照時に) 読み込まれる。
+//
+// state ごとに関数を登録する (ecspresso の func_prefix と同じ方式)。
+// デフォルト state は {{ tfstate "addr" }} / {{ tfstatef "fmt" args }}、名前付き state は
+// 名前をそのままプレフィックスにした {{ <name>tfstate "addr" }} / {{ <name>tfstatef ... }}。
 func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, error) {
-	loaders := make(map[string]*stateLoader, len(sources))
-	for _, s := range sources {
-		loaders[s.Name] = &stateLoader{ctx: ctx, loc: s.Location}
-	}
-
 	funcs := template.FuncMap{
-		"tfstate": func(args ...string) (string, error) {
-			name, addr, err := tfstateArgs(args)
-			if err != nil {
-				return "", err
-			}
-			ldr, ok := loaders[name]
-			if !ok {
-				return "", fmt.Errorf("tfstate %q is not configured; pass --tfstate %s=<location>", name, name)
-			}
-			return ldr.lookup(addr)
-		},
 		"env":      envFunc,
 		"must_env": mustEnvFunc,
+	}
+
+	for _, s := range sources {
+		// デフォルト state はプレフィックス無し、それ以外は名前をそのままプレフィックスに使う。
+		// 名前はテンプレート関数名 (<name>tfstate) になるため、Go 識別子として不正だと
+		// template.Funcs が panic する。ここで弾いて分かりやすいエラーにする。
+		prefix := ""
+		if s.Name != DefaultStateName {
+			if !IsValidName(s.Name) {
+				return nil, fmt.Errorf("invalid tfstate name %q: must be a valid identifier (letters, digits, _, not starting with a digit)", s.Name)
+			}
+			prefix = s.Name
+		}
+		ldr := &stateLoader{ctx: ctx, loc: s.Location}
+		funcs[prefix+"tfstate"] = func(addr string) (string, error) {
+			return ldr.lookup(addr)
+		}
+		funcs[prefix+"tfstatef"] = func(format string, args ...any) (string, error) {
+			return ldr.lookup(fmt.Sprintf(format, args...))
+		}
 	}
 
 	tmpl, err := template.New("manifest").Funcs(funcs).Parse(string(manifest))
@@ -81,18 +101,6 @@ func mustEnvFunc(name string) (string, error) {
 	return "", fmt.Errorf("environment variable %q is not defined", name)
 }
 
-// tfstateArgs は {{ tfstate "addr" }} と {{ tfstate "name" "addr" }} の両形を受ける。
-func tfstateArgs(args []string) (name, addr string, err error) {
-	switch len(args) {
-	case 1:
-		return DefaultStateName, args[0], nil
-	case 2:
-		return args[0], args[1], nil
-	default:
-		return "", "", fmt.Errorf("tfstate requires 1 (addr) or 2 (name, addr) arguments, got %d", len(args))
-	}
-}
-
 // stateLoader は state を遅延・一度きりで読み込み、属性を引く。
 type stateLoader struct {
 	ctx  context.Context
@@ -103,6 +111,11 @@ type stateLoader struct {
 }
 
 func (l *stateLoader) lookup(addr string) (string, error) {
+	// ecspresso 互換: アドレス中の ' を " に置換し、YAML 内でのエスケープを不要にする
+	// (例: aws_s3_bucket.main['id'] と書ける)。tfstate-lookup の nameFunc と同挙動。
+	if strings.Contains(addr, "'") {
+		addr = strings.ReplaceAll(addr, "'", "\"")
+	}
 	l.once.Do(func() {
 		// スキーム付きは URL、そうでなければローカルファイルとして読む。
 		if strings.Contains(l.loc, "://") {

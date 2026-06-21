@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/masasuzu/clrnd/internal/render"
@@ -106,14 +105,12 @@ func isInteractive(cmd *cobra.Command) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// tfstateName は --tfstate の "name=location" 形式で name として認める文字列。
-var tfstateName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
 // addManifestFlags は --tfstate フラグを登録する。繰り返し指定可能。
 func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 	cmd.Flags().StringArrayVar(tfstate, "tfstate", nil,
 		"Terraform state for {{ tfstate }} placeholders: <location> or <name>=<location> "+
-			"(repeatable; local path or s3://, gs://, ... URL)")
+			"(<name> becomes the {{ <name>tfstate }} function prefix; repeatable; "+
+			"local path or s3://, gs://, ... URL)")
 }
 
 // renderManifest は tfstate 指定 (フラグ優先、無ければ config) を解釈し、マニフェストの
@@ -165,7 +162,7 @@ func parseTfstateSources(specs []string) ([]render.Source, error) {
 	seen := make(map[string]bool)
 	for _, spec := range specs {
 		name, loc := render.DefaultStateName, spec
-		if i := strings.Index(spec, "="); i > 0 && tfstateName.MatchString(spec[:i]) {
+		if i := strings.Index(spec, "="); i > 0 && render.IsValidName(spec[:i]) {
 			name, loc = spec[:i], spec[i+1:]
 		}
 		if loc == "" {

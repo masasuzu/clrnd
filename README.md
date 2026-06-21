@@ -40,8 +40,8 @@ region: asia-northeast1
 service: my-svc            # optional; overridable by the positional argument
 manifest: manifest.yaml    # optional; overridable by the positional argument
 tfstate:
-  - location: gs://my-tf-state/app/default.tfstate        # default state (name omitted)
-  - name: network                                         # named state
+  - location: gs://my-tf-state/app/default.tfstate        # default state (name omitted): {{ tfstate "..." }}
+  - name: network_                                         # prefixed state: {{ network_tfstate "..." }}
     location: gs://my-tf-state/network/default.tfstate
 ```
 
@@ -95,10 +95,12 @@ URL (`gs://`, `s3://`, …); it is only read when a placeholder actually referen
 clrnd deploy my-svc manifest.yaml --project p --region r \
   --tfstate gs://my-bucket/prod/terraform.tfstate
 
-# Multiple named states: {{ tfstate "<name>" "<addr>" }}
+# Multiple states: the <prefix> in --tfstate <prefix>=<location> becomes the
+# {{ <prefix>tfstate "<addr>" }} function name (ecspresso's func_prefix).
 clrnd deploy my-svc manifest.yaml --project p --region r \
   --tfstate gs://my-bucket/app/terraform.tfstate \
-  --tfstate network=gs://my-bucket/network/terraform.tfstate
+  --tfstate network_=gs://my-bucket/network/terraform.tfstate
+# -> {{ tfstate "..." }} for the app state, {{ network_tfstate "..." }} for the network state
 ```
 
 Template functions:
@@ -106,9 +108,16 @@ Template functions:
 | Function | Description |
 | -------- | ----------- |
 | `{{ tfstate "<addr>" }}` | Look up `<addr>` in the default state (the `--tfstate` given without a name). |
-| `{{ tfstate "<name>" "<addr>" }}` | Look up `<addr>` in the named state `--tfstate <name>=<location>`. |
+| `{{ tfstatef "<format>" args... }}` | `printf`-format the address first, then look it up (e.g. `{{ tfstatef "aws_subnet.%s.id" .az }}`). |
+| `{{ <prefix>tfstate "<addr>" }}` | Look up `<addr>` in the state `--tfstate <prefix>=<location>` (the prefix becomes the function name). |
+| `{{ <prefix>tfstatef "<format>" args... }}` | `printf` variant for a prefixed state. |
 | `{{ env "<VAR>" "<default>" }}` | Value of environment variable `<VAR>`, or `<default>` if it is unset or empty (the default is optional). |
 | `{{ must_env "<VAR>" }}` | Value of environment variable `<VAR>`; errors if it is not defined. |
+
+The address may be quoted with `"..."` or backticks `` `...` `` — both are Go template string
+literals. Use backticks (or `'`, which is rewritten to `"`) when the address itself contains double
+quotes, e.g. `` {{ tfstate `aws_s3_bucket.main["id"]` }} ``. A `<prefix>` must be a valid Go
+identifier (letters, digits, `_`; not starting with a digit).
 
 ### Example: remote state on GCS
 
