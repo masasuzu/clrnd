@@ -56,9 +56,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	// 上書き事故を防ぐため、書き込み前に既存ファイルをまとめて確認する。
+	manifestExisted := fileExists(initManifest)
 	if !initForce {
 		for _, path := range []string{initManifest, initConfigFile} {
-			if _, err := os.Stat(path); err == nil {
+			if fileExists(path) {
 				return fmt.Errorf("%s already exists: pass --force to overwrite", path)
 			}
 		}
@@ -82,9 +83,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write %s: %w", initManifest, err)
 	}
 	if err := os.WriteFile(initConfigFile, configYAML, 0o644); err != nil {
+		// clrnd.yml の書き込みに失敗したら、今回新規作成した manifest を巻き戻して
+		// 中途半端な scaffold を残さない (元から在ったファイルには触れない)。
+		if !manifestExisted {
+			os.Remove(initManifest)
+		}
 		return fmt.Errorf("failed to write %s: %w", initConfigFile, err)
 	}
 	return nil
+}
+
+// fileExists は path にファイル (またはディレクトリ) が存在するかを返す。
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // scaffoldConfig は init が生成する clrnd.yml の中身を組み立てる。手書きせず config.Config を
