@@ -1,8 +1,8 @@
 # clrnd
 
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
-It takes a service name and a manifest file as arguments and provides subcommands to verify, diff,
-deploy, and load Cloud Run services. 
+It takes a service name and a manifest file as arguments and provides subcommands to verify, render,
+diff, deploy, and initialize Cloud Run services.
 
 ## Installation
 
@@ -71,7 +71,7 @@ Resolution order (highest first), matching gcloud:
 Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
 so you can fill placeholders from Terraform state outputs (or any resource attribute) and from
 environment variables, using the same notation as [ecspresso](https://github.com/kayac/ecspresso).
-This applies to `verify`, `diff`, and `deploy`.
+This applies to `verify`, `render`, `diff`, and `deploy`.
 
 ```yaml
 spec:
@@ -158,14 +158,16 @@ clrnd [command]
 | Command  | Description                                               |
 | -------- | --------------------------------------------------------- |
 | `verify` | Verify a manifest.                                        |
+| `render` | Render a manifest with templates expanded.                |
 | `diff`   | Show the diff between an existing service and a manifest. |
 | `deploy` | Deploy a manifest to Cloud Run.                           |
-| `load`   | Load the manifest of an existing service.                 |
+| `init`   | Initialize a project from an existing service.            |
 
 Run `clrnd [command] --help` for details on a specific command.
 
 All commands that take a `<service>` and `<manifest>` expect the service name to match the
-manifest's `metadata.name`. A typical workflow is `load` → edit → `verify` → `diff` → `deploy`.
+manifest's `metadata.name`. A typical workflow is `init` → edit → `render` → `verify` → `diff` →
+`deploy`.
 
 `--project` and `--region` may be omitted when the corresponding environment variable is set
 (gcloud-compatible): project falls back to `$CLOUDSDK_CORE_PROJECT` then `$GOOGLE_CLOUD_PROJECT`,
@@ -174,19 +176,58 @@ region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag a
 ### verify
 
 Validate that a manifest is a well-formed Cloud Run service definition and contains the fields
-required to deploy. This is a local check: it does not access the API and needs no credentials,
-so it is safe to run in CI. Nothing is printed when the manifest is valid; problems are reported
-to stderr with a non-zero exit code.
+required to deploy. The schema check is local: it does not access the API and needs no
+credentials, so it is safe to run in CI. Nothing is printed when the manifest is valid; problems
+are reported to stderr with a non-zero exit code.
+
+When `--project` / `--region` are resolvable (flag, env, or config) and `--local-only` is not set,
+`verify` additionally checks via the API that the resources the manifest references actually exist:
+the service account (`spec.template.spec.serviceAccountName`) and the Secret Manager secrets used by
+`secretKeyRef` and secret volumes. Unlike ecspresso's `verify` this remote check is opt-in by
+availability — when no project/region is set it is skipped and `verify` stays a fully offline lint.
+
+The remote check only **fails** verify when a resource is confirmed missing (the API returns
+not-found). When it cannot reach the API to decide — no credentials, the API is disabled, or the
+caller lacks read permission — it prints a `warning:` to stderr and does **not** fail, so an
+ambient project/region in CI never turns a passing offline lint red.
 
 ```sh
-clrnd verify <service> <manifest> [--tfstate <location>]
+clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--local-only] [--tfstate <location>]
 ```
 
-`--tfstate` is accepted here too (see [Templating](#templating-with-terraform-state)); resolving a
-remote state still requires network access, otherwise `verify` stays fully offline.
+| Flag           | Description                                                              |
+| -------------- | ----------------------------------------------------------------------- |
+| `--project`    | GCP project ID. Enables the API existence checks (env/config fallback). |
+| `--region`     | Cloud Run region. Enables the API existence checks (env/config fallback). |
+| `--local-only` | Skip the API existence checks; validate the manifest locally only.      |
+| `--tfstate`    | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
 
 ```sh
-clrnd verify my-service service.yaml
+# Local schema check only (no credentials needed)
+clrnd verify my-service service.yaml --local-only
+
+# Also confirm the referenced service account and secrets exist
+clrnd verify my-service service.yaml --project my-project --region asia-northeast1
+```
+
+### render
+
+Render the manifest as a Go template (`{{ tfstate }}`, `{{ env }}`, …) and print the expanded
+result without parsing or validating it. This is handy for debugging template output. It does not
+access the Cloud Run API and needs no `--project` / `--region`. It checks no service name, so it
+takes only the manifest.
+
+```sh
+clrnd render <manifest> [--tfstate <location>] [--output <FILE>]
+```
+
+| Flag             | Description                                          |
+| ---------------- | ---------------------------------------------------- |
+| `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
+| `-o`, `--output` | Output file. Writes to stdout if not set.            |
+
+```sh
+clrnd render service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
 ```
 
 ### diff
@@ -242,14 +283,19 @@ clrnd deploy my-service service.yaml --project my-project --region asia-northeas
 clrnd deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
 ```
 
-### load
+### init
 
-Fetch the manifest (Knative-style YAML) of an existing Cloud Run service. Server-managed,
-read-only fields (such as `status`, `metadata.uid`, and `resourceVersion`) are stripped so that
-the output can be reused as a deployable manifest.
+Initialize a project from an existing Cloud Run service. `init` fetches the service and scaffolds
+two files: the manifest (Knative-style YAML, with server-managed read-only fields such as `status`,
+`metadata.uid`, and `resourceVersion` stripped so it is deployable) and a `clrnd.yml` holding the
+`project`, `region`, `service`, and `manifest` path. After `init` the other commands run with no
+positional arguments. Existing files are not overwritten unless `--force` is given.
+
+For backward compatibility `load` is kept as an alias for `init` (it now scaffolds files rather than
+printing to stdout).
 
 ```sh
-clrnd load <service> --project <PROJECT> --region <REGION> [--output <FILE>]
+clrnd init <service> --project <PROJECT> --region <REGION> [--output <FILE>] [--force]
 ```
 
 Flags:
@@ -258,16 +304,18 @@ Flags:
 | ---------------- | ---------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
 | `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
-| `-o`, `--output` | Output file. Writes to stdout if not set.            |
+| `-o`, `--output` | Manifest file to write (default `manifest.yaml`).    |
+| `--force`        | Overwrite existing files.                            |
 
 Examples:
 
 ```sh
-# Print the manifest to stdout
-clrnd load my-service --project my-project --region asia-northeast1
+# Scaffold clrnd.yml + manifest.yaml from a live service
+clrnd init my-service --project my-project --region asia-northeast1
 
-# Write the manifest to a file
-clrnd load my-service --project my-project --region asia-northeast1 --output service.yaml
+# Then everything runs from the config alone
+clrnd diff
+clrnd deploy
 ```
 
 ## License

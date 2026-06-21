@@ -42,11 +42,18 @@ func resolveService(args []string) (string, error) {
 	return "", fmt.Errorf("service is required: pass it as an argument or set service in the config file")
 }
 
-// resolveManifest は位置引数 args[1] > config manifest の順で解決する。
-// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
+// resolveManifest は位置引数 args[1] > config manifest の順で解決する
+// (service と manifest を取るサブコマンド用)。
 func resolveManifest(args []string) (string, error) {
-	if len(args) >= 2 && args[1] != "" {
-		return args[1], nil
+	return resolveManifestAt(args, 1)
+}
+
+// resolveManifestAt は位置引数 args[idx] > config manifest の順で manifest を解決する。
+// service を取らない render は idx=0 で、唯一の位置引数を manifest として扱う。
+// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
+func resolveManifestAt(args []string, idx int) (string, error) {
+	if len(args) > idx && args[idx] != "" {
+		return args[idx], nil
 	}
 	if cfg.Manifest != "" {
 		return resolveConfigPath(cfg.Manifest), nil
@@ -78,6 +85,18 @@ func resolveRegion(flag string) (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
+}
+
+// resolveTargetOptional は resolveProject/resolveRegion と同じ優先順位で project/region を
+// 解決するが、どちらかが欠けてもエラーにせず ok=false を返す。verify の API 実在チェックを
+// 「対象が解決できるときだけ」走らせる (オフライン検証を壊さない) ために使う。
+func resolveTargetOptional(projectFlag, regionFlag string) (project, region string, ok bool) {
+	project = firstNonEmpty(projectFlag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project)
+	region = firstNonEmpty(regionFlag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region)
+	if project == "" || region == "" {
+		return "", "", false
+	}
+	return project, region, true
 }
 
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。

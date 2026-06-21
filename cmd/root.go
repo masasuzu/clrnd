@@ -34,9 +34,10 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
 		"config file (default: clrnd.yml or clrnd.yaml in the current directory)")
 	rootCmd.AddCommand(verifyCmd)
+	rootCmd.AddCommand(renderCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(deployCmd)
-	rootCmd.AddCommand(loadCmd)
+	rootCmd.AddCommand(initCmd)
 }
 
 // loadConfig は --config か、未指定ならデフォルト名の設定ファイルを読み込む。
