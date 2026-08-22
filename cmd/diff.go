@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -41,15 +40,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	project, err := resolveProject(diffProject)
-	if err != nil {
-		return err
-	}
-	region, err := resolveRegion(diffRegion)
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	local, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -64,7 +55,12 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	obj, err := cloudrun.GetService(ctx, project, region, service)
+	client, err := newCloudRunClient(cmd, diffProject, diffRegion)
+	if err != nil {
+		return err
+	}
+
+	obj, err := client.GetService(ctx, service)
 	if err != nil {
 		return err
 	}

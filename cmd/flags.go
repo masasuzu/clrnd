@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/render"
 	"github.com/spf13/cobra"
+	"google.golang.org/api/option"
 )
 
 // プロジェクト/リージョンのフラグが未指定のときに参照する環境変数 (gcloud 互換)。
@@ -29,6 +31,24 @@ func addTargetFlags(cmd *cobra.Command, project, region *string) {
 		fmt.Sprintf("GCP project ID (env: %s, %s)", envProjectPrimary, envProjectSecondary))
 	cmd.Flags().StringVar(region, "region", "",
 		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s)", envRegionPrimary, envRegionSecondary))
+}
+
+// clientOptions は Cloud Run クライアント生成時に追加で渡すオプション。通常は空で、
+// テストから httptest のフェイク API を差し込むためにだけ使う。
+var clientOptions []option.ClientOption
+
+// newCloudRunClient は project/region をフラグ > 環境変数 > config の順で解決し、
+// Cloud Run Admin API クライアントを生成する。API を叩くサブコマンドの共通入口。
+func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*cloudrun.Client, error) {
+	project, err := resolveProject(projectFlag)
+	if err != nil {
+		return nil, err
+	}
+	region, err := resolveRegion(regionFlag)
+	if err != nil {
+		return nil, err
+	}
+	return cloudrun.NewClient(cmd.Context(), project, region, clientOptions...)
 }
 
 // resolveService は位置引数 args[0] > config service の順で解決する。
@@ -100,14 +120,35 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 }
 
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
-func confirm(cmd *cobra.Command, prompt string) (bool, error) {
+// stdin の読み取りは中断できないため goroutine に逃がし、ctx が cancel されたら
+// (Ctrl-C など) 待たずに戻る。そうしないとプロンプト表示中は Ctrl-C が効かない。
+func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, error) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
-	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, err
+
+	type answer struct {
+		line string
+		err  error
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	// ctx cancel 時この goroutine は stdin をブロックしたまま残るが、直後に
+	// プロセスが終了するので問題にならない。
+	ch := make(chan answer, 1)
+	go func() {
+		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		ch <- answer{line: line, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// ^C でプロンプト行の途中に居るので、改行してから抜ける。
+		fmt.Fprintln(cmd.ErrOrStderr())
+		return false, fmt.Errorf("aborted: %w", ctx.Err())
+	case a := <-ch:
+		if a.err != nil && a.err != io.EOF {
+			return false, a.err
+		}
+		reply := strings.ToLower(strings.TrimSpace(a.line))
+		return reply == "y" || reply == "yes", nil
+	}
 }
 
 // isInteractive はコマンドの標準入力が端末 (対話可能) かを判定する。confirm と同じ入力

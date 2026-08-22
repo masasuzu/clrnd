@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -46,15 +45,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	project, err := resolveProject(deployProject)
-	if err != nil {
-		return err
-	}
-	region, err := resolveRegion(deployRegion)
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -65,7 +56,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	plan, err := cloudrun.Plan(ctx, project, region, service, manifest)
+	// ローカル検証はクライアント生成 (= ADC 探索) と project/region 解決より先に行う。
+	// 認証情報や target が無い環境でも、マニフェストの問題がそれらのエラーに隠れない
+	// ようにするため。Plan も内部で同じ検証をするが、純粋な処理なので二重でも安い。
+	if err := cloudrun.Validate(manifest, service); err != nil {
+		return err
+	}
+
+	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
+	if err != nil {
+		return err
+	}
+
+	plan, err := client.Plan(ctx, service, manifest)
 	if err != nil {
 		return err
 	}
@@ -86,7 +89,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if !isInteractive(cmd) {
 			return fmt.Errorf("refusing to apply without confirmation: re-run with --auto-approve (no interactive terminal)")
 		}
-		ok, err := confirm(cmd, "Apply these changes?")
+		ok, err := confirm(ctx, cmd, "Apply these changes?")
 		if err != nil {
 			return err
 		}
