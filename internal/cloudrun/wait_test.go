@@ -315,6 +315,33 @@ func TestWaitDeletedToleratesTransientErrors(t *testing.T) {
 	}
 }
 
+func TestNextWaitInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{name: "grows from the default", in: 2 * time.Second, want: 3 * time.Second},
+		{name: "grows", in: 4 * time.Second, want: 6 * time.Second},
+		{name: "clamps to the cap", in: 12 * time.Second, want: maxWaitInterval},
+		{name: "stays at the cap", in: maxWaitInterval, want: maxWaitInterval},
+		{
+			// 上限より長い指定は縮めない。--interval 60s を 15s に切り下げると、
+			// 呼び出しを減らしたいという指定に反して増やしてしまう。
+			name: "keeps an interval longer than the cap",
+			in:   60 * time.Second,
+			want: 60 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextWaitInterval(tt.in); got != tt.want {
+				t.Errorf("nextWaitInterval(%s) = %s, want %s", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWaitProgress(t *testing.T) {
 	tests := []struct {
 		name       string

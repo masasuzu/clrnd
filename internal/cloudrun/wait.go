@@ -170,9 +170,12 @@ func waitDefaults(opts WaitOptions) (timeout, interval time.Duration) {
 }
 
 // nextWaitInterval は次のポーリング間隔を返す。上限まで少しずつ伸ばす。
+// 利用者が上限より長い間隔を指定している場合はそれを尊重し、縮めない
+// (--interval 60s は「API を叩く回数を減らしたい」という意思表示なので、
+// それを 15s に切り下げるとかえって呼び出しを増やしてしまう)。
 func nextWaitInterval(interval time.Duration) time.Duration {
 	if interval >= maxWaitInterval {
-		return maxWaitInterval
+		return interval
 	}
 	next := interval * waitBackoffNum / waitBackoffDen
 	if next > maxWaitInterval {

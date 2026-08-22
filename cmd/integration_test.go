@@ -1045,10 +1045,16 @@ func TestDeleteDryRunDoesNotPrompt(t *testing.T) {
 // TestDeleteFailsWhenTheServiceIsMissing は、実在しないサービスでは確認を求めず
 // エラーになることを確認する。
 func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
-	var deletes int
+	// カウンタはハンドラの goroutine から書かれるので必ず保護する。
+	// 保護しないと、退行して DELETE が飛んだ瞬間に race になるか、
+	// 古い 0 を読んで退行を見逃す。
+	var mu sync.Mutex
+	deletes := 0
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
+			mu.Lock()
 			deletes++
+			mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1060,8 +1066,11 @@ func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("delete error = nil, want a not-found error")
 	}
-	if deletes != 0 {
-		t.Errorf("DELETE count = %d, want 0", deletes)
+	mu.Lock()
+	got := deletes
+	mu.Unlock()
+	if got != 0 {
+		t.Errorf("DELETE count = %d, want 0", got)
 	}
 }
 
