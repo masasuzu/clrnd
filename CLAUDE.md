@@ -139,10 +139,15 @@ revision-name conflicts, asynchronous rollout failures).
   `Client.Plan` calls the shared `compareServices`, so `diff` and `deploy` can never drift apart.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
-- **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one)
-  but always populated on read, and an existing revision cannot be recreated. clrnd therefore does
-  not manage revision names: `StripRevisionName` removes the field from what `init` scaffolds, and
-  `alignRevisionName` (called from `compareServices`) drops the live value from the comparison
+- **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
+  and a name Cloud Run generated is **never echoed back** — the field is only present on read when a
+  client set it (`gcloud run deploy --revision-suffix`, a Terraform `template.metadata.name`, or a
+  manifest that pins one). An existing revision name cannot be reused with a different
+  configuration: doing so fails with a 409, sometimes only when the rollout runs. clrnd therefore
+  does not manage revision names: `WithoutRevisionName` (pure — it shallow-copies the
+  Spec/Template/Metadata chain rather than mutating its argument) removes the field from what
+  `init` scaffolds, and `alignRevisionName` (called from `compareServices`) drops the live value
+  from the comparison
   **when the local manifest does not pin one** — without that, every manifest without a revision
   name would show a permanent diff. When the manifest *does* pin a name it is kept on both sides
   and shows up as a normal diff, and **both `verify` and `deploy`** warn (`warnPinnedRevision` in
