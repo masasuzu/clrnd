@@ -199,6 +199,22 @@ wait_ready() {
   return 1
 }
 
+# serving_revision はいちばん多くトラフィックを受けているリビジョン名を返す。
+# rollback 後は latestReadyRevisionName とは別になるので、こちらで確認する。
+serving_revision() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format=json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print(""); raise SystemExit
+targets = (d.get("status") or {}).get("traffic") or []
+best = max(targets, key=lambda t: t.get("percent", 0), default=None)
+print(best.get("revisionName", "") if best else "")
+'
+}
+
 current_revision() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format='value(status.latestReadyRevisionName)' 2>/dev/null
@@ -410,6 +426,42 @@ set_env_value "$D2/manifest.yaml" "second"
 run_cmd "$CLRND" deploy --auto-approve
 assert_rc_zero "a second deploy that changes the template succeeds"
 wait_ready || ng "the second deploy never became ready"
+
+info "--- 1-5c. rollback ---"
+BEFORE_REV="$(serving_revision)"
+EXPECTED_REV="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
+import json, sys
+revisions = json.load(sys.stdin)
+serving = max(range(len(revisions)), key=lambda i: revisions[i]["percent"])
+for r in revisions[serving + 1:]:
+    if r.get("ready") == "True":
+        print(r["name"])
+        break
+')"
+info "serving now: $BEFORE_REV / expected rollback target: $EXPECTED_REV"
+if [ -n "$EXPECTED_REV" ] && [ "$EXPECTED_REV" != "$BEFORE_REV" ]; then
+  ok "there is an older ready revision to roll back to"
+else
+  ng "could not determine a rollback target (serving=$BEFORE_REV target=$EXPECTED_REV)"
+fi
+
+run_cmd "$CLRND" rollback "$SERVICE" --auto-approve --timeout 120s
+assert_rc_zero "rollback succeeds"
+wait_ready || ng "the service did not become ready after the rollback"
+
+AFTER_REV="$(serving_revision)"
+if [ "$AFTER_REV" = "$EXPECTED_REV" ]; then
+  ok "traffic moved to the previous revision"
+else
+  ng "serving revision is $AFTER_REV, want $EXPECTED_REV"
+fi
+
+info "--- 1-5d. deploy again after the rollback ---"
+# rollback は spec.traffic を固定するので、その後の deploy が新しいリビジョンへ
+# 戻せることを確認する (固定したまま動けなくならないこと)。
+set_env_value "$D2/manifest.yaml" "after-rollback"
+run_cmd "$CLRND" deploy --auto-approve --timeout 120s
+assert_rc_zero "deploy still works after a rollback"
 
 info "--- 1-6. verify ---"
 run_cmd "$CLRND" verify

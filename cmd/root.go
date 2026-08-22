@@ -51,6 +51,7 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(revisionsCmd)
+	rootCmd.AddCommand(rollbackCmd)
 	rootCmd.AddCommand(waitCmd)
 	rootCmd.AddCommand(renderCmd)
 	rootCmd.AddCommand(diffCmd)

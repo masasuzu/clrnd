@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, `wait`, and `revisions` subcommands. All eight are implemented. (`init` was formerly `load`; `load`
+`init`, `status`, `wait`, `revisions`, and `rollback` subcommands. All nine are implemented. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -100,8 +100,10 @@ revision-name conflicts, asynchronous rollout failures).
   credential discovery. `deploy` therefore calls `cloudrun.Validate` itself before building the
   client, even though `Plan` validates again (the check is pure and cheap); otherwise a manifest
   problem hides behind "project is required" or "could not find default credentials".
-- Deploy is split into `Client.Plan` (validate locally, `Get` the live service, compute the `Diff` of
-  live vs desired; `Create` when 404 via `isNotFound`/`googleapi.Error`) and `DeployPlan.Apply`
+- Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
+  `Client.PlanService` (`Get` the live service, compute the `Diff` of live vs desired; `Create` when
+  404 via `isNotFound`/`googleapi.Error`). Commands that edit the live definition rather than a
+  manifest — `rollback`, and `refresh` later — go straight to `PlanService`. `DeployPlan.Apply`
   (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
   `confirm`s on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
   (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. Empty diff →
@@ -171,6 +173,16 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `rollback` (in [internal/cloudrun/rollback.go](internal/cloudrun/rollback.go)) repoints
+  `spec.traffic` at an earlier revision. It touches **only** the traffic split — `spec.template` is
+  left alone, so no new revision is created and the revision-name conflict cannot apply. Traffic
+  tags are kept (pinned at 0%) so a rollback does not silently remove tag URLs; untagged entries
+  (including `latestRevision`) are dropped because the target now takes all of it.
+  `RollbackTarget` shallow-copies the Spec rather than mutating the live service.
+  `SelectRollbackRevision` picks the first ready revision *older* than the one currently taking the
+  largest share. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
+  its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
+  `False`, so "the previous working version" is still findable.
 - `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.
   Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
   `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
@@ -221,6 +233,10 @@ revision-name conflicts, asynchronous rollout failures).
   stays data-only. This is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
+- Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
+  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout`, and `applyPlan` runs the one flow
+  (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
+  text differs per command. Do not re-implement that sequence.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in
