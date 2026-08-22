@@ -60,8 +60,13 @@ func runWait(cmd *cobra.Command, args []string) error {
 // 成功時は何も出力しない (stdout はデータ専用という規約に従う)。
 func waitForRollout(cmd *cobra.Command, client *cloudrun.Client, service string, opts cloudrun.WaitOptions) error {
 	out := cmd.ErrOrStderr()
-	opts.OnUpdate = func(s *cloudrun.Status) {
-		fmt.Fprintf(out, "waiting for %s: %s\n", service, s.Summary())
+	opts.OnUpdate = func(message string) {
+		fmt.Fprintf(out, "waiting for %s: %s\n", service, message)
+	}
+	// 取得に失敗しても待機は続けるが、黙って再試行すると「止まっている」ように
+	// 見えるので知らせる。
+	opts.OnRetry = func(err error) {
+		fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", service, err)
 	}
 	_, err := client.Wait(cmd.Context(), service, opts)
 	return err

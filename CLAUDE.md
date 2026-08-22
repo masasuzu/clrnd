@@ -177,6 +177,14 @@ revision-name conflicts, asynchronous rollout failures).
   generation's `Ready=True` reads as success), then succeeds on `Ready=True` and **fails
   immediately** on `Ready=False` rather than burning the timeout. The interval backs off from 2s to
   15s, and the whole loop honours `cmd.Context()` so Ctrl-C stops it.
+  A failed *poll* is not a failed rollout: the generated API client does not retry, so a single
+  transient 503 would otherwise make an already-applied `deploy` exit non-zero — the very CI
+  false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
+  errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
+  out. A 404 is the exception: a service that does not exist will not appear, so it returns at once.
+  `waitProgress` deliberately withholds the `Ready` value until `observedGeneration` reaches the
+  awaited generation — the condition visible before then belongs to the *previous* generation and
+  reads as "already finished".
   `DeployPlan.Apply` returns the applied `*run.Service` so `deploy` can wait for exactly the
   generation it just applied (`AppliedGeneration`). **`deploy` waits by default** and fails when the
   rollout fails — without that, a broken revision still exited 0 and CI treated it as success.

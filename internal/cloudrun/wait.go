@@ -33,9 +33,11 @@ type WaitOptions struct {
 	// Generation は「この世代以上が反映されるまで待つ」指定。deploy 直後に、
 	// 自分が適用した世代のロールアウトだけを見るために使う。0 なら世代は問わない。
 	Generation int64
-	// OnUpdate は状態が変わったときに呼ばれる (最初の取得時にも呼ばれる)。
-	// 進捗表示に使う。nil なら何もしない。
-	OnUpdate func(*Status)
+	// OnUpdate は状態が変わったときに、表示用の 1 行を伴って呼ばれる
+	// (最初の取得時にも呼ばれる)。nil なら何もしない。
+	OnUpdate func(message string)
+	// OnRetry は状態の取得に失敗して再試行するときに呼ばれる。nil なら何もしない。
+	OnRetry func(err error)
 }
 
 // Wait はサービスが安定するまでポーリングする。Ready=True になれば成功、
@@ -58,31 +60,46 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 
 	var last *Status
 	var previous string
+	// lastErr は「観測に失敗したが再試行で回復するかもしれない」エラー。
+	// これで待機を打ち切ると、適用自体は成功しているのに deploy が失敗を返す。
+	// それは本来この待機が防ぎたい CI の誤判定を裏返しに作ってしまう。
+	var lastErr error
 	for {
 		status, err := c.Status(waitCtx, service)
-		if err != nil {
+		switch {
+		case err == nil:
+			lastErr = nil
+			last = status
+
+			if progress := waitProgress(status, opts.Generation); progress != previous {
+				previous = progress
+				if opts.OnUpdate != nil {
+					opts.OnUpdate(progress)
+				}
+			}
+			if done, doneErr := waitDone(status, service, opts.Generation); done {
+				return status, doneErr
+			}
+
+		case waitCtx.Err() != nil:
 			// 待機中の cancel/期限切れは、API のエラーではなく待機の結果として返す。
-			if waitCtx.Err() != nil {
-				return last, waitInterrupted(ctx, waitCtx, service, last, timeout)
-			}
+			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
+
+		case isNotFound(err):
+			// 実在しないサービスは待っても現れない。すぐ返す。
 			return last, err
-		}
-		last = status
 
-		if summary := status.Summary(); summary != previous {
-			previous = summary
-			if opts.OnUpdate != nil {
-				opts.OnUpdate(status)
+		default:
+			// 一時的な失敗 (503/429/接続断など) の可能性がある。タイムアウトまで再試行する。
+			lastErr = err
+			if opts.OnRetry != nil {
+				opts.OnRetry(err)
 			}
-		}
-
-		if done, err := waitDone(status, service, opts.Generation); done {
-			return status, err
 		}
 
 		select {
 		case <-waitCtx.Done():
-			return last, waitInterrupted(ctx, waitCtx, service, last, timeout)
+			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
 		case <-time.After(interval):
 		}
 
@@ -120,27 +137,38 @@ func waitDone(s *Status, service string, generation int64) (bool, error) {
 
 // waitInterrupted は待機が打ち切られた理由を組み立てる。呼び出し元の ctx が
 // cancel されていれば中断 (Ctrl-C など)、そうでなければタイムアウト。
-func waitInterrupted(parent, waitCtx context.Context, service string, last *Status, timeout time.Duration) error {
+func waitInterrupted(parent, waitCtx context.Context, service string, last *Status,
+	timeout time.Duration, generation int64, lastErr error) error {
 	if parent.Err() != nil {
 		return fmt.Errorf("interrupted while waiting for service %q: %w", service, parent.Err())
 	}
 	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		// 最後の取得が失敗したままなら、その原因を隠さない。
+		if lastErr != nil {
+			return fmt.Errorf("timed out after %s waiting for service %q; the last poll failed: %w",
+				timeout, service, lastErr)
+		}
 		return fmt.Errorf("timed out after %s waiting for service %q to become ready (last seen: %s)",
-			timeout, service, last.Summary())
+			timeout, service, waitProgress(last, generation))
 	}
 	return fmt.Errorf("stopped waiting for service %q: %w", service, waitCtx.Err())
 }
 
-// Summary は進捗表示と状態比較に使う 1 行の状態表現を返す。nil でも安全。
-func (s *Status) Summary() string {
+// waitProgress は進捗表示と状態比較に使う 1 行の状態表現を返す。nil でも安全。
+// 待っている世代がまだ反映されていない間は Ready を出さない。そこで見える Ready は
+// 前の世代のもので、表示すると「もう終わった」と誤読させるため。
+func waitProgress(s *Status, generation int64) string {
 	if s == nil {
 		return "unknown"
 	}
+	if s.ObservedGeneration < generation {
+		return fmt.Sprintf("generation %d not observed yet (currently %d)", generation, s.ObservedGeneration)
+	}
 	ready := s.Ready()
 	if ready == nil {
-		return fmt.Sprintf("generation %d, no Ready condition yet", s.ObservedGeneration)
+		return fmt.Sprintf("observed generation %d, no Ready condition yet", s.ObservedGeneration)
 	}
-	return fmt.Sprintf("generation %d, Ready=%s", s.ObservedGeneration, conditionDetail(ready))
+	return fmt.Sprintf("observed generation %d, Ready=%s", s.ObservedGeneration, conditionDetail(ready))
 }
 
 // conditionDetail は条件を "Status (Reason): Message" の形に整える。

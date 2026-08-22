@@ -229,7 +229,7 @@ func TestWaitReportsChangesOnce(t *testing.T) {
 
 	var updates []string
 	opts := fastWait(3)
-	opts.OnUpdate = func(s *Status) { updates = append(updates, s.Summary()) }
+	opts.OnUpdate = func(message string) { updates = append(updates, message) }
 	if _, err := c.Wait(context.Background(), "my-svc", opts); err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
@@ -242,34 +242,111 @@ func TestWaitReportsChangesOnce(t *testing.T) {
 	}
 }
 
-func TestStatusSummary(t *testing.T) {
+func TestWaitProgress(t *testing.T) {
 	tests := []struct {
-		name   string
-		status *Status
-		want   string
+		name       string
+		status     *Status
+		generation int64
+		want       string
 	}{
 		{name: "nil", status: nil, want: "unknown"},
 		{
 			name:   "no condition",
 			status: newStatus(serviceWithReady("", "", "", 2)),
-			want:   "generation 2, no Ready condition yet",
+			want:   "observed generation 2, no Ready condition yet",
 		},
 		{
 			name:   "ready",
 			status: newStatus(serviceWithReady(conditionTrue, "", "", 3)),
-			want:   "generation 3, Ready=True",
+			want:   "observed generation 3, Ready=True",
 		},
 		{
 			name:   "failed",
 			status: newStatus(serviceWithReady(conditionFalse, "RevisionFailed", "boom", 3)),
-			want:   "generation 3, Ready=False (RevisionFailed): boom",
+			want:   "observed generation 3, Ready=False (RevisionFailed): boom",
+		},
+		{
+			// 待っている世代が未反映のうちは、前の世代の Ready を出さない。
+			name:       "awaited generation not observed yet",
+			status:     newStatus(serviceWithReady(conditionTrue, "", "", 7)),
+			generation: 8,
+			want:       "generation 8 not observed yet (currently 7)",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.status.Summary(); got != tt.want {
-				t.Errorf("Summary() = %q, want %q", got, tt.want)
+			if got := waitProgress(tt.status, tt.generation); got != tt.want {
+				t.Errorf("waitProgress() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestWaitToleratesTransientErrors は、状態の取得が一時的に失敗しても待機を
+// 打ち切らないことを確認する。打ち切ると、適用は成功しているのに deploy が
+// 失敗を返し、この待機が防ぎたい CI の誤判定を裏返しに作ってしまう。
+func TestWaitToleratesTransientErrors(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls <= 2 {
+			return http.StatusServiceUnavailable, googleAPIError(503, "backend error")
+		}
+		return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
+	})
+
+	var retries []error
+	opts := fastWait(3)
+	opts.OnRetry = func(err error) { retries = append(retries, err) }
+
+	got, err := c.Wait(context.Background(), "my-svc", opts)
+	if err != nil {
+		t.Fatalf("Wait() error = %v, want the transient failures to be retried", err)
+	}
+	if got == nil || got.Ready() == nil || got.Ready().Status != conditionTrue {
+		t.Errorf("Wait() = %+v, want a ready status", got)
+	}
+	if len(retries) != 2 {
+		t.Errorf("OnRetry called %d times, want 2", len(retries))
+	}
+}
+
+// TestWaitFailsFastWhenTheServiceIsMissing は 404 では再試行しないことを確認する。
+// 実在しないサービスはタイムアウトまで待っても現れない。
+func TestWaitFailsFastWhenTheServiceIsMissing(t *testing.T) {
+	c, api := newTestClient(t, nil) // 既定の handler は 404
+
+	_, err := c.Wait(context.Background(), "missing", fastWait(0))
+	if err == nil {
+		t.Fatal("Wait() error = nil, want a not-found error")
+	}
+	if !isNotFound(err) {
+		t.Errorf("Wait() error = %v, want a 404", err)
+	}
+	if n := len(api.recorded()); n != 1 {
+		t.Errorf("polled %d times, want 1 (a missing service must not be retried)", n)
+	}
+}
+
+// TestWaitTimeoutReportsTheLastError は、取得に失敗し続けたままタイムアウトした
+// 場合に原因を隠さないことを確認する。
+func TestWaitTimeoutReportsTheLastError(t *testing.T) {
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusServiceUnavailable, googleAPIError(503, "backend error")
+	})
+
+	_, err := c.Wait(context.Background(), "my-svc", WaitOptions{
+		Timeout: 50 * time.Millisecond, Interval: time.Millisecond, Generation: 3,
+	})
+	if err == nil {
+		t.Fatal("Wait() error = nil, want a timeout")
+	}
+	for _, want := range []string{"timed out after", "the last poll failed", "backend error"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Wait() error = %v, want it to contain %q", err, want)
+		}
 	}
 }
