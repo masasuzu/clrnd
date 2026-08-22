@@ -1,4 +1,5 @@
 # Local project ID. Never commit this: see CLAUDE.local.md.
 /project.env
-# Build output and scratch directories created by run.sh.
+# run.sh builds outside the repository (see the WORK variable), but keep this in
+# case someone points WORK back here.
 /work/

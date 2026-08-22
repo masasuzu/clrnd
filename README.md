@@ -162,6 +162,7 @@ clrnd [command]
 | `diff`   | Show the diff between an existing service and a manifest. |
 | `deploy` | Deploy a manifest to Cloud Run.                           |
 | `init`   | Initialize a project from an existing service.            |
+| `status` | Show the current status of a service.                     |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -329,6 +330,46 @@ clrnd init my-service --project my-project --region asia-northeast1
 clrnd diff
 clrnd deploy
 ```
+
+### status
+
+Fetch a service from Cloud Run and print its current state: the `Ready` condition, the latest ready
+and created revisions, the observed generation, the traffic split, the URL, and every status
+condition. Read-only — nothing is modified.
+
+```sh
+clrnd status <service> --project <PROJECT> --region <REGION>
+```
+
+```
+Service:         my-svc
+URL:             https://my-svc-xxxx.a.run.app
+Ready:           True
+Latest ready:    my-svc-00007-abc
+Latest created:  my-svc-00007-abc
+Generation:      7 (observed 7)
+Traffic:
+  100%  my-svc-00007-abc
+Conditions:
+  Ready                True
+  ConfigurationsReady  True
+  RoutesReady          True
+```
+
+When the service is not ready, the reason is shown next to `Ready` and the message on its own line:
+
+```
+Ready:           False (RevisionFailed)
+Message:         Revision my-svc-00008-def is not ready and cannot serve traffic.
+```
+
+`--format json` prints the same information as JSON, for scripting:
+
+```sh
+clrnd status --format json | jq -r '.conditions[] | select(.type == "Ready") | .status'
+```
+
+`service` may be omitted when set in the config file.
 
 ## License
 

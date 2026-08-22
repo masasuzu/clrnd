@@ -49,6 +49,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
 		"config file (default: clrnd.yml or clrnd.yaml in the current directory)")
 	rootCmd.AddCommand(verifyCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(renderCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(deployCmd)
