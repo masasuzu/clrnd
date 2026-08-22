@@ -357,6 +357,20 @@ run_cmd "$CLRND" wait "$SERVICE" --timeout 120s
 assert_rc_zero "wait returns once the service is ready"
 assert_contains "wait reports progress on stderr" "Ready=True"
 
+info "--- 1-1d. revisions ---"
+run_cmd "$CLRND" revisions "$SERVICE"
+assert_rc_zero "revisions succeeds"
+assert_contains "revisions prints a header" "REVISION"
+assert_contains "revisions reports the traffic share" "100%"
+assert_contains "revisions reports the image" "$IMAGE"
+run_cmd "$CLRND" revisions "$SERVICE" --format json
+assert_rc_zero "revisions --format json succeeds"
+if printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d, list) and d and d[0].get("name") else 1)'; then
+  ok "revisions --format json is a non-empty array of revisions"
+else
+  ng "revisions --format json did not produce the expected JSON"
+fi
+
 info "--- 1-2. diff against a hand-written minimal manifest ---"
 info "Cloud Run fills in defaults on create, so this diff is expected to be non-empty."
 run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml"

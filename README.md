@@ -164,6 +164,7 @@ clrnd [command]
 | `init`   | Initialize a project from an existing service.            |
 | `status` | Show the current status of a service.                     |
 | `wait`   | Wait until a service is ready.                            |
+| `revisions` | List the revisions of a service.                       |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -378,6 +379,28 @@ clrnd status --format json | jq -r '.conditions[] | select(.type == "Ready") | .
 ```
 
 `service` may be omitted when set in the config file.
+
+### revisions
+
+List the revisions of a service, newest first, with the share of traffic each one currently
+receives. Read-only.
+
+```sh
+clrnd revisions <service> --project <PROJECT> --region <REGION>
+```
+
+```
+REVISION          READY                   TRAFFIC  TAGS    CREATED               IMAGE
+my-svc-00008-ghi  Unknown (Deploying)     10%      canary  2026-08-23T11:00:00Z  gcr.io/p/i:v3
+my-svc-00007-abc  True                    90%      -       2026-08-22T10:00:00Z  gcr.io/p/i:v2
+my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z  gcr.io/p/i:v1
+```
+
+`--format json` prints the same list as JSON:
+
+```sh
+clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
+```
 
 ### wait
 

@@ -1,0 +1,235 @@
+package cloudrun
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+
+	run "google.golang.org/api/run/v1"
+)
+
+// revision はテスト用のリビジョンを組み立てる。ready が空なら Ready 条件を持たない。
+func revision(name, image, created, ready, reason string) *run.Revision {
+	r := &run.Revision{
+		Metadata: &run.ObjectMeta{Name: name, CreationTimestamp: created},
+		Spec:     &run.RevisionSpec{Containers: []*run.Container{{Image: image}}},
+		Status:   &run.RevisionStatus{},
+	}
+	if ready != "" {
+		r.Status.Conditions = []*run.GoogleCloudRunV1Condition{
+			{Type: conditionReady, Status: ready, Reason: reason},
+		}
+	}
+	return r
+}
+
+// statusWithTraffic は status.traffic だけを持つ Status を組み立てる。
+func statusWithTraffic(targets ...TrafficTarget) *Status {
+	return &Status{Traffic: targets}
+}
+
+func TestNewRevisions(t *testing.T) {
+	items := []*run.Revision{
+		revision("my-svc-00006-def", "gcr.io/p/i:v1", "2026-08-21T09:00:00Z", conditionTrue, ""),
+		revision("my-svc-00007-abc", "gcr.io/p/i:v2", "2026-08-22T10:00:00Z", conditionTrue, ""),
+	}
+	status := statusWithTraffic(
+		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 90},
+		TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 10},
+	)
+
+	got := newRevisions(items, status)
+	if len(got) != 2 {
+		t.Fatalf("newRevisions() = %+v, want 2 entries", got)
+	}
+	// 新しい順。
+	if got[0].Name != "my-svc-00007-abc" || got[1].Name != "my-svc-00006-def" {
+		t.Errorf("order = %q, %q, want newest first", got[0].Name, got[1].Name)
+	}
+	if got[0].Image != "gcr.io/p/i:v2" || got[0].Percent != 90 || got[0].Ready != conditionTrue {
+		t.Errorf("newRevisions()[0] = %+v", got[0])
+	}
+	if got[1].Percent != 10 {
+		t.Errorf("newRevisions()[1].Percent = %d, want 10", got[1].Percent)
+	}
+}
+
+func TestNewRevisionsMergesTrafficEntries(t *testing.T) {
+	// 同じリビジョンが「割合」と「タグ」で複数エントリに現れることがある。
+	items := []*run.Revision{revision("my-svc-00007-abc", "img", "2026-08-22T10:00:00Z", conditionTrue, "")}
+	status := statusWithTraffic(
+		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 60},
+		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 40, Tag: "canary"},
+		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 0, Tag: "previous"},
+	)
+
+	got := newRevisions(items, status)
+	if got[0].Percent != 100 {
+		t.Errorf("Percent = %d, want 100 (entries must be summed)", got[0].Percent)
+	}
+	if strings.Join(got[0].Tags, ",") != "canary,previous" {
+		t.Errorf("Tags = %v, want both tags", got[0].Tags)
+	}
+}
+
+func TestNewRevisionsIsNilSafe(t *testing.T) {
+	items := []*run.Revision{
+		nil,
+		{},                                     // metadata も spec も無い
+		{Metadata: &run.ObjectMeta{Name: "x"}}, // spec が無い
+	}
+	got := newRevisions(items, nil)
+	if len(got) != 2 {
+		t.Fatalf("newRevisions() = %+v, want the nil entry skipped", got)
+	}
+	for _, r := range got {
+		if r.Image != "" || r.Ready != "" {
+			t.Errorf("revision = %+v, want empty fields", r)
+		}
+	}
+}
+
+func TestSortRevisionsFallsBackToTheName(t *testing.T) {
+	// 作成時刻が読めない場合は名前の降順 (Cloud Run の採番は連番)。
+	items := []*run.Revision{
+		revision("my-svc-00006-def", "img", "", conditionTrue, ""),
+		revision("my-svc-00008-ghi", "img", "", conditionTrue, ""),
+		revision("my-svc-00007-abc", "img", "", conditionTrue, ""),
+	}
+	got := newRevisions(items, nil)
+	want := []string{"my-svc-00008-ghi", "my-svc-00007-abc", "my-svc-00006-def"}
+	for i, name := range want {
+		if got[i].Name != name {
+			t.Errorf("order[%d] = %q, want %q", i, got[i].Name, name)
+		}
+	}
+}
+
+// TestSortRevisionsHandlesFractionalSeconds は実 API が返す形式で並べられることを
+// 確認する。Cloud Run の creationTimestamp は "2026-08-22T17:51:38.143198Z" のように
+// 小数秒を含む。
+func TestSortRevisionsHandlesFractionalSeconds(t *testing.T) {
+	items := []*run.Revision{
+		revision("older", "img", "2026-08-22T17:51:38.143198Z", conditionTrue, ""),
+		revision("newer", "img", "2026-08-22T17:51:38.999999Z", conditionTrue, ""),
+	}
+	got := newRevisions(items, nil)
+	if got[0].Name != "newer" || got[1].Name != "older" {
+		t.Errorf("order = %q, %q, want newest first", got[0].Name, got[1].Name)
+	}
+}
+
+func TestSortRevisionsPutsParsableTimestampsFirst(t *testing.T) {
+	items := []*run.Revision{
+		revision("no-timestamp", "img", "", conditionTrue, ""),
+		revision("with-timestamp", "img", "2026-08-22T10:00:00Z", conditionTrue, ""),
+	}
+	got := newRevisions(items, nil)
+	if got[0].Name != "with-timestamp" {
+		t.Errorf("order = %q first, want the revision with a timestamp", got[0].Name)
+	}
+}
+
+func TestRevisionsText(t *testing.T) {
+	items := []*run.Revision{
+		revision("my-svc-00007-abc", "gcr.io/p/i:v2", "2026-08-22T10:00:00Z", conditionTrue, ""),
+		revision("my-svc-00006-def", "gcr.io/p/i:v1", "2026-08-21T09:00:00Z", conditionFalse, "RevisionFailed"),
+	}
+	status := statusWithTraffic(
+		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 100, Tag: "live"},
+	)
+
+	want := `REVISION          READY                   TRAFFIC  TAGS  CREATED               IMAGE
+my-svc-00007-abc  True                    100%     live  2026-08-22T10:00:00Z  gcr.io/p/i:v2
+my-svc-00006-def  False (RevisionFailed)  0%       -     2026-08-21T09:00:00Z  gcr.io/p/i:v1
+`
+	if got := newRevisions(items, status).Text(); got != want {
+		t.Errorf("Text() mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestRevisionsTextIsEmptyWhenThereAreNone(t *testing.T) {
+	if got := (Revisions{}).Text(); got != "" {
+		t.Errorf("Text() = %q, want empty", got)
+	}
+}
+
+func TestClientListRevisions(t *testing.T) {
+	var paths []string
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		paths = append(paths, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, &run.ListRevisionsResponse{Items: []*run.Revision{
+				revision("my-svc-00007-abc", "gcr.io/p/i:v2", "2026-08-22T10:00:00Z", conditionTrue, ""),
+			}}
+		}
+		return http.StatusOK, readyService()
+	})
+
+	got, err := c.ListRevisions(context.Background(), "my-svc")
+	if err != nil {
+		t.Fatalf("ListRevisions() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "my-svc-00007-abc" {
+		t.Fatalf("ListRevisions() = %+v", got)
+	}
+	// live のトラフィックが突き合わされている。
+	if got[0].Percent != 100 {
+		t.Errorf("Percent = %d, want 100 from the service traffic", got[0].Percent)
+	}
+	// サービスとリビジョンの両方を引いている。
+	wantPaths := []string{
+		"/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc",
+		"/apis/serving.knative.dev/v1/namespaces/test-project/revisions",
+	}
+	if len(paths) != 2 || paths[0] != wantPaths[0] || paths[1] != wantPaths[1] {
+		t.Errorf("paths = %v, want %v", paths, wantPaths)
+	}
+}
+
+func TestClientListRevisionsFollowsPagination(t *testing.T) {
+	var continues []string
+	page := 0
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if !strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, readyService()
+		}
+		continues = append(continues, r.URL.Query().Get("continue"))
+		page++
+		if page == 1 {
+			return http.StatusOK, &run.ListRevisionsResponse{
+				Items:    []*run.Revision{revision("my-svc-00007-abc", "img", "2026-08-22T10:00:00Z", conditionTrue, "")},
+				Metadata: &run.ListMeta{Continue: "next-page"},
+			}
+		}
+		return http.StatusOK, &run.ListRevisionsResponse{
+			Items: []*run.Revision{revision("my-svc-00006-def", "img", "2026-08-21T09:00:00Z", conditionTrue, "")},
+		}
+	})
+
+	got, err := c.ListRevisions(context.Background(), "my-svc")
+	if err != nil {
+		t.Fatalf("ListRevisions() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListRevisions() = %+v, want both pages", got)
+	}
+	if len(continues) != 2 || continues[0] != "" || continues[1] != "next-page" {
+		t.Errorf("continue tokens = %v, want the second request to carry the token", continues)
+	}
+}
+
+func TestClientListRevisionsPropagatesErrors(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusForbidden, googleAPIError(403, "denied")
+		}
+		return http.StatusOK, readyService()
+	})
+
+	_, err := c.ListRevisions(context.Background(), "my-svc")
+	if err == nil || !strings.Contains(err.Error(), `failed to list revisions of service "my-svc"`) {
+		t.Fatalf("ListRevisions() error = %v, want it to name the service", err)
+	}
+}

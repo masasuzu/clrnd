@@ -674,6 +674,105 @@ func TestDeployNoWaitSkipsTheWait(t *testing.T) {
 	}
 }
 
+// revisionsJSON はリビジョン一覧の API レスポンス。
+const revisionsJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "RevisionList",
+  "items": [
+    {
+      "metadata": {"name": "my-svc-00006-def", "creationTimestamp": "2026-08-21T09:00:00Z"},
+      "spec": {"containers": [{"image": "gcr.io/project/image:old"}]},
+      "status": {"conditions": [{"type": "Ready", "status": "True"}]}
+    },
+    {
+      "metadata": {"name": "my-svc-00007-abc", "creationTimestamp": "2026-08-22T10:00:00Z"},
+      "spec": {"containers": [{"image": "gcr.io/project/image:new"}]},
+      "status": {"conditions": [{"type": "Ready", "status": "True"}]}
+    }
+  ]
+}`
+
+// startRevisionsAPI はサービス取得とリビジョン一覧の両方に応えるフェイク API を立てる。
+func startRevisionsAPI(t *testing.T) {
+	t.Helper()
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			_, _ = w.Write([]byte(revisionsJSON))
+			return
+		}
+		_, _ = w.Write([]byte(liveServiceStatusJSON))
+	})
+}
+
+// TestRevisionsTextEndToEnd は revisions が新しい順の表を出すことを確認する。
+func TestRevisionsTextEndToEnd(t *testing.T) {
+	startRevisionsAPI(t)
+
+	stdout, stderr, err := executeRoot(t, "revisions", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("revisions error = %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("revisions stderr = %q, want empty", stderr)
+	}
+
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("revisions stdout = %q, want a header and two rows", stdout)
+	}
+	if !strings.HasPrefix(lines[0], "REVISION") {
+		t.Errorf("header = %q", lines[0])
+	}
+	// 新しい順。live のトラフィックが突き合わされている。
+	if !strings.HasPrefix(lines[1], "my-svc-00007-abc") || !strings.Contains(lines[1], "100%") {
+		t.Errorf("first row = %q, want the newest revision with its traffic", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "my-svc-00006-def") || !strings.Contains(lines[2], "0%") {
+		t.Errorf("second row = %q", lines[2])
+	}
+}
+
+// TestRevisionsJSONEndToEnd は --format json が配列を出すことを確認する。
+func TestRevisionsJSONEndToEnd(t *testing.T) {
+	startRevisionsAPI(t)
+
+	stdout, _, err := executeRoot(t, "revisions", "my-svc", "--format", "json",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("revisions --format json error = %v", err)
+	}
+
+	var got []map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("revisions --format json produced invalid JSON: %v\n%s", err, stdout)
+	}
+	if len(got) != 2 {
+		t.Fatalf("revisions --format json = %v, want 2 entries", got)
+	}
+	if got[0]["name"] != "my-svc-00007-abc" {
+		t.Errorf("first entry = %v, want the newest revision", got[0])
+	}
+	if got[0]["percent"] != float64(100) {
+		t.Errorf("percent = %v, want 100", got[0]["percent"])
+	}
+}
+
+// TestRevisionsRejectsInvalidFormat は不正な --format をクライアント生成より前に
+// 弾くことを確認する。
+func TestRevisionsRejectsInvalidFormat(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call to %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	_, _, err := executeRoot(t, "revisions", "my-svc", "--format", "yaml")
+	if err == nil || !strings.Contains(err.Error(), `invalid --format "yaml"`) {
+		t.Fatalf("revisions error = %v, want an invalid --format error", err)
+	}
+}
+
 // TestVersion は --version がバージョンを出すことを確認する。
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")
