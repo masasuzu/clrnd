@@ -167,6 +167,7 @@ clrnd [command]
 | `revisions` | List the revisions of a service.                       |
 | `rollback` | Send traffic back to an earlier revision.                |
 | `delete` | Delete a service.                                         |
+| `refresh` | Roll out a new revision without changing the definition. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -180,6 +181,9 @@ manifest's `metadata.name`. A typical workflow is `init` → edit → `render` �
 clrnd does not manage revision names. `init` omits `spec.template.metadata.name` from the manifest
 it writes, and `diff`/`deploy` ignore the name Cloud Run reports for the live revision, so Cloud Run
 generates a fresh revision name on every deploy.
+
+`refresh` is the one exception: it sets a name deliberately, because that is the only way to force
+a new revision. See [refresh](#refresh).
 
 You may still pin a name yourself. If you do, it shows up in `diff` like any other field, and
 `verify` warns you: Cloud Run cannot recreate an existing revision, so the next deploy that changes
@@ -434,6 +438,27 @@ my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z 
 ```sh
 clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 ```
+
+### refresh
+
+Re-apply the live definition of a service so that a new revision is created, without changing
+anything about it. Useful when the image tag still points somewhere new, or to restart the
+containers.
+
+`refresh` never reads a local manifest — it redeploys what is currently running.
+
+```sh
+clrnd refresh <service> --project <PROJECT> --region <REGION>
+clrnd refresh --revision-suffix rebuild-42 --auto-approve
+```
+
+Cloud Run only creates a revision when `spec.template` changes, so `refresh` gives the new revision
+an explicit name: `<service>-r<UTC timestamp>`, or `<service>-<--revision-suffix>`. This is the one
+place clrnd sets a revision name (see [Revision names](#revision-names)); the next `deploy` from a
+manifest drops it again, and `diff` ignores it in the meantime.
+
+The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
+`--no-wait` is given.
 
 ### rollback
 

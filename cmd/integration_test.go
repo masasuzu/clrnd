@@ -1074,6 +1074,83 @@ func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
 	}
 }
 
+// TestRefreshEndToEnd は、定義を変えずに新しいリビジョン名を付けて適用することを
+// 確認する。Cloud Run は spec.template が変わらないと新しいリビジョンを作らないので、
+// これが refresh の本体。
+func TestRefreshEndToEnd(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	stdout, _, err := executeRoot(t, "refresh", "my-svc", "--revision-suffix", "r260822190506",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if !strings.Contains(stdout, "my-svc-r260822190506") {
+		t.Errorf("refresh stdout = %q, want the diff to show the new revision name", stdout)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(sentBody(), &sent); err != nil {
+		t.Fatalf("failed to parse the applied body: %v", err)
+	}
+	spec, _ := sent["spec"].(map[string]any)
+	template, _ := spec["template"].(map[string]any)
+	meta, _ := template["metadata"].(map[string]any)
+	if meta["name"] != "my-svc-r260822190506" {
+		t.Errorf("spec.template.metadata.name = %v, want the refreshed revision name", meta["name"])
+	}
+	// 定義そのものは変えない。
+	tspec, _ := template["spec"].(map[string]any)
+	containers, _ := tspec["containers"].([]any)
+	first, _ := containers[0].(map[string]any)
+	if first["image"] != "gcr.io/project/image:new" {
+		t.Errorf("image = %v, want the live definition to be reapplied unchanged", first["image"])
+	}
+}
+
+// TestRefreshGeneratesARevisionName は --revision-suffix 省略時に名前が生成される
+// ことを確認する。
+func TestRefreshGeneratesARevisionName(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	if _, _, err := executeRoot(t, "refresh", "my-svc", "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("refresh error = %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(sentBody(), &sent); err != nil {
+		t.Fatalf("failed to parse the applied body: %v", err)
+	}
+	spec, _ := sent["spec"].(map[string]any)
+	template, _ := spec["template"].(map[string]any)
+	meta, _ := template["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	if !strings.HasPrefix(name, "my-svc-r") || len(name) != len("my-svc-r260822190506") {
+		t.Errorf("spec.template.metadata.name = %q, want my-svc-r<UTC timestamp>", name)
+	}
+}
+
+// TestRefreshRejectsAnInvalidRevisionName は、Cloud Run が拒否する名前を適用前に
+// 弾くことを確認する。
+func TestRefreshRejectsAnInvalidRevisionName(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	_, _, err := executeRoot(t, "refresh", "my-svc", "--revision-suffix", "Bad_Suffix",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("refresh error = nil, want an invalid revision name error")
+	}
+	if !strings.Contains(err.Error(), "not valid") {
+		t.Errorf("refresh error = %v", err)
+	}
+	if len(sentBody()) != 0 {
+		t.Error("refresh applied something despite the invalid name")
+	}
+}
+
 // TestVersion は --version がバージョンを出すことを確認する。
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")

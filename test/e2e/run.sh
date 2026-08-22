@@ -427,6 +427,23 @@ run_cmd "$CLRND" deploy --auto-approve
 assert_rc_zero "a second deploy that changes the template succeeds"
 wait_ready || ng "the second deploy never became ready"
 
+info "--- 1-5b2. refresh ---"
+BEFORE_REFRESH="$(current_revision)"
+run_cmd "$CLRND" refresh "$SERVICE" --auto-approve --timeout 120s
+assert_rc_zero "refresh succeeds"
+wait_ready || ng "the service did not become ready after the refresh"
+AFTER_REFRESH="$(current_revision)"
+if [ -n "$AFTER_REFRESH" ] && [ "$AFTER_REFRESH" != "$BEFORE_REFRESH" ]; then
+  ok "refresh created a new revision ($AFTER_REFRESH)"
+else
+  ng "refresh did not create a new revision (still $AFTER_REFRESH)"
+fi
+# refresh はリビジョン名を明示するが、ローカルのマニフェストは名前を持たないので
+# diff には出ない (alignRevisionName)。ここが崩れると diff が収束しなくなる。
+run_cmd "$CLRND" diff
+assert_rc_zero "diff succeeds after a refresh"
+assert_empty "diff stays empty after a refresh"
+
 info "--- 1-5c. rollback ---"
 BEFORE_REV="$(serving_revision)"
 EXPECTED_REV="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
