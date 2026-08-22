@@ -134,8 +134,10 @@ gofmt -w .              # format
   `alignRevisionName` (called from `compareServices`) drops the live value from the comparison
   **when the local manifest does not pin one** — without that, every manifest without a revision
   name would show a permanent diff. When the manifest *does* pin a name it is kept on both sides
-  and shows up as a normal diff, and `verify` warns (via `RevisionName`) that the next
-  template-changing deploy will fail. The warning is not a failure: pinning is legitimate for a
+  and shows up as a normal diff, and **both `verify` and `deploy`** warn (`warnPinnedRevision` in
+  [cmd/flags.go](cmd/flags.go), via `RevisionName`) that the next template-changing deploy will
+  fail with a 409. `deploy` warns too because a CI job that only runs `deploy` would otherwise see
+  nothing but the opaque API error. The warning is not a failure: pinning is legitimate for a
   one-shot deploy.
 - `Validate` checks a local manifest with no API access: strict YAML unmarshal into `run.Service`
   (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
@@ -161,9 +163,12 @@ gofmt -w .              # format
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
-- Subcommands succeed **silently**: on success they emit only data (e.g. the manifest) to stdout,
-  never a confirmation message. Errors are returned from `RunE` so cobra prints them to stderr and
-  sets a non-zero exit code. Exception: `deploy` is interactive — it prints the diff to stdout (data)
+- Subcommands succeed **silently on stdout**: on success they emit only data (e.g. the manifest)
+  there, never a confirmation message. Errors are returned from `RunE` so cobra prints them to
+  stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
+  `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
+  not fail the command — stdout stays data-only, which is what the rule protects.
+  Exception: `deploy` is interactive — it prints the diff to stdout (data)
   and status/prompt lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout
   stays data-only. This is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and

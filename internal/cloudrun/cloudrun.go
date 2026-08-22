@@ -142,8 +142,8 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 }
 
 // Compare は live サービス (current) とローカルのマニフェストを同じ正規化にそろえて
-// 統一 diff を返す。current が nil ならサービス未存在として、desired 全体が追加された
-// diff になる。`clrnd diff` と `clrnd deploy` が同一の差分を表示するための共通経路。
+// 統一 diff を返す。current は書き換えない。current が nil ならサービス未存在として、
+// desired 全体が追加された diff になる。`clrnd diff` と `clrnd deploy` が同一の差分を表示するための共通経路。
 // マニフェストは厳密にパースするので、未知フィールドはここでエラーになる。
 func Compare(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
 	desired, err := parseManifest(manifest)
@@ -153,9 +153,9 @@ func Compare(current *run.Service, manifest []byte, currentName, desiredName str
 	return compareServices(current, desired, currentName, desiredName)
 }
 
-// compareServices は Compare と Plan が共有する比較の実装。
+// compareServices は Compare と Plan が共有する比較の実装。引数は書き換えない。
 func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
-	alignRevisionName(current, desired)
+	current = alignRevisionName(current, desired)
 
 	desiredYAML, err := ToManifest(desired)
 	if err != nil {
@@ -268,28 +268,39 @@ func RevisionName(manifest []byte) (string, error) {
 	return revisionName(svc), nil
 }
 
-// StripRevisionName は spec.template.metadata.name (リビジョン名) を取り除く。
-// Cloud Run はリビジョン名を省略するとサーバ側で自動採番するが、明示すると同名リビジョン
-// の再作成ができない。live から起こしたマニフェストにそのまま残すと、テンプレートを変えた
-// 2 回目以降の deploy が失敗するため、init が scaffold するマニフェストからは落とす。
-func StripRevisionName(svc *run.Service) {
-	if meta := templateMeta(svc); meta != nil {
-		meta.Name = ""
+// WithoutRevisionName は spec.template.metadata.name (リビジョン名) を取り除いたサービスを
+// 返す。引数は書き換えず、変更が必要な経路 (Spec / Template / Metadata) だけを浅くコピーする。
+//
+// Cloud Run はリビジョン名を省略するとサーバ側で自動採番するが、明示すると設定の異なる
+// 同名リビジョンを作れない。live から起こしたマニフェストにそのまま残すと、テンプレートを
+// 変えた 2 回目以降の deploy が失敗するため、init が scaffold するマニフェストからは落とす。
+func WithoutRevisionName(svc *run.Service) *run.Service {
+	if revisionName(svc) == "" {
+		return svc
 	}
+	meta := *svc.Spec.Template.Metadata
+	meta.Name = ""
+	tmpl := *svc.Spec.Template
+	tmpl.Metadata = &meta
+	spec := *svc.Spec
+	spec.Template = &tmpl
+	out := *svc
+	out.Spec = &spec
+	return &out
 }
 
-// alignRevisionName は desired がリビジョン名を指定していないとき、比較対象の current から
-// もリビジョン名を取り除く (current を書き換える)。
+// alignRevisionName は desired がリビジョン名を指定していないとき、比較に使う current から
+// リビジョン名を落としたものを返す。引数は書き換えない。
 //
 // Cloud Run は取得時に必ず実際のリビジョン名を埋めて返すため、ローカルが指定していない
 // 限りこれはサーバ管理フィールドと同じ扱いにするのが正しい。そうしないと、リビジョン名を
 // 書かないマニフェストでは永久に消えない差分が diff に出続ける。
 // ローカルが明示している場合は両側に残し、差分として見せる。
-func alignRevisionName(current, desired *run.Service) {
+func alignRevisionName(current, desired *run.Service) *run.Service {
 	if current == nil || revisionName(desired) != "" {
-		return
+		return current
 	}
-	StripRevisionName(current)
+	return WithoutRevisionName(current)
 }
 
 // serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。

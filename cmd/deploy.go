@@ -62,6 +62,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err := cloudrun.Validate(manifest, service); err != nil {
 		return err
 	}
+	// deploy だけを回す CI でも、リビジョン名固定が原因の 409 を事前に説明できるようにする。
+	if err := warnPinnedRevision(cmd, manifest); err != nil {
+		return err
+	}
 
 	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
 	if err != nil {

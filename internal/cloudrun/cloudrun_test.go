@@ -374,22 +374,45 @@ spec:
 	}
 }
 
-func TestStripRevisionName(t *testing.T) {
+func TestWithoutRevisionName(t *testing.T) {
 	svc := &run.Service{Spec: &run.ServiceSpec{Template: &run.RevisionTemplate{
 		Metadata: &run.ObjectMeta{Name: "my-svc-00007-abc", Annotations: map[string]string{"a": "b"}},
 	}}}
-	StripRevisionName(svc)
-	if got := revisionName(svc); got != "" {
-		t.Errorf("revisionName() = %q after StripRevisionName, want empty", got)
+
+	got := WithoutRevisionName(svc)
+	if name := revisionName(got); name != "" {
+		t.Errorf("revisionName() = %q, want empty", name)
 	}
 	// 名前以外の metadata は残す。
-	if svc.Spec.Template.Metadata.Annotations["a"] != "b" {
-		t.Error("StripRevisionName should keep other metadata")
+	if got.Spec.Template.Metadata.Annotations["a"] != "b" {
+		t.Error("WithoutRevisionName should keep other metadata")
+	}
+	// 引数は書き換えない。
+	if name := revisionName(svc); name != "my-svc-00007-abc" {
+		t.Errorf("WithoutRevisionName mutated its argument: revisionName() = %q", name)
 	}
 
+	// リビジョン名が無ければそのまま返す (無駄なコピーをしない)。
+	plain := &run.Service{}
+	if WithoutRevisionName(plain) != plain {
+		t.Error("WithoutRevisionName should return the same value when there is nothing to strip")
+	}
 	// spec.template.metadata が無くても panic しない。
-	StripRevisionName(&run.Service{})
-	StripRevisionName(nil)
+	WithoutRevisionName(nil)
+}
+
+// TestCompareDoesNotMutateCurrent は Compare が引数の live サービスを書き換えないことを
+// 確認する。書き換えると、比較後に live のリビジョン名を読む処理が静かに壊れる。
+func TestCompareDoesNotMutateCurrent(t *testing.T) {
+	live := liveService("gcr.io/project/image:tag")
+	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
+
+	if _, err := Compare(live, []byte(validManifest), "live", "local"); err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if got := revisionName(live); got != "my-svc-00007-abc" {
+		t.Errorf("Compare() mutated current: revisionName() = %q, want it untouched", got)
+	}
 }
 
 // TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt は、リビジョン名を書いていない

@@ -23,7 +23,8 @@ var verifyCmd = &cobra.Command{
 		"contains the fields required to deploy. This local check never needs the API.\n" +
 		"When --project/--region are resolvable (and --local-only is not set), it also checks\n" +
 		"via the API that referenced resources (service account, secrets) actually exist.\n" +
-		"Nothing is printed when the manifest is valid.\n" +
+		"A valid manifest produces no output on stdout; warnings (a pinned revision name, a check\n" +
+		"that could not be completed) go to stderr without failing the command.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runVerify,
@@ -63,15 +64,8 @@ func runVerify(cmd *cobra.Command, args []string) error {
 
 	// リビジョン名の固定は文法上は正しいが、次にテンプレートを変えたときの deploy が
 	// 必ず失敗するので警告する (失敗にはしない: 使い捨てのデプロイでは正しい書き方)。
-	revision, err := cloudrun.RevisionName(manifest)
-	if err != nil {
+	if err := warnPinnedRevision(cmd, manifest); err != nil {
 		return err
-	}
-	if revision != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: spec.template.metadata.name pins the revision name to %q; "+
-				"Cloud Run rejects a revision name that already exists with a different "+
-				"configuration, so a later deploy that changes the template will fail\n", revision)
 	}
 
 	if verifyLocalOnly {
