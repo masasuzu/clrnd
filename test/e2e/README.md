@@ -61,13 +61,14 @@ not paste it into an issue or a pull request.
 | --- | --- |
 | 1-1 | `deploy` creates a new service and it becomes ready |
 | 1-1b | `status` reports Ready, the URL and the traffic split, in text and JSON |
+| 1-1c | `wait` returns once the service is ready and reports progress on stderr |
 | 1-2 | a hand-written minimal manifest keeps showing server defaults in `diff` (see issue #11) |
 | 1-3 | the live service is made to pin a revision name, the way `--revision-suffix` does |
 | 1-4 | `init` drops that revision name and leaves no empty template metadata |
 | 1-5 | `diff` right after `init` is empty, and a following template change deploys cleanly |
 | 1-6 | `verify` succeeds and prints no warning |
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
-| 1-8 | `deploy` warns about a pinned revision name, and Cloud Run rejects the reused name |
+| 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
 
 Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
 A service deployed without one comes back with no `spec.template.metadata.name`
