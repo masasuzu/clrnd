@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,40 @@ func addTargetFlags(cmd *cobra.Command, project, region *string) {
 		fmt.Sprintf("GCP project ID (env: %s, %s)", envProjectPrimary, envProjectSecondary))
 	cmd.Flags().StringVar(region, "region", "",
 		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s)", envRegionPrimary, envRegionSecondary))
+}
+
+// 機械可読な出力を持つサブコマンドの出力形式。
+const (
+	formatText = "text"
+	formatJSON = "json"
+)
+
+// addFormatFlag は --format を登録する。-o/--output は init/render が「出力ファイル」の
+// 意味で使っているので、形式の指定には gcloud と同じ --format を使う。
+func addFormatFlag(cmd *cobra.Command, format *string) {
+	cmd.Flags().StringVar(format, "format", formatText,
+		fmt.Sprintf("output format: %s or %s", formatText, formatJSON))
+}
+
+// validateFormat は --format の値を検証する。クライアント生成 (= ADC 探索) より前に
+// 呼ぶこと。順序が逆だと、フラグの間違いが認証エラーに隠れる。
+func validateFormat(format string) error {
+	if format != formatText && format != formatJSON {
+		return fmt.Errorf("invalid --format %q: must be %q or %q", format, formatText, formatJSON)
+	}
+	return nil
+}
+
+// writeFormatted は --format に応じて stdout へ書き出す。json のときは value を、
+// text のときは text をそのまま出す。
+func writeFormatted(cmd *cobra.Command, format string, value any, text string) error {
+	if format == formatJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(value)
+	}
+	fmt.Fprint(cmd.OutOrStdout(), text)
+	return nil
 }
 
 // clientOptions は Cloud Run クライアント生成時に追加で渡すオプション。通常は空で、

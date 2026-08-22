@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, and `wait` subcommands. All seven are implemented. (`init` was formerly `load`; `load`
+`init`, `status`, `wait`, and `revisions` subcommands. All eight are implemented. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -171,6 +171,14 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.
+  Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
+  `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
+  in `status.traffic` more than once (a percentage entry plus a tag entry), so the shares are summed
+  and the tags collected. The list is paged through with the `Continue` token. `newRevisions` is the
+  pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
+  the API. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
+  (Cloud Run numbers them sequentially) when the timestamp will not parse.
 - `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
   the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
   `status.observedGeneration` reaches the generation being waited for (otherwise the *previous*
@@ -215,5 +223,6 @@ revision-name conflicts, asynchronous rollout failures).
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
-  name never means two different things. Validate the format value **before** building the client,
-  like every other local check.
+  name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in
+  [cmd/flags.go](cmd/flags.go) are the shared pieces — validate the format value **before** building
+  the client, like every other local check.

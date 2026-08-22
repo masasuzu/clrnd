@@ -1,17 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"github.com/spf13/cobra"
-)
-
-// status の出力形式。-o/--output は init/render が「出力ファイル」に使っているので、
-// 形式の指定には gcloud と同じ --format を使う (名前が同じで意味が違う状態を作らない)。
-const (
-	formatText = "text"
-	formatJSON = "json"
 )
 
 var (
@@ -33,8 +23,7 @@ var statusCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(statusCmd, &statusProject, &statusRegion)
-	statusCmd.Flags().StringVar(&statusFormat, "format", formatText,
-		fmt.Sprintf("output format: %s or %s", formatText, formatJSON))
+	addFormatFlag(statusCmd, &statusFormat)
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
@@ -43,8 +32,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// フラグの検証はクライアント生成 (= ADC 探索) より先に行う。
-	if statusFormat != formatText && statusFormat != formatJSON {
-		return fmt.Errorf("invalid --format %q: must be %q or %q", statusFormat, formatText, formatJSON)
+	if err := validateFormat(statusFormat); err != nil {
+		return err
 	}
 
 	ctx := cmd.Context()
@@ -58,11 +47,5 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if statusFormat == formatJSON {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(status)
-	}
-	fmt.Fprint(cmd.OutOrStdout(), status.Text())
-	return nil
+	return writeFormatted(cmd, statusFormat, status, status.Text())
 }
