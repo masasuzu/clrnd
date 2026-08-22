@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
@@ -25,12 +28,17 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: loadConfig,
 }
 
-// Execute はルートコマンドを実行する。
+// Execute はルートコマンドを実行する。SIGINT/SIGTERM で cancel される context を渡すので、
+// 各サブコマンドは cmd.Context() を使うことで Ctrl-C で中断できる。
 func Execute() error {
-	return rootCmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return rootCmd.ExecuteContext(ctx)
 }
 
 func init() {
+	rootCmd.Version = buildVersion()
+	rootCmd.SetVersionTemplate("{{ .Name }} version {{ .Version }}\n")
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
 		"config file (default: clrnd.yml or clrnd.yaml in the current directory)")
 	rootCmd.AddCommand(verifyCmd)

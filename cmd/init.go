@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -45,16 +44,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	project, err := resolveProject(initProject)
-	if err != nil {
-		return err
-	}
-	region, err := resolveRegion(initRegion)
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-
 	// 上書き事故を防ぐため、書き込み前に既存ファイルをまとめて確認する。
 	manifestExisted := fileExists(initManifest)
 	if !initForce {
@@ -65,7 +54,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	obj, err := cloudrun.GetService(ctx, project, region, service)
+	ctx := cmd.Context()
+	client, err := newCloudRunClient(cmd, initProject, initRegion)
+	if err != nil {
+		return err
+	}
+
+	obj, err := client.GetService(ctx, service)
 	if err != nil {
 		return err
 	}
@@ -74,7 +69,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	configYAML, err := scaffoldConfig(project, region, service, initManifest)
+	configYAML, err := scaffoldConfig(client.Project(), client.Region(), service, initManifest)
 	if err != nil {
 		return err
 	}

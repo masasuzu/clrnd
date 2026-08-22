@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/render"
 	"github.com/spf13/cobra"
+	"google.golang.org/api/option"
 )
 
 // プロジェクト/リージョンのフラグが未指定のときに参照する環境変数 (gcloud 互換)。
@@ -29,6 +31,24 @@ func addTargetFlags(cmd *cobra.Command, project, region *string) {
 		fmt.Sprintf("GCP project ID (env: %s, %s)", envProjectPrimary, envProjectSecondary))
 	cmd.Flags().StringVar(region, "region", "",
 		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s)", envRegionPrimary, envRegionSecondary))
+}
+
+// clientOptions は Cloud Run クライアント生成時に追加で渡すオプション。通常は空で、
+// テストから httptest のフェイク API を差し込むためにだけ使う。
+var clientOptions []option.ClientOption
+
+// newCloudRunClient は project/region をフラグ > 環境変数 > config の順で解決し、
+// Cloud Run Admin API クライアントを生成する。API を叩くサブコマンドの共通入口。
+func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*cloudrun.Client, error) {
+	project, err := resolveProject(projectFlag)
+	if err != nil {
+		return nil, err
+	}
+	region, err := resolveRegion(regionFlag)
+	if err != nil {
+		return nil, err
+	}
+	return cloudrun.NewClient(cmd.Context(), project, region, clientOptions...)
 }
 
 // resolveService は位置引数 args[0] > config service の順で解決する。

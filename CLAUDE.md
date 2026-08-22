@@ -25,6 +25,8 @@ gofmt -w .              # format
 ## Architecture
 
 - Entry point [main.go](main.go) calls `cmd.Execute()` and exits non-zero on error.
+  `Execute` builds a `signal.NotifyContext` (SIGINT/SIGTERM) and calls `ExecuteContext`, so every
+  subcommand must use `cmd.Context()` (never `context.Background()`) to stay interruptible.
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
@@ -35,6 +37,9 @@ gofmt -w .              # format
   `resolveManifest` (the `[service]` slot is still accepted for positional consistency).
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
   Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
+- `clrnd --version` is served by [cmd/version.go](cmd/version.go): the `version` var is filled by
+  goreleaser's ldflags (`-X github.com/masasuzu/clrnd/cmd.version=...`), falling back to
+  `debug.ReadBuildInfo` (for `go install module@version`) and then `(devel)`.
 - Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
   BEFORE parsing/validation. `verify`/`render`/`diff`/`deploy` call `renderManifest` (in
   [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. The `render` subcommand prints this
@@ -57,16 +62,29 @@ gofmt -w .              # format
 
 ### internal/cloudrun (the core logic)
 
-- `newClient` builds the API client; `GetService`/`Deploy` share it. Auth is **Application
-  Default Credentials**, picked up automatically by `run.NewService`
+- Every API call goes through `Client` ([internal/cloudrun/client.go](internal/cloudrun/client.go)),
+  which holds the `*run.APIService` plus the target project/region so callers do not pass them
+  around. `NewClient(ctx, project, region, opts ...option.ClientOption)` appends `opts` **after**
+  the default endpoint option, which is the injection point tests use
+  (`option.WithEndpoint(httptestURL)` + `option.WithHTTPClient`) — see `newTestClient` in
+  [internal/cloudrun/client_test.go](internal/cloudrun/client_test.go) and `startFakeAPI` in
+  [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
+  cover them against the fake API rather than leaving them untested.
+  Auth is **Application Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.
-- Deploy is split into `Plan` (validate locally, `Get` the live service, compute the `Diff` of
+- `cmd/` builds the client via `newCloudRunClient` in [cmd/flags.go](cmd/flags.go), which resolves
+  project/region and passes the package var `clientOptions` (empty in production, set by tests).
+  Create the client **after** the local work (reading/rendering the manifest, checking for existing
+  files) so local errors surface before credential discovery.
+- Deploy is split into `Client.Plan` (validate locally, `Get` the live service, compute the `Diff` of
   live vs desired; `Create` when 404 via `isNotFound`/`googleapi.Error`) and `DeployPlan.Apply`
   (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
   `confirm`s on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
   (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. Empty diff →
-  skip apply. `--dry-run` passes `dryRun=all` for server-side validation with no mutation.
+  skip apply. `--dry-run` passes `dryRun=all` for server-side validation with no mutation; when it
+  is off the `DryRun` setter is **not** called at all (passing `""` would send an empty `dryRun=`
+  query parameter).
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
   via `option.WithEndpoint`), so a region is mandatory.
 - `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and

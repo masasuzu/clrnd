@@ -163,7 +163,8 @@ clrnd [command]
 | `deploy` | Deploy a manifest to Cloud Run.                           |
 | `init`   | Initialize a project from an existing service.            |
 
-Run `clrnd [command] --help` for details on a specific command.
+Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
+installed version.
 
 All commands that take a `<service>` and `<manifest>` expect the service name to match the
 manifest's `metadata.name`. A typical workflow is `init` → edit → `render` → `verify` → `diff` →

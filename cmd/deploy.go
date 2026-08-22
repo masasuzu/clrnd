@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
 )
 
@@ -46,15 +44,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	project, err := resolveProject(deployProject)
-	if err != nil {
-		return err
-	}
-	region, err := resolveRegion(deployRegion)
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -65,7 +55,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	plan, err := cloudrun.Plan(ctx, project, region, service, manifest)
+	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
+	if err != nil {
+		return err
+	}
+
+	plan, err := client.Plan(ctx, service, manifest)
 	if err != nil {
 		return err
 	}

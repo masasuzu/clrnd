@@ -9,7 +9,6 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 	"google.golang.org/api/googleapi"
-	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -17,6 +16,8 @@ import (
 const (
 	manifestAPIVersion = "serving.knative.dev/v1"
 	manifestKind       = "Service"
+	// dryRunAll は API の dryRun クエリパラメータで「検証のみ」を指示する値。
+	dryRunAll = "all"
 )
 
 // サーバ側が付与する read-only なアノテーション。デプロイ用マニフェストには不要。
@@ -44,46 +45,18 @@ var serverManagedMetaFields = []string{
 	"namespace",
 }
 
-// newClient はローカルの Application Default Credentials を使う Cloud Run Admin API
-// クライアントを生成する。ADC は run.NewService が自動的に検出する。
-// v1 namespaces API はリージョナルエンドポイントを必要とする。
-func newClient(ctx context.Context, region string) (*run.APIService, error) {
-	endpoint := fmt.Sprintf("https://%s-run.googleapis.com", region)
-	client, err := run.NewService(ctx, option.WithEndpoint(endpoint))
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize the Cloud Run client: %w", err)
-	}
-	return client, nil
-}
-
-// GetService は指定したサービスの定義を Cloud Run Admin API から取得する。
-func GetService(ctx context.Context, project, region, service string) (*run.Service, error) {
-	client, err := newClient(ctx, region)
-	if err != nil {
-		return nil, err
-	}
-
-	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
-	obj, err := client.Namespaces.Services.Get(name).Context(ctx).Do()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service %q: %w", service, err)
-	}
-	return obj, nil
-}
-
 // DeployPlan は適用予定の内容。Plan で算出し、Apply で適用する。
 type DeployPlan struct {
 	Service string // サービス名
 	Create  bool   // 未存在で新規作成になるか
 	Diff    string // live と desired の統一 diff (差分が無ければ空)
 
-	client  *run.APIService
-	project string
+	client  *Client
 	desired *run.Service
 }
 
 // Plan はマニフェストを検証し、live サービスとの差分を算出する (変更はしない)。
-func Plan(ctx context.Context, project, region, service string, manifest []byte) (*DeployPlan, error) {
+func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*DeployPlan, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
 		return nil, err
@@ -93,12 +66,7 @@ func Plan(ctx context.Context, project, region, service string, manifest []byte)
 	}
 	// 送信先プロジェクトと body の namespace を一致させる。
 	if svc.Metadata != nil {
-		svc.Metadata.Namespace = project
-	}
-
-	client, err := newClient(ctx, region)
-	if err != nil {
-		return nil, err
+		svc.Metadata.Namespace = c.project
 	}
 
 	desiredYAML, err := ToManifest(svc)
@@ -106,10 +74,9 @@ func Plan(ctx context.Context, project, region, service string, manifest []byte)
 		return nil, err
 	}
 
-	plan := &DeployPlan{Service: service, client: client, project: project, desired: svc}
+	plan := &DeployPlan{Service: service, client: c, desired: svc}
 
-	name := fmt.Sprintf("namespaces/%s/services/%s", project, service)
-	current, getErr := client.Namespaces.Services.Get(name).Context(ctx).Do()
+	current, getErr := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
 	if getErr != nil {
 		if !isNotFound(getErr) {
 			return nil, fmt.Errorf("failed to check service %q: %w", service, getErr)
@@ -133,22 +100,25 @@ func Plan(ctx context.Context, project, region, service string, manifest []byte)
 }
 
 // Apply は Plan の内容を Cloud Run に適用する。dryRun が true の場合はサーバ側で検証のみ行う。
+// dryRun が false のときは DryRun を呼ばない (空文字を渡すと dryRun= という空のクエリ
+// パラメータが送られてしまうため)。
 func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) error {
-	var dryRunVal string
-	if dryRun {
-		dryRunVal = "all"
-	}
-
-	name := fmt.Sprintf("namespaces/%s/services/%s", p.project, p.Service)
 	if p.Create {
-		parent := fmt.Sprintf("namespaces/%s", p.project)
-		if _, err := p.client.Namespaces.Services.Create(parent, p.desired).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+		call := p.client.api.Namespaces.Services.Create(p.client.parent(), p.desired)
+		if dryRun {
+			call = call.DryRun(dryRunAll)
+		}
+		if _, err := call.Context(ctx).Do(); err != nil {
 			return fmt.Errorf("failed to create service %q: %w", p.Service, err)
 		}
 		return nil
 	}
 
-	if _, err := p.client.Namespaces.Services.ReplaceService(name, p.desired).DryRun(dryRunVal).Context(ctx).Do(); err != nil {
+	call := p.client.api.Namespaces.Services.ReplaceService(p.client.serviceName(p.Service), p.desired)
+	if dryRun {
+		call = call.DryRun(dryRunAll)
+	}
+	if _, err := call.Context(ctx).Do(); err != nil {
 		return fmt.Errorf("failed to update service %q: %w", p.Service, err)
 	}
 	return nil
