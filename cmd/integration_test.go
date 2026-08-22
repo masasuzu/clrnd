@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/masasuzu/clrnd/internal/config"
@@ -519,6 +521,156 @@ func TestStatusRejectsInvalidFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `invalid --format "yaml"`) {
 		t.Errorf("status error = %v, want it to name the bad format", err)
+	}
+}
+
+// serviceJSON は generation / observedGeneration / Ready 条件を指定したサービス定義を返す。
+// ready が空なら Ready 条件そのものを持たない。
+func serviceJSON(generation, observed int64, ready, reason string) string {
+	conditions := ""
+	if ready != "" {
+		conditions = fmt.Sprintf(`"conditions": [{"type": "Ready", "status": %q, "reason": %q}], `, ready, reason)
+	}
+	return fmt.Sprintf(`{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": %d},
+  "spec": {"template": {"spec": {"containers": [{"image": "gcr.io/project/image:old"}]}}},
+  "status": {%s"observedGeneration": %d}
+}`, generation, conditions, observed)
+}
+
+// rolloutAPI は deploy -> wait の流れを模したフェイク API を立てる。
+// PUT (適用) の前後で GET の応答を変え、GET の回数を数える。
+func rolloutAPI(t *testing.T, afterApply string) func() int {
+	t.Helper()
+	var mu sync.Mutex
+	applied := false
+	gets := 0
+
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		var body string
+		switch r.Method {
+		case http.MethodPut:
+			applied = true
+			// 適用のレスポンスは新しい世代を返す。deploy はこの世代の
+			// ロールアウトだけを待つ。
+			body = serviceJSON(8, 7, "Unknown", "Deploying")
+		default:
+			gets++
+			if applied {
+				body = afterApply
+			} else {
+				body = serviceJSON(7, 7, "True", "")
+			}
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return gets
+	}
+}
+
+// TestWaitEndToEnd は wait が Ready になるまで待ち、進捗を stderr に出すことを確認する。
+func TestWaitEndToEnd(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(serviceJSON(7, 7, "True", "")))
+	})
+
+	stdout, stderr, err := executeRoot(t, "wait", "my-svc", "--interval", "1ms",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("wait error = %v", err)
+	}
+	// 成功時は stdout に何も出さない (stdout はデータ専用)。
+	if stdout != "" {
+		t.Errorf("wait stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "waiting for my-svc") || !strings.Contains(stderr, "Ready=True") {
+		t.Errorf("wait stderr = %q, want progress on stderr", stderr)
+	}
+}
+
+// TestWaitFailsWhenTheRolloutFails は Ready=False で待たずに失敗することを確認する。
+func TestWaitFailsWhenTheRolloutFails(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(serviceJSON(7, 7, "False", "RevisionFailed")))
+	})
+
+	_, _, err := executeRoot(t, "wait", "my-svc", "--interval", "1ms", "--timeout", "5s",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("wait error = nil, want a rollout failure")
+	}
+	if !strings.Contains(err.Error(), "RevisionFailed") {
+		t.Errorf("wait error = %v, want the reason", err)
+	}
+}
+
+// TestDeployFailsWhenTheRolloutFails が本 PR の要。従来 deploy は ReplaceService が
+// 受理された時点で exit 0 を返していたため、リビジョンが起動に失敗しても CI では
+// 成功扱いになっていた。
+func TestDeployFailsWhenTheRolloutFails(t *testing.T) {
+	gets := rolloutAPI(t, serviceJSON(8, 8, "False", "ConflictingRevisionName"))
+
+	manifest := writeManifest(t, localManifest)
+	_, stderr, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("deploy error = nil, want the failed rollout to surface")
+	}
+	if !strings.Contains(err.Error(), "ConflictingRevisionName") {
+		t.Errorf("deploy error = %v, want the rollout failure reason", err)
+	}
+	if !strings.Contains(stderr, "waiting for my-svc") {
+		t.Errorf("deploy stderr = %q, want the wait progress", stderr)
+	}
+	if gets() < 2 {
+		t.Errorf("GET count = %d, want the plan lookup plus at least one poll", gets())
+	}
+}
+
+// TestDeployWaitsForTheRollout は成功したロールアウトを待って正常終了することを確認する。
+func TestDeployWaitsForTheRollout(t *testing.T) {
+	gets := rolloutAPI(t, serviceJSON(8, 8, "True", ""))
+
+	manifest := writeManifest(t, localManifest)
+	_, stderr, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("deploy error = %v", err)
+	}
+	if !strings.Contains(stderr, "Ready=True") {
+		t.Errorf("deploy stderr = %q, want the rollout to be reported ready", stderr)
+	}
+	if gets() < 2 {
+		t.Errorf("GET count = %d, want the plan lookup plus at least one poll", gets())
+	}
+}
+
+// TestDeployNoWaitSkipsTheWait は --no-wait が適用の受理だけで戻ることを確認する。
+func TestDeployNoWaitSkipsTheWait(t *testing.T) {
+	// 待てば失敗する状態にしておき、それでも成功することで「待っていない」と分かる。
+	gets := rolloutAPI(t, serviceJSON(8, 8, "False", "RevisionFailed"))
+
+	manifest := writeManifest(t, localManifest)
+	_, _, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("deploy --no-wait error = %v", err)
+	}
+	// GET は Plan の 1 回だけ。ポーリングしていない。
+	if gets() != 1 {
+		t.Errorf("GET count = %d, want 1 (no polling with --no-wait)", gets())
 	}
 }
 

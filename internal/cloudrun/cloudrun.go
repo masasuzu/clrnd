@@ -87,29 +87,43 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 	return plan, nil
 }
 
-// Apply は Plan の内容を Cloud Run に適用する。dryRun が true の場合はサーバ側で検証のみ行う。
-// dryRun が false のときは DryRun を呼ばない (空文字を渡すと dryRun= という空のクエリ
-// パラメータが送られてしまうため)。
-func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) error {
+// Apply は Plan の内容を Cloud Run に適用し、適用後のサービスを返す。dryRun が true の
+// 場合はサーバ側で検証のみ行う。dryRun が false のときは DryRun を呼ばない (空文字を渡すと
+// dryRun= という空のクエリパラメータが送られてしまうため)。
+//
+// 戻り値の metadata.generation は「今適用した世代」なので、Wait でその世代の
+// ロールアウトだけを待つのに使える。
+func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, error) {
 	if p.Create {
 		call := p.client.api.Namespaces.Services.Create(p.client.parent(), p.desired)
 		if dryRun {
 			call = call.DryRun(dryRunAll)
 		}
-		if _, err := call.Context(ctx).Do(); err != nil {
-			return fmt.Errorf("failed to create service %q: %w", p.Service, err)
+		applied, err := call.Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create service %q: %w", p.Service, err)
 		}
-		return nil
+		return applied, nil
 	}
 
 	call := p.client.api.Namespaces.Services.ReplaceService(p.client.serviceName(p.Service), p.desired)
 	if dryRun {
 		call = call.DryRun(dryRunAll)
 	}
-	if _, err := call.Context(ctx).Do(); err != nil {
-		return fmt.Errorf("failed to update service %q: %w", p.Service, err)
+	applied, err := call.Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to update service %q: %w", p.Service, err)
 	}
-	return nil
+	return applied, nil
+}
+
+// AppliedGeneration は Apply の戻り値から metadata.generation を nil セーフに取り出す。
+// 取れなければ 0 を返し、その場合 Wait は世代を問わずに Ready だけを見る。
+func AppliedGeneration(applied *run.Service) int64 {
+	if applied == nil || applied.Metadata == nil {
+		return 0
+	}
+	return applied.Metadata.Generation
 }
 
 // isNotFound は googleapi の 404 エラーかどうかを判定する。

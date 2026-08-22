@@ -352,6 +352,11 @@ else
   ng "status --format json did not produce the expected JSON"
 fi
 
+info "--- 1-1c. wait ---"
+run_cmd "$CLRND" wait "$SERVICE" --timeout 120s
+assert_rc_zero "wait returns once the service is ready"
+assert_contains "wait reports progress on stderr" "Ready=True"
+
 info "--- 1-2. diff against a hand-written minimal manifest ---"
 info "Cloud Run fills in defaults on create, so this diff is expected to be non-empty."
 run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml"
@@ -409,20 +414,20 @@ assert_contains "verify warns about the pinned revision name" "warning:"
 
 info "--- 1-8. deploying a pinned revision name is rejected ---"
 set_env_value "$D2/pinned.yaml" "third"
-run_cmd "$CLRND" deploy "$SERVICE" "$D2/pinned.yaml" --auto-approve
+run_cmd "$CLRND" deploy "$SERVICE" "$D2/pinned.yaml" --auto-approve --timeout 120s
 assert_contains "deploy also warns about the pinned revision name" "warning:"
+# Cloud Run はこの要求を同期的に 409 で拒否することも、受理してロールアウトだけ
+# 失敗させることもある。deploy が待つようになったので、どちらの経路でも
+# 非ゼロで終わらなければならない。以前は後者で exit 0 になっていた。
 if [ "$RC" -ne 0 ]; then
-  ok "reusing a revision name is rejected synchronously (exit=$RC)"
-else
-  info "the API call succeeded; checking how the rollout ended..."
-  sleep 5
-  COND="$(ready_condition)"
-  info "Ready condition: $(printf '%s' "$COND" | tr '\t' '/')"
-  if [ "$(printf '%s' "$COND" | cut -f1)" = "False" ]; then
-    ok "reusing a revision name fails asynchronously (deploy still exits 0 — see issue #8)"
+  ok "deploy fails when a revision name cannot be reused (exit=$RC)"
+  if printf '%s' "$OUT" | grep -q "alreadyExists"; then
+    info "rejected synchronously by the API (409)"
   else
-    ng "reusing a revision name was accepted; revisit the assumption"
+    info "accepted by the API, then caught by the rollout wait"
   fi
+else
+  ng "deploy exited 0 for a rollout that cannot succeed"
 fi
 fi
 

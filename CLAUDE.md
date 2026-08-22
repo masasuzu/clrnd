@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, and `status` subcommands. All six are implemented. (`init` was formerly `load`; `load`
+`init`, `status`, and `wait` subcommands. All seven are implemented. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -171,6 +171,25 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
+  the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
+  `status.observedGeneration` reaches the generation being waited for (otherwise the *previous*
+  generation's `Ready=True` reads as success), then succeeds on `Ready=True` and **fails
+  immediately** on `Ready=False` rather than burning the timeout. The interval backs off from 2s to
+  15s, and the whole loop honours `cmd.Context()` so Ctrl-C stops it.
+  A failed *poll* is not a failed rollout: the generated API client does not retry, so a single
+  transient 503 would otherwise make an already-applied `deploy` exit non-zero — the very CI
+  false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
+  errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
+  out. A 404 is the exception: a service that does not exist will not appear, so it returns at once.
+  `waitProgress` deliberately withholds the `Ready` value until `observedGeneration` reaches the
+  awaited generation — the condition visible before then belongs to the *previous* generation and
+  reads as "already finished".
+  `DeployPlan.Apply` returns the applied `*run.Service` so `deploy` can wait for exactly the
+  generation it just applied (`AppliedGeneration`). **`deploy` waits by default** and fails when the
+  rollout fails — without that, a broken revision still exited 0 and CI treated it as success.
+  `--no-wait` restores the old behaviour. `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the
+  shared entry point that prints progress to stderr.
 - `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
   is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`

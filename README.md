@@ -163,6 +163,7 @@ clrnd [command]
 | `deploy` | Deploy a manifest to Cloud Run.                           |
 | `init`   | Initialize a project from an existing service.            |
 | `status` | Show the current status of a service.                     |
+| `wait`   | Wait until a service is ready.                            |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -269,6 +270,11 @@ Show the diff against the live service, ask for confirmation, then apply the man
 — creating the service if it does not exist or replacing it otherwise. The manifest is validated
 locally before the request is sent. When there is no difference, nothing is applied.
 
+**After applying, `deploy` waits until the new revision is serving** and exits non-zero if the
+rollout fails. Cloud Run accepts the request before the revision starts, so without this a broken
+revision would still exit 0 and CI would treat the deploy as successful. Pass `--no-wait` to return
+as soon as the request is accepted.
+
 ```sh
 clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]
 ```
@@ -280,6 +286,8 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
+| `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
 
 The diff is printed to stdout; the confirmation prompt is on stderr. Without `--auto-approve`, a
 non-interactive run (no TTY, e.g. a pipeline) refuses to apply and exits with an error — pass
@@ -370,6 +378,17 @@ clrnd status --format json | jq -r '.conditions[] | select(.type == "Ready") | .
 ```
 
 `service` may be omitted when set in the config file.
+
+### wait
+
+Poll a service until its `Ready` condition becomes `True`. If it becomes `False`, `wait` fails
+immediately instead of burning the timeout. Progress goes to stderr; nothing is written to stdout.
+Ctrl-C stops the wait.
+
+```sh
+clrnd wait <service> --project <PROJECT> --region <REGION>
+clrnd wait --timeout 5m --interval 5s
+```
 
 ## License
 

@@ -50,6 +50,7 @@ func init() {
 		"config file (default: clrnd.yml or clrnd.yaml in the current directory)")
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(waitCmd)
 	rootCmd.AddCommand(renderCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(deployCmd)
