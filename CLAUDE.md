@@ -62,7 +62,7 @@ gofmt -w .              # format
 
 ### internal/cloudrun (the core logic)
 
-- Every API call goes through `Client` ([internal/cloudrun/client.go](internal/cloudrun/client.go)),
+- Cloud Run API calls go through `Client` ([internal/cloudrun/client.go](internal/cloudrun/client.go)),
   which holds the `*run.APIService` plus the target project/region so callers do not pass them
   around. `NewClient(ctx, project, region, opts ...option.ClientOption)` appends `opts` **after**
   the default endpoint option, which is the injection point tests use
@@ -70,6 +70,10 @@ gofmt -w .              # format
   [internal/cloudrun/client_test.go](internal/cloudrun/client_test.go) and `startFakeAPI` in
   [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
   cover them against the fake API rather than leaving them untested.
+  **`VerifyRemote` is the one exception**: it builds its own IAM / Secret Manager clients
+  ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) and takes no `option.ClientOption`,
+  so `clientOptions` does not reach it and its remote path is still untested. Give it the same
+  treatment when that path needs coverage.
   Auth is **Application Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/api/option"
@@ -27,21 +28,27 @@ type recordedRequest struct {
 }
 
 // fakeAPI は Cloud Run Admin API の代わりに使う httptest サーバ。
+// ServeHTTP はサーバの goroutine で走るので、記録は mu で保護し、失敗は Errorf で
+// 報告する (FailNow 系はテスト本体の goroutine からしか呼べない)。
 type fakeAPI struct {
-	t        *testing.T
-	requests []recordedRequest
-	// handler はパスごとの応答を決める。nil なら 404 を返す。
+	t *testing.T
+	// handler はリクエストごとの応答を決める。nil なら 404 を返す。
 	handler func(r *http.Request) (status int, body interface{})
+
+	mu       sync.Mutex
+	requests []recordedRequest
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		f.t.Fatalf("failed to read the request body: %v", err)
+		f.t.Errorf("failed to read the request body: %v", err)
 	}
+	f.mu.Lock()
 	f.requests = append(f.requests, recordedRequest{
 		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: body,
 	})
+	f.mu.Unlock()
 
 	status, payload := http.StatusNotFound, interface{}(googleAPIError(404, "not found"))
 	if f.handler != nil {
@@ -50,8 +57,15 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		f.t.Fatalf("failed to encode the fake response: %v", err)
+		f.t.Errorf("failed to encode the fake response: %v", err)
 	}
+}
+
+// recorded は記録済みリクエストのコピーを返す。
+func (f *fakeAPI) recorded() []recordedRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]recordedRequest(nil), f.requests...)
 }
 
 // googleAPIError は Google API のエラー応答 JSON を組み立てる。
@@ -138,12 +152,13 @@ func TestGetService(t *testing.T) {
 		t.Errorf("GetService() name = %q, want %q", obj.Metadata.Name, "my-svc")
 	}
 
+	got := api.recorded()
 	wantPath := "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
-	if len(api.requests) != 1 || api.requests[0].Path != wantPath {
-		t.Errorf("requests = %+v, want a single GET to %q", api.requests, wantPath)
+	if len(got) != 1 || got[0].Path != wantPath {
+		t.Fatalf("requests = %+v, want a single GET to %q", got, wantPath)
 	}
-	if api.requests[0].Method != http.MethodGet {
-		t.Errorf("method = %q, want GET", api.requests[0].Method)
+	if got[0].Method != http.MethodGet {
+		t.Errorf("method = %q, want GET", got[0].Method)
 	}
 }
 
@@ -224,8 +239,8 @@ func TestPlanRejectsInvalidManifestBeforeCallingTheAPI(t *testing.T) {
 	if err == nil {
 		t.Fatal("Plan() error = nil, want a name mismatch error")
 	}
-	if len(api.requests) != 0 {
-		t.Errorf("requests = %+v, want none (validation happens before the API call)", api.requests)
+	if got := api.recorded(); len(got) != 0 {
+		t.Errorf("requests = %+v, want none (validation happens before the API call)", got)
 	}
 }
 
@@ -304,11 +319,12 @@ func TestApplyReportsServerErrors(t *testing.T) {
 // lastRequest は指定メソッドで最後に受け取ったリクエストを返す。
 func lastRequest(t *testing.T, api *fakeAPI, method string) recordedRequest {
 	t.Helper()
-	for i := len(api.requests) - 1; i >= 0; i-- {
-		if api.requests[i].Method == method {
-			return api.requests[i]
+	got := api.recorded()
+	for i := len(got) - 1; i >= 0; i-- {
+		if got[i].Method == method {
+			return got[i]
 		}
 	}
-	t.Fatalf("no %s request was recorded, got %+v", method, api.requests)
+	t.Fatalf("no %s request was recorded, got %+v", method, got)
 	return recordedRequest{}
 }

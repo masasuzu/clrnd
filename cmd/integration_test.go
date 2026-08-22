@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/masasuzu/clrnd/internal/config"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"google.golang.org/api/option"
 )
 
@@ -52,14 +54,45 @@ func startFakeAPI(t *testing.T, handler http.HandlerFunc) {
 	t.Cleanup(func() { clientOptions = saved })
 }
 
+// resetFlags は cobra が巻き戻さないフラグ値を既定へ戻す。フラグは package 変数に
+// bind されているため、これをしないと前のテストの値が次のテストへ漏れる。
+func resetFlags(c *cobra.Command) {
+	c.Flags().VisitAll(func(f *pflag.Flag) {
+		// StringArray などは Set が追記になるので、スライス系は Replace で空にする。
+		if sv, ok := f.Value.(pflag.SliceValue); ok {
+			_ = sv.Replace(nil)
+		} else {
+			_ = f.Value.Set(f.DefValue)
+		}
+		f.Changed = false
+	})
+	for _, sub := range c.Commands() {
+		resetFlags(sub)
+	}
+}
+
+// clearTargetEnv は gcloud 互換の環境変数を空にする。開発者や CI の環境に
+// CLOUDSDK_CORE_PROJECT などが設定されていてもテストの結果が変わらないようにする。
+func clearTargetEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{envProjectPrimary, envProjectSecondary, envRegionPrimary, envRegionSecondary} {
+		t.Setenv(key, "")
+	}
+}
+
 // executeRoot はルートコマンドを引数付きで実行し、stdout/stderr を返す。
-// rootCmd はパッケージ変数なので、テスト間で状態が漏れないよう cfg / configPath を退避する。
-// (cobra はフラグ変数を巻き戻さないため、各テストは必要なフラグを毎回明示的に渡すこと。)
+// rootCmd はパッケージ変数なので、テスト間で状態が漏れないよう cfg / フラグ / 環境変数を
+// 実行のたびに初期化する。
 func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	savedCfg, savedDir, savedPath := cfg, configDir, configPath
-	t.Cleanup(func() { cfg, configDir, configPath = savedCfg, savedDir, savedPath })
-	cfg, configDir, configPath = &config.Config{}, "", ""
+	clearTargetEnv(t)
+
+	savedCfg, savedDir := cfg, configDir
+	t.Cleanup(func() { cfg, configDir = savedCfg, savedDir })
+	cfg, configDir = &config.Config{}, ""
+
+	resetFlags(rootCmd)
+	t.Cleanup(func() { resetFlags(rootCmd) })
 
 	var out, errOut bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -68,7 +101,8 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Cleanup(func() {
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
-		rootCmd.SetArgs(nil)
+		// nil に戻すと cobra が os.Args[1:] (= go test のフラグ) を読んでしまう。
+		rootCmd.SetArgs([]string{})
 	})
 
 	err = rootCmd.ExecuteContext(context.Background())
@@ -119,7 +153,9 @@ func TestDiffEndToEnd(t *testing.T) {
 // TestDiffUsesConfigFile は config ファイルだけで project/region/service/manifest が
 // 解決できることを確認する。
 func TestDiffUsesConfigFile(t *testing.T) {
+	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(liveServiceJSON))
 	})
@@ -134,10 +170,16 @@ func TestDiffUsesConfigFile(t *testing.T) {
 		t.Fatalf("failed to write the config: %v", err)
 	}
 
-	// フラグ由来の値がテスト間で残らないよう、project/region は明示的に空へ戻す。
-	stdout, _, err := executeRoot(t, "diff", "--config", configFile, "--project", "", "--region", "")
+	// 位置引数もフラグも渡さない: service / manifest / project / region がすべて
+	// config から解決されることを確認する。
+	stdout, _, err := executeRoot(t, "diff", "--config", configFile)
 	if err != nil {
 		t.Fatalf("diff error = %v", err)
+	}
+	// config の project がリクエストパスに反映されている (環境変数由来ではない)。
+	wantPath := "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
+	if gotPath != wantPath {
+		t.Errorf("requested path = %q, want %q", gotPath, wantPath)
 	}
 	if !strings.Contains(stdout, "+      - image: gcr.io/project/image:new") {
 		t.Errorf("diff stdout = %q, want the image change", stdout)

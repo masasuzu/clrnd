@@ -44,6 +44,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
 	// 上書き事故を防ぐため、書き込み前に既存ファイルをまとめて確認する。
 	manifestExisted := fileExists(initManifest)
 	if !initForce {
