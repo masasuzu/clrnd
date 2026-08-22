@@ -242,6 +242,106 @@ func TestWaitReportsChangesOnce(t *testing.T) {
 	}
 }
 
+func TestWaitDeletedReturnsWhenTheServiceIsGone(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls <= 2 {
+			return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
+		}
+		return http.StatusNotFound, googleAPIError(404, "not found")
+	})
+
+	var updates []string
+	opts := fastWait(0)
+	opts.OnUpdate = func(message string) { updates = append(updates, message) }
+
+	if err := c.WaitDeleted(context.Background(), "my-svc", opts); err != nil {
+		t.Fatalf("WaitDeleted() error = %v", err)
+	}
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 3 {
+		t.Errorf("polled %d times, want 3", got)
+	}
+	// まだ残っていることは 1 度だけ知らせる。
+	if len(updates) != 1 || updates[0] != "still present" {
+		t.Errorf("updates = %v, want a single 'still present'", updates)
+	}
+}
+
+func TestWaitDeletedTimesOut(t *testing.T) {
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
+	})
+
+	err := c.WaitDeleted(context.Background(), "my-svc", WaitOptions{
+		Timeout: 50 * time.Millisecond, Interval: time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("WaitDeleted() error = nil, want a timeout")
+	}
+	if !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "to be deleted") {
+		t.Errorf("WaitDeleted() error = %v", err)
+	}
+}
+
+func TestWaitDeletedToleratesTransientErrors(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls == 1 {
+			return http.StatusServiceUnavailable, googleAPIError(503, "backend error")
+		}
+		return http.StatusNotFound, googleAPIError(404, "not found")
+	})
+
+	var retries []error
+	opts := fastWait(0)
+	opts.OnRetry = func(err error) { retries = append(retries, err) }
+
+	if err := c.WaitDeleted(context.Background(), "my-svc", opts); err != nil {
+		t.Fatalf("WaitDeleted() error = %v, want the transient failure to be retried", err)
+	}
+	if len(retries) != 1 {
+		t.Errorf("OnRetry called %d times, want 1", len(retries))
+	}
+}
+
+func TestNextWaitInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{name: "grows from the default", in: 2 * time.Second, want: 3 * time.Second},
+		{name: "grows", in: 4 * time.Second, want: 6 * time.Second},
+		{name: "clamps to the cap", in: 12 * time.Second, want: maxWaitInterval},
+		{name: "stays at the cap", in: maxWaitInterval, want: maxWaitInterval},
+		{
+			// 上限より長い指定は縮めない。--interval 60s を 15s に切り下げると、
+			// 呼び出しを減らしたいという指定に反して増やしてしまう。
+			name: "keeps an interval longer than the cap",
+			in:   60 * time.Second,
+			want: 60 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextWaitInterval(tt.in); got != tt.want {
+				t.Errorf("nextWaitInterval(%s) = %s, want %s", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWaitProgress(t *testing.T) {
 	tests := []struct {
 		name       string

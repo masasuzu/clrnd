@@ -166,6 +166,7 @@ clrnd [command]
 | `wait`   | Wait until a service is ready.                            |
 | `revisions` | List the revisions of a service.                       |
 | `rollback` | Send traffic back to an earlier revision.                |
+| `delete` | Delete a service.                                         |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -305,6 +306,37 @@ clrnd deploy my-service service.yaml --project my-project --region asia-northeas
 # Validate against the server without changing anything
 clrnd deploy my-service service.yaml --project my-project --region asia-northeast1 --dry-run
 ```
+
+### delete
+
+Delete a Cloud Run service. **This cannot be undone**: the service, all of its revisions, and its
+URL go away.
+
+What is about to be deleted is printed to stderr and confirmed first. The project and region are
+always shown, because the realistic accident is deleting the right service name in the wrong
+project.
+
+```
+About to delete:
+  service: my-service
+  project: my-project
+  region:  asia-northeast1
+  url:     https://my-service-xxxx.a.run.app
+Delete service "my-service"? This cannot be undone. [y/N]:
+```
+
+```sh
+clrnd delete <service> --project <PROJECT> --region <REGION>
+clrnd delete my-service --auto-approve   # CI/CD: skip the prompt
+clrnd delete my-service --dry-run        # validate the request, delete nothing
+```
+
+Without `--auto-approve`, a non-interactive run (no TTY, e.g. a pipeline) refuses to delete and
+exits with an error. A service that does not exist fails before any prompt.
+
+Cloud Run deletes asynchronously — the request is accepted while the service is still readable for
+a little longer — so `delete` waits until it is actually gone. Pass `--no-wait` to return as soon
+as the request is accepted, or `--timeout` to change how long it waits (default `10m`).
 
 ### init
 

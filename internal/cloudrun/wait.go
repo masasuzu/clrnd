@@ -46,15 +46,7 @@ type WaitOptions struct {
 //
 // 戻り値の *Status は最後に観測した状態で、エラー時も (取得できていれば) 返す。
 func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*Status, error) {
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = defaultWaitTimeout
-	}
-	interval := opts.Interval
-	if interval <= 0 {
-		interval = defaultWaitInterval
-	}
-
+	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -103,13 +95,93 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 		case <-time.After(interval):
 		}
 
-		if interval < maxWaitInterval {
-			interval = interval * waitBackoffNum / waitBackoffDen
-			if interval > maxWaitInterval {
-				interval = maxWaitInterval
+		interval = nextWaitInterval(interval)
+	}
+}
+
+// WaitDeleted はサービスが実際に消えるまで待つ。Cloud Run の削除は非同期で、
+// DELETE が受理された時点ではまだ取得できてしまうため、これが無いと
+// 「削除してから作り直す」ような手順が競合する。
+func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptions) error {
+	timeout, interval := waitDefaults(opts)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastErr error
+	notified := false
+	for {
+		_, err := c.GetService(waitCtx, service)
+		switch {
+		case isNotFound(err):
+			return nil
+		case err == nil:
+			lastErr = nil
+			if !notified {
+				notified = true
+				if opts.OnUpdate != nil {
+					opts.OnUpdate("still present")
+				}
+			}
+		case waitCtx.Err() != nil:
+			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
+		default:
+			// 一時的な失敗の可能性がある。Wait と同じくタイムアウトまで再試行する。
+			lastErr = err
+			if opts.OnRetry != nil {
+				opts.OnRetry(err)
 			}
 		}
+
+		select {
+		case <-waitCtx.Done():
+			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
+		case <-time.After(interval):
+		}
+		interval = nextWaitInterval(interval)
 	}
+}
+
+// waitDeleteInterrupted は削除待ちが打ち切られた理由を組み立てる。
+func waitDeleteInterrupted(parent, waitCtx context.Context, service string,
+	timeout time.Duration, lastErr error) error {
+	if parent.Err() != nil {
+		return fmt.Errorf("interrupted while waiting for service %q to be deleted: %w", service, parent.Err())
+	}
+	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		if lastErr != nil {
+			return fmt.Errorf("timed out after %s waiting for service %q to be deleted; the last poll failed: %w",
+				timeout, service, lastErr)
+		}
+		return fmt.Errorf("timed out after %s waiting for service %q to be deleted", timeout, service)
+	}
+	return fmt.Errorf("stopped waiting for service %q to be deleted: %w", service, waitCtx.Err())
+}
+
+// waitDefaults は未指定のパラメータを既定値で埋める。
+func waitDefaults(opts WaitOptions) (timeout, interval time.Duration) {
+	timeout, interval = opts.Timeout, opts.Interval
+	if timeout <= 0 {
+		timeout = defaultWaitTimeout
+	}
+	if interval <= 0 {
+		interval = defaultWaitInterval
+	}
+	return timeout, interval
+}
+
+// nextWaitInterval は次のポーリング間隔を返す。上限まで少しずつ伸ばす。
+// 利用者が上限より長い間隔を指定している場合はそれを尊重し、縮めない
+// (--interval 60s は「API を叩く回数を減らしたい」という意思表示なので、
+// それを 15s に切り下げるとかえって呼び出しを増やしてしまう)。
+func nextWaitInterval(interval time.Duration) time.Duration {
+	if interval >= maxWaitInterval {
+		return interval
+	}
+	next := interval * waitBackoffNum / waitBackoffDen
+	if next > maxWaitInterval {
+		return maxWaitInterval
+	}
+	return next
 }
 
 // waitDone は現在の状態で待機を終えてよいかを返す。done が true でエラーが nil なら成功、
