@@ -165,6 +165,7 @@ clrnd [command]
 | `status` | Show the current status of a service.                     |
 | `wait`   | Wait until a service is ready.                            |
 | `revisions` | List the revisions of a service.                       |
+| `rollback` | Send traffic back to an earlier revision.                |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -401,6 +402,22 @@ my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z 
 ```sh
 clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 ```
+
+### rollback
+
+Send all traffic back to an earlier revision. Without `--revision`, the revision just before the
+one currently serving is chosen.
+
+Only the traffic split changes: `spec.template` is untouched, so **no new revision is created**.
+Traffic tags are kept (pinned at 0%) so a rollback does not remove tag URLs.
+
+```sh
+clrnd rollback <service> --project <PROJECT> --region <REGION>
+clrnd rollback --revision my-service-00006-def --auto-approve
+```
+
+The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
+`--no-wait` is given. `--dry-run`, `--auto-approve`, and `--timeout` behave as they do for `deploy`.
 
 ### wait
 

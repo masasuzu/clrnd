@@ -33,6 +33,10 @@ type Revision struct {
 	Tags []string `json:"tags,omitempty"`
 }
 
+// IsReady はリビジョンが Ready かを返す。トラフィックを失った古いリビジョンも
+// Ready=True (Reason=Retired) のままなので、これは「使える版か」の判定になる。
+func (r Revision) IsReady() bool { return r.Ready == conditionTrue }
+
 // Revisions はリビジョン一覧。表示のために型を付けている。
 type Revisions []Revision
 

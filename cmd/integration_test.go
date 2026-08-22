@@ -773,6 +773,124 @@ func TestRevisionsRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
+// rollbackServiceJSON は latestRevision に 100% 振られている live サービス。
+const rollbackServiceJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 7},
+  "spec": {
+    "template": {"spec": {"containers": [{"image": "gcr.io/project/image:new"}]}},
+    "traffic": [{"latestRevision": true, "percent": 100}]
+  },
+  "status": {
+    "observedGeneration": 7,
+    "conditions": [{"type": "Ready", "status": "True"}],
+    "traffic": [{"revisionName": "my-svc-00007-abc", "percent": 100, "latestRevision": true}]
+  }
+}`
+
+// startRollbackAPI はサービス・リビジョン一覧・適用に応えるフェイク API を立て、
+// PUT の body を拾えるようにする。
+func startRollbackAPI(t *testing.T) func() []byte {
+	t.Helper()
+	var mu sync.Mutex
+	var put []byte
+
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			put = body
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			_, _ = w.Write([]byte(revisionsJSON))
+			return
+		}
+		_, _ = w.Write([]byte(rollbackServiceJSON))
+	})
+
+	return func() []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return put
+	}
+}
+
+// TestRollbackEndToEnd は、既定でひとつ前のリビジョンへ 100% 振り直すことを確認する。
+func TestRollbackEndToEnd(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	stdout, _, err := executeRoot(t, "rollback", "my-svc", "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("rollback error = %v", err)
+	}
+	// 差分は stdout に出る。
+	if !strings.Contains(stdout, "my-svc-00006-def") {
+		t.Errorf("rollback stdout = %q, want the diff to name the target revision", stdout)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(sentBody(), &sent); err != nil {
+		t.Fatalf("failed to parse the applied body: %v", err)
+	}
+	spec, _ := sent["spec"].(map[string]any)
+	traffic, _ := spec["traffic"].([]any)
+	if len(traffic) != 1 {
+		t.Fatalf("spec.traffic = %v, want a single pinned target", spec["traffic"])
+	}
+	target, _ := traffic[0].(map[string]any)
+	if target["revisionName"] != "my-svc-00006-def" || target["percent"] != float64(100) {
+		t.Errorf("spec.traffic[0] = %v, want 100%% to my-svc-00006-def", target)
+	}
+	if target["latestRevision"] == true {
+		t.Error("spec.traffic[0].latestRevision = true, want the traffic pinned")
+	}
+}
+
+// TestRollbackToAnExplicitRevision は --revision の指定が使われることを確認する。
+func TestRollbackToAnExplicitRevision(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	if _, _, err := executeRoot(t, "rollback", "my-svc", "--revision", "my-svc-00007-abc",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("rollback error = %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(sentBody(), &sent); err != nil {
+		t.Fatalf("failed to parse the applied body: %v", err)
+	}
+	spec, _ := sent["spec"].(map[string]any)
+	traffic, _ := spec["traffic"].([]any)
+	target, _ := traffic[0].(map[string]any)
+	if target["revisionName"] != "my-svc-00007-abc" {
+		t.Errorf("spec.traffic[0] = %v, want the requested revision", target)
+	}
+}
+
+// TestRollbackRejectsAnUnknownRevision は、このサービスに属さないリビジョンを
+// 適用前に弾くことを確認する。
+func TestRollbackRejectsAnUnknownRevision(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	_, _, err := executeRoot(t, "rollback", "my-svc", "--revision", "other-00001-xyz",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("rollback error = nil, want an unknown revision error")
+	}
+	if !strings.Contains(err.Error(), "does not belong to this service") {
+		t.Errorf("rollback error = %v", err)
+	}
+	if len(sentBody()) != 0 {
+		t.Error("rollback applied something despite the bad revision")
+	}
+}
+
 // TestVersion は --version がバージョンを出すことを確認する。
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")

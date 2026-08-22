@@ -64,12 +64,22 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 	if err := validate(svc, service); err != nil {
 		return nil, err
 	}
+	return c.PlanService(ctx, service, svc)
+}
+
+// PlanService は desired のサービス定義をそのまま使って live との差分を算出する。
+// マニフェストを経由しない rollback や refresh のように、live を編集して適用する
+// 経路のための入口。desired の metadata.namespace は送信先に合わせて書き換える。
+func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service) (*DeployPlan, error) {
+	if desired == nil {
+		return nil, errors.New("no desired service to plan")
+	}
 	// 送信先プロジェクトと body の namespace を一致させる。
-	if svc.Metadata != nil {
-		svc.Metadata.Namespace = c.project
+	if desired.Metadata != nil {
+		desired.Metadata.Namespace = c.project
 	}
 
-	plan := &DeployPlan{Service: service, client: c, desired: svc}
+	plan := &DeployPlan{Service: service, client: c, desired: desired}
 
 	current, getErr := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
 	if getErr != nil {
@@ -81,9 +91,11 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 		current = nil
 	}
 
-	if plan.Diff, err = compareServices(current, svc, "live/"+service, service); err != nil {
+	diff, err := compareServices(current, desired, "live/"+service, service)
+	if err != nil {
 		return nil, err
 	}
+	plan.Diff = diff
 	return plan, nil
 }
 

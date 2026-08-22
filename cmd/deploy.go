@@ -3,20 +3,16 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
 )
 
 var (
-	deployProject     string
-	deployRegion      string
-	deployDryRun      bool
-	deployAutoApprove bool
-	deployNoWait      bool
-	deployTimeout     time.Duration
-	deployTfstate     []string
+	deployProject string
+	deployRegion  string
+	deployTfstate []string
+	deployApply   applyOptions
 )
 
 var deployCmd = &cobra.Command{
@@ -36,10 +32,7 @@ var deployCmd = &cobra.Command{
 func init() {
 	addTargetFlags(deployCmd, &deployProject, &deployRegion)
 	addManifestFlags(deployCmd, &deployTfstate)
-	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "validate the request server-side without applying changes")
-	deployCmd.Flags().BoolVar(&deployAutoApprove, "auto-approve", false, "apply without the interactive confirmation prompt (for CI/CD)")
-	deployCmd.Flags().BoolVar(&deployNoWait, "no-wait", false, "return as soon as the request is accepted, without waiting for the rollout")
-	deployCmd.Flags().DurationVar(&deployTimeout, "timeout", defaultRolloutTimeout, "how long to wait for the rollout to finish")
+	addApplyFlags(deployCmd, &deployApply)
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -84,43 +77,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 差分を表示する (stdout)。差分が無ければ通常は何もしないが、--dry-run は
-	// サーバ側検証を行うため続行する。
-	if plan.Diff == "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "No changes.")
-		if !deployDryRun {
-			return nil
-		}
-		_, err := plan.Apply(ctx, deployDryRun)
-		return err
-	}
-	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
-
-	// dry-run でなければ確認する。--auto-approve でスキップ。
-	if !deployDryRun && !deployAutoApprove {
-		if !isInteractive(cmd) {
-			return fmt.Errorf("refusing to apply without confirmation: re-run with --auto-approve (no interactive terminal)")
-		}
-		ok, err := confirm(ctx, cmd, "Apply these changes?")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			fmt.Fprintln(cmd.ErrOrStderr(), "Aborted.")
-			return nil
-		}
-	}
-
-	applied, err := plan.Apply(ctx, deployDryRun)
-	if err != nil {
-		return err
-	}
-	// --dry-run はサーバ側検証だけで何も変わらないので待たない。
-	if deployDryRun || deployNoWait {
-		return nil
-	}
-	return waitForRollout(cmd, client, service, cloudrun.WaitOptions{
-		Timeout:    deployTimeout,
-		Generation: cloudrun.AppliedGeneration(applied),
-	})
+	deployApply.Prompt = "Apply these changes?"
+	return applyPlan(cmd, client, plan, deployApply)
 }
