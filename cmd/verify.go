@@ -61,6 +61,19 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// リビジョン名の固定は文法上は正しいが、次にテンプレートを変えたときの deploy が
+	// 必ず失敗するので警告する (失敗にはしない: 使い捨てのデプロイでは正しい書き方)。
+	revision, err := cloudrun.RevisionName(manifest)
+	if err != nil {
+		return err
+	}
+	if revision != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: spec.template.metadata.name pins the revision name to %q; "+
+				"a later deploy that changes the template will fail because Cloud Run "+
+				"cannot recreate an existing revision\n", revision)
+	}
+
 	if verifyLocalOnly {
 		return nil
 	}

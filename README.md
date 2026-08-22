@@ -170,6 +170,16 @@ All commands that take a `<service>` and `<manifest>` expect the service name to
 manifest's `metadata.name`. A typical workflow is `init` → edit → `render` → `verify` → `diff` →
 `deploy`.
 
+### Revision names
+
+clrnd does not manage revision names. `init` omits `spec.template.metadata.name` from the manifest
+it writes, and `diff`/`deploy` ignore the name Cloud Run reports for the live revision, so Cloud Run
+generates a fresh revision name on every deploy.
+
+You may still pin a name yourself. If you do, it shows up in `diff` like any other field, and
+`verify` warns you: Cloud Run cannot recreate an existing revision, so the next deploy that changes
+the template will be rejected. Pinning is only safe for a one-shot deploy.
+
 `--project` and `--region` may be omitted when the corresponding environment variable is set
 (gcloud-compatible): project falls back to `$CLOUDSDK_CORE_PROJECT` then `$GOOGLE_CLOUD_PROJECT`,
 region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag always wins.

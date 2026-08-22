@@ -221,7 +221,22 @@ func TestToManifestStripsServerManagedFields(t *testing.T) {
 	}
 }
 
-func TestNormalizeStripsServerManagedFields(t *testing.T) {
+// normalize はテスト用に「ローカルのマニフェストを live 側と同じ正規化にそろえる」処理。
+// かつて Normalize として公開していたが、今は Compare がこの経路を内包している。
+func normalize(t *testing.T, manifest []byte) []byte {
+	t.Helper()
+	svc, err := parseManifest(manifest)
+	if err != nil {
+		t.Fatalf("parseManifest() error = %v", err)
+	}
+	out, err := ToManifest(svc)
+	if err != nil {
+		t.Fatalf("ToManifest() error = %v", err)
+	}
+	return out
+}
+
+func TestNormalizationStripsServerManagedFields(t *testing.T) {
 	manifest := `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -234,24 +249,28 @@ metadata:
 status:
   observedGeneration: 2
 `
-	out, err := Normalize([]byte(manifest))
-	if err != nil {
-		t.Fatalf("Normalize() error = %v", err)
-	}
-	got := string(out)
+	got := string(normalize(t, []byte(manifest)))
 
 	for _, stripped := range []string{"status", "abc-uid", "operation-id", "namespace", "observedGeneration"} {
 		if strings.Contains(got, stripped) {
-			t.Errorf("Normalize() output should not contain %q:\n%s", stripped, got)
+			t.Errorf("normalized output should not contain %q:\n%s", stripped, got)
 		}
 	}
 	if !strings.Contains(got, "run.googleapis.com/ingress: all") {
-		t.Errorf("Normalize() should keep non-managed annotations:\n%s", got)
+		t.Errorf("normalization should keep non-managed annotations:\n%s", got)
 	}
 }
 
-func TestNormalizeRejectsUnknownField(t *testing.T) {
-	// Normalize は parseManifest(strict) を通すため、diff も deploy と同様に未知
+func TestNormalizationIsIdempotent(t *testing.T) {
+	first := normalize(t, []byte(validManifest))
+	second := normalize(t, first)
+	if string(first) != string(second) {
+		t.Errorf("normalization is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestCompareRejectsUnknownField(t *testing.T) {
+	// Compare は parseManifest(strict) を通すため、diff も deploy と同様に未知
 	// フィールド (typo) を弾く。これで両コマンドの挙動が一致する。
 	manifest := []byte(`apiVersion: serving.knative.dev/v1
 kind: Service
@@ -264,43 +283,156 @@ spec:
       containers:
       - image: gcr.io/x/y
 `)
-	if _, err := Normalize(manifest); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("Normalize() error = %v, want unknown field", err)
+	_, err := Compare(nil, manifest, "live", "local")
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Compare() error = %v, want unknown field", err)
 	}
 }
 
-func TestNormalizeMatchesToManifest(t *testing.T) {
-	// diff (Normalize) と deploy (ToManifest(parseManifest)) が同一出力になることを保証する。
-	manifest := []byte(validManifest)
-	viaNormalize, err := Normalize(manifest)
-	if err != nil {
-		t.Fatalf("Normalize() error = %v", err)
+func TestCompareIgnoresServerManagedFieldsInTheManifest(t *testing.T) {
+	// ローカルのマニフェストにサーバ管理フィールドが残っていても、live 側と同じ正規化を
+	// 通すので差分にはならない。
+	manifest := []byte(`apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+  uid: abc-uid
+  generation: 3
+  annotations:
+    serving.knative.dev/creator: someone@example.com
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/project/image:tag
+status:
+  observedGeneration: 3
+`)
+	live := &run.Service{
+		ApiVersion: manifestAPIVersion,
+		Kind:       manifestKind,
+		Metadata:   &run.ObjectMeta{Name: "my-svc", Uid: "other-uid", Generation: 9},
+		Spec: &run.ServiceSpec{Template: &run.RevisionTemplate{
+			Spec: &run.RevisionSpec{Containers: []*run.Container{{Image: "gcr.io/project/image:tag"}}},
+		}},
+		Status: &run.ServiceStatus{ObservedGeneration: 9},
 	}
-	svc, err := parseManifest(manifest)
+
+	got, err := Compare(live, manifest, "live", "local")
 	if err != nil {
-		t.Fatalf("parseManifest() error = %v", err)
+		t.Fatalf("Compare() error = %v", err)
 	}
-	viaToManifest, err := ToManifest(svc)
-	if err != nil {
-		t.Fatalf("ToManifest() error = %v", err)
-	}
-	if string(viaNormalize) != string(viaToManifest) {
-		t.Errorf("Normalize and ToManifest(parseManifest) diverge:\n--- Normalize ---\n%s\n--- ToManifest ---\n%s", viaNormalize, viaToManifest)
+	if got != "" {
+		t.Errorf("Compare() = %q, want empty", got)
 	}
 }
 
-func TestNormalizeIsIdempotent(t *testing.T) {
-	manifest := []byte(validManifest)
-	first, err := Normalize(manifest)
+func TestCompareTreatsMissingServiceAsFullAddition(t *testing.T) {
+	got, err := Compare(nil, []byte(validManifest), "live/my-svc", "my-svc")
 	if err != nil {
-		t.Fatalf("Normalize() error = %v", err)
+		t.Fatalf("Compare() error = %v", err)
 	}
-	second, err := Normalize(first)
+	if !strings.Contains(got, "+kind: Service") {
+		t.Errorf("Compare() = %q, want the whole manifest added", got)
+	}
+}
+
+func TestRevisionName(t *testing.T) {
+	tests := []struct {
+		name     string
+		manifest string
+		want     string
+	}{
+		{name: "not pinned", manifest: validManifest, want: ""},
+		{
+			name: "pinned",
+			manifest: `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    metadata:
+      name: my-svc-00007-abc
+    spec:
+      containers:
+      - image: gcr.io/project/image:tag
+`,
+			want: "my-svc-00007-abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RevisionName([]byte(tt.manifest))
+			if err != nil {
+				t.Fatalf("RevisionName() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("RevisionName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripRevisionName(t *testing.T) {
+	svc := &run.Service{Spec: &run.ServiceSpec{Template: &run.RevisionTemplate{
+		Metadata: &run.ObjectMeta{Name: "my-svc-00007-abc", Annotations: map[string]string{"a": "b"}},
+	}}}
+	StripRevisionName(svc)
+	if got := revisionName(svc); got != "" {
+		t.Errorf("revisionName() = %q after StripRevisionName, want empty", got)
+	}
+	// 名前以外の metadata は残す。
+	if svc.Spec.Template.Metadata.Annotations["a"] != "b" {
+		t.Error("StripRevisionName should keep other metadata")
+	}
+
+	// spec.template.metadata が無くても panic しない。
+	StripRevisionName(&run.Service{})
+	StripRevisionName(nil)
+}
+
+// TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt は、リビジョン名を書いていない
+// マニフェストに対して、live 側のサーバ採番されたリビジョン名が差分にならないことを
+// 確認する。これが無いと init 直後の diff に消えない差分が出続ける。
+func TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt(t *testing.T) {
+	live := liveService("gcr.io/project/image:tag")
+	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
+
+	got, err := Compare(live, []byte(validManifest), "live", "local")
 	if err != nil {
-		t.Fatalf("Normalize() error = %v", err)
+		t.Fatalf("Compare() error = %v", err)
 	}
-	if string(first) != string(second) {
-		t.Errorf("Normalize is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	if got != "" {
+		t.Errorf("Compare() = %q, want empty (the live revision name must be ignored)", got)
+	}
+}
+
+// TestCompareShowsRevisionNameWhenManifestPinsIt は、マニフェストが明示している場合は
+// リビジョン名の違いを差分として見せることを確認する。
+func TestCompareShowsRevisionNameWhenManifestPinsIt(t *testing.T) {
+	live := liveService("gcr.io/project/image:tag")
+	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
+
+	manifest := []byte(`apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    metadata:
+      name: my-svc-00008-def
+    spec:
+      containers:
+      - image: gcr.io/project/image:tag
+`)
+	got, err := Compare(live, manifest, "live", "local")
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if !strings.Contains(got, "-      name: my-svc-00007-abc") ||
+		!strings.Contains(got, "+      name: my-svc-00008-def") {
+		t.Errorf("Compare() = %q, want the pinned revision name change", got)
 	}
 }
 

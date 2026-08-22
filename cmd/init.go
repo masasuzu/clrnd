@@ -65,6 +65,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// live のリビジョン名をそのまま残すと、テンプレートを変えた 2 回目の deploy が
+	// 「同名リビジョンは再作成できない」で失敗する。scaffold では落として自動採番に任せる。
+	cloudrun.StripRevisionName(obj)
 	manifest, err := cloudrun.ToManifest(obj)
 	if err != nil {
 		return err

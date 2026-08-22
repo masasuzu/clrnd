@@ -69,11 +69,6 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 		svc.Metadata.Namespace = c.project
 	}
 
-	desiredYAML, err := ToManifest(svc)
-	if err != nil {
-		return nil, err
-	}
-
 	plan := &DeployPlan{Service: service, client: c, desired: svc}
 
 	current, getErr := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
@@ -83,17 +78,10 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 		}
 		// 未存在: 新規作成。current 側は空として diff を取る。
 		plan.Create = true
-		if plan.Diff, err = Diff(nil, desiredYAML, "live/"+service, service); err != nil {
-			return nil, err
-		}
-		return plan, nil
+		current = nil
 	}
 
-	currentYAML, err := ToManifest(current)
-	if err != nil {
-		return nil, err
-	}
-	if plan.Diff, err = Diff(currentYAML, desiredYAML, "live/"+service, service); err != nil {
+	if plan.Diff, err = compareServices(current, svc, "live/"+service, service); err != nil {
 		return nil, err
 	}
 	return plan, nil
@@ -153,15 +141,42 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 	return manifest, nil
 }
 
-// Normalize はローカルのマニフェスト YAML を、リモート取得時 (ToManifest) や deploy の
-// Plan と同じ正規化 (厳密パース・read-only フィールド除去・キー整列) にそろえる。
-// これにより `clrnd diff` と `clrnd deploy` が同一の差分を表示する。
-func Normalize(manifest []byte) ([]byte, error) {
-	svc, err := parseManifest(manifest)
+// Compare は live サービス (current) とローカルのマニフェストを同じ正規化にそろえて
+// 統一 diff を返す。current が nil ならサービス未存在として、desired 全体が追加された
+// diff になる。`clrnd diff` と `clrnd deploy` が同一の差分を表示するための共通経路。
+// マニフェストは厳密にパースするので、未知フィールドはここでエラーになる。
+func Compare(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
+	desired, err := parseManifest(manifest)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return ToManifest(svc)
+	return compareServices(current, desired, currentName, desiredName)
+}
+
+// compareServices は Compare と Plan が共有する比較の実装。
+func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
+	alignRevisionName(current, desired)
+
+	desiredYAML, err := ToManifest(desired)
+	if err != nil {
+		return "", err
+	}
+
+	var currentYAML []byte
+	if current != nil {
+		if currentYAML, err = ToManifest(current); err != nil {
+			return "", err
+		}
+	}
+	return Diff(currentYAML, desiredYAML, currentName, desiredName)
+}
+
+// CheckSyntax はマニフェストが run.Service として厳密にパースできるかだけを確認する。
+// API アクセスを伴う処理の前にローカルの問題を先に出すために使う (Validate と違い、
+// サービス名の一致や必須フィールドは見ない)。
+func CheckSyntax(manifest []byte) error {
+	_, err := parseManifest(manifest)
+	return err
 }
 
 // Validate はローカルのマニフェストが Cloud Run のサービス定義として妥当かを検証する。
@@ -221,10 +236,60 @@ func validate(svc *run.Service, service string) error {
 // templateSpec はサービス定義の spec.template.spec (RevisionSpec) を nil セーフに取り出す。
 // コンテナ・サービスアカウント・ボリュームなど template 配下を見る処理で共有する。
 func templateSpec(svc *run.Service) *run.RevisionSpec {
-	if svc.Spec == nil || svc.Spec.Template == nil {
+	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
 		return nil
 	}
 	return svc.Spec.Template.Spec
+}
+
+// templateMeta はサービス定義の spec.template.metadata を nil セーフに取り出す。
+func templateMeta(svc *run.Service) *run.ObjectMeta {
+	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
+		return nil
+	}
+	return svc.Spec.Template.Metadata
+}
+
+// revisionName は spec.template.metadata.name (リビジョン名) を nil セーフに取り出す。
+func revisionName(svc *run.Service) string {
+	meta := templateMeta(svc)
+	if meta == nil {
+		return ""
+	}
+	return meta.Name
+}
+
+// RevisionName はマニフェストが固定しているリビジョン名を返す。指定が無ければ空文字列。
+func RevisionName(manifest []byte) (string, error) {
+	svc, err := parseManifest(manifest)
+	if err != nil {
+		return "", err
+	}
+	return revisionName(svc), nil
+}
+
+// StripRevisionName は spec.template.metadata.name (リビジョン名) を取り除く。
+// Cloud Run はリビジョン名を省略するとサーバ側で自動採番するが、明示すると同名リビジョン
+// の再作成ができない。live から起こしたマニフェストにそのまま残すと、テンプレートを変えた
+// 2 回目以降の deploy が失敗するため、init が scaffold するマニフェストからは落とす。
+func StripRevisionName(svc *run.Service) {
+	if meta := templateMeta(svc); meta != nil {
+		meta.Name = ""
+	}
+}
+
+// alignRevisionName は desired がリビジョン名を指定していないとき、比較対象の current から
+// もリビジョン名を取り除く (current を書き換える)。
+//
+// Cloud Run は取得時に必ず実際のリビジョン名を埋めて返すため、ローカルが指定していない
+// 限りこれはサーバ管理フィールドと同じ扱いにするのが正しい。そうしないと、リビジョン名を
+// 書かないマニフェストでは永久に消えない差分が diff に出続ける。
+// ローカルが明示している場合は両側に残し、差分として見せる。
+func alignRevisionName(current, desired *run.Service) {
+	if current == nil || revisionName(desired) != "" {
+		return
+	}
+	StripRevisionName(current)
 }
 
 // serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。
@@ -271,6 +336,12 @@ func sanitizeMap(m map[string]interface{}) {
 			if tmeta, ok := tmpl["metadata"].(map[string]interface{}); ok {
 				deleteMapKeys(tmeta, "annotations", serverManagedAnnotations)
 				deleteMapKeys(tmeta, "labels", serverManagedLabels)
+				// 中身が空になった metadata は出力しない。ローカルのマニフェストには
+				// 通常 spec.template.metadata 自体が無いので、空オブジェクトを残すと
+				// "metadata: {}" が消えない差分として出続ける。
+				if len(tmeta) == 0 {
+					delete(tmpl, "metadata")
+				}
 			}
 		}
 	}
