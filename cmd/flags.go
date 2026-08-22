@@ -120,14 +120,35 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 }
 
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
-func confirm(cmd *cobra.Command, prompt string) (bool, error) {
+// stdin の読み取りは中断できないため goroutine に逃がし、ctx が cancel されたら
+// (Ctrl-C など) 待たずに戻る。そうしないとプロンプト表示中は Ctrl-C が効かない。
+func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, error) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
-	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, err
+
+	type answer struct {
+		line string
+		err  error
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	// ctx cancel 時この goroutine は stdin をブロックしたまま残るが、直後に
+	// プロセスが終了するので問題にならない。
+	ch := make(chan answer, 1)
+	go func() {
+		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		ch <- answer{line: line, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// ^C でプロンプト行の途中に居るので、改行してから抜ける。
+		fmt.Fprintln(cmd.ErrOrStderr())
+		return false, fmt.Errorf("aborted: %w", ctx.Err())
+	case a := <-ch:
+		if a.err != nil && a.err != io.EOF {
+			return false, a.err
+		}
+		reply := strings.ToLower(strings.TrimSpace(a.line))
+		return reply == "y" || reply == "yes", nil
+	}
 }
 
 // isInteractive はコマンドの標準入力が端末 (対話可能) かを判定する。confirm と同じ入力

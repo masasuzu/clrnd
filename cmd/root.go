@@ -33,6 +33,13 @@ var rootCmd = &cobra.Command{
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 1 回目のシグナルで ctx を cancel した後はハンドラを解除し、既定の挙動 (即終了) に
+	// 戻す。解除しないと 2 回目以降のシグナルが握り潰され、ctx を見ない処理に入っている
+	// 間はプロセスを止める手段が無くなる。
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	return rootCmd.ExecuteContext(ctx)
 }
 

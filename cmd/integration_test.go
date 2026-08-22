@@ -222,6 +222,27 @@ func TestDeployDryRunEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDeployValidatesManifestBeforeResolvingTarget は、マニフェストのローカル検証が
+// project/region の解決やクライアント生成 (ADC 探索) より先に行われることを確認する。
+// 順序が逆だと、認証情報や target が無い環境でマニフェストの問題が別のエラーに隠れる。
+func TestDeployValidatesManifestBeforeResolvingTarget(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call to %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	// service 引数と metadata.name が食い違うマニフェスト。project/region はどこにも
+	// 設定されていない (executeRoot が環境変数を空にし、config も無い)。
+	manifest := writeManifest(t, localManifest)
+	_, _, err := executeRoot(t, "deploy", "other-svc", manifest)
+	if err == nil {
+		t.Fatal("deploy error = nil, want a manifest validation error")
+	}
+	if !strings.Contains(err.Error(), "does not match service argument") {
+		t.Errorf("deploy error = %v, want the manifest problem to surface first", err)
+	}
+}
+
 // TestVerifyLocalOnlyNeedsNoAPI は --local-only がクレデンシャルも API も要求しないことを
 // 確認する (CI でのオフライン検証)。
 func TestVerifyLocalOnlyNeedsNoAPI(t *testing.T) {

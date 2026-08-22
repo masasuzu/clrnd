@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -31,7 +34,7 @@ func TestConfirm(t *testing.T) {
 			var errOut bytes.Buffer
 			cmd.SetErr(&errOut)
 
-			got, err := confirm(cmd, "Apply?")
+			got, err := confirm(context.Background(), cmd, "Apply?")
 			if err != nil {
 				t.Fatalf("confirm() error = %v", err)
 			}
@@ -59,6 +62,40 @@ func withConfigDir(t *testing.T, dir string) {
 	prev := configDir
 	configDir = dir
 	t.Cleanup(func() { configDir = prev })
+}
+
+// blockingReader は Read が永久にブロックするリーダー。端末で入力待ちしている状態を模擬する。
+type blockingReader struct{ release chan struct{} }
+
+func (b blockingReader) Read([]byte) (int, error) {
+	<-b.release
+	return 0, io.EOF
+}
+
+// TestConfirmAbortsWhenContextIsCancelled は、入力待ちの最中に ctx が cancel されたら
+// (Ctrl-C 相当) confirm がブロックしたままにならないことを確認する。
+func TestConfirmAbortsWhenContextIsCancelled(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+
+	cmd := &cobra.Command{}
+	cmd.SetIn(blockingReader{release: release})
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := confirm(ctx, cmd, "Apply?")
+	if got {
+		t.Error("confirm() = true, want false when the context is cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("confirm() error = %v, want it to wrap context.Canceled", err)
+	}
+	if !strings.Contains(errOut.String(), "Apply? [y/N]:") {
+		t.Errorf("stderr = %q, want the prompt", errOut.String())
+	}
 }
 
 func TestResolveConfigPath(t *testing.T) {

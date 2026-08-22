@@ -26,7 +26,12 @@ gofmt -w .              # format
 
 - Entry point [main.go](main.go) calls `cmd.Execute()` and exits non-zero on error.
   `Execute` builds a `signal.NotifyContext` (SIGINT/SIGTERM) and calls `ExecuteContext`, so every
-  subcommand must use `cmd.Context()` (never `context.Background()`) to stay interruptible.
+  subcommand must use `cmd.Context()` (never `context.Background()`) to stay interruptible. It also
+  releases the handler once the context is cancelled (`go func() { <-ctx.Done(); stop() }()`) so a
+  second Ctrl-C restores the default kill — without that, `NotifyContext` swallows every later
+  signal and code that ignores the context becomes unkillable. Anything that blocks (a prompt, a
+  poll) must select on `ctx.Done()`; `confirm` in [cmd/flags.go](cmd/flags.go) does this by reading
+  stdin in a goroutine.
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
@@ -79,8 +84,11 @@ gofmt -w .              # format
   no credentials are passed explicitly.
 - `cmd/` builds the client via `newCloudRunClient` in [cmd/flags.go](cmd/flags.go), which resolves
   project/region and passes the package var `clientOptions` (empty in production, set by tests).
-  Create the client **after** the local work (reading/rendering the manifest, checking for existing
-  files) so local errors surface before credential discovery.
+  Create the client **after** all the local work — reading/rendering the manifest, checking for
+  existing files, **and validating** — so local errors surface before target resolution and
+  credential discovery. `deploy` therefore calls `cloudrun.Validate` itself before building the
+  client, even though `Plan` validates again (the check is pure and cheap); otherwise a manifest
+  problem hides behind "project is required" or "could not find default credentials".
 - Deploy is split into `Client.Plan` (validate locally, `Get` the live service, compute the `Diff` of
   live vs desired; `Create` when 404 via `isNotFound`/`googleapi.Error`) and `DeployPlan.Apply`
   (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
