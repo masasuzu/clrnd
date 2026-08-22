@@ -256,8 +256,13 @@ func TestApplyCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	if err := plan.Apply(context.Background(), false); err != nil {
+	applied, err := plan.Apply(context.Background(), false)
+	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
+	}
+	// 適用後のサービスを返す (Wait が世代を知るために使う)。
+	if applied == nil || applied.Metadata == nil || applied.Metadata.Name != "my-svc" {
+		t.Errorf("Apply() = %+v, want the applied service", applied)
 	}
 
 	post := lastRequest(t, api, http.MethodPost)
@@ -284,7 +289,7 @@ func TestApplyReplaceWithDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	if err := plan.Apply(context.Background(), true); err != nil {
+	if _, err := plan.Apply(context.Background(), true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -310,7 +315,7 @@ func TestApplyReportsServerErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	err = plan.Apply(context.Background(), false)
+	_, err = plan.Apply(context.Background(), false)
 	if err == nil || !strings.Contains(err.Error(), `failed to update service "my-svc"`) {
 		t.Fatalf("Apply() error = %v, want it to name the service", err)
 	}
