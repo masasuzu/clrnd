@@ -70,8 +70,8 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if revision != "" {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"warning: spec.template.metadata.name pins the revision name to %q; "+
-				"a later deploy that changes the template will fail because Cloud Run "+
-				"cannot recreate an existing revision\n", revision)
+				"Cloud Run rejects a revision name that already exists with a different "+
+				"configuration, so a later deploy that changes the template will fail\n", revision)
 	}
 
 	if verifyLocalOnly {
