@@ -40,6 +40,25 @@ const liveServiceWithRevisionJSON = `{
   "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
 }`
 
+// liveServiceStatusJSON は status が読む項目を揃えた live のサービス定義。
+const liveServiceStatusJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 7},
+  "spec": {"template": {"spec": {"containers": [{"image": "gcr.io/project/image:old"}]}}},
+  "status": {
+    "url": "https://my-svc.a.run.app",
+    "latestReadyRevisionName": "my-svc-00007-abc",
+    "latestCreatedRevisionName": "my-svc-00007-abc",
+    "observedGeneration": 7,
+    "conditions": [
+      {"type": "Ready", "status": "True"},
+      {"type": "RoutesReady", "status": "True"}
+    ],
+    "traffic": [{"revisionName": "my-svc-00007-abc", "percent": 100, "latestRevision": true}]
+  }
+}`
+
 // localManifest は cmd に食わせるローカルのマニフェスト。live とはイメージタグだけ違う。
 const localManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -414,6 +433,92 @@ func TestVerifyDoesNotWarnWithoutRevisionName(t *testing.T) {
 	}
 	if strings.Contains(stderr, "warning:") {
 		t.Errorf("verify stderr = %q, want no warning", stderr)
+	}
+}
+
+// TestStatusTextEndToEnd は status が既定 (text) で読める形にまとめて出すことを確認する。
+func TestStatusTextEndToEnd(t *testing.T) {
+	var gotPath string
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceStatusJSON))
+	})
+
+	stdout, stderr, err := executeRoot(t, "status", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("status error = %v", err)
+	}
+
+	wantPath := "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
+	if gotPath != wantPath {
+		t.Errorf("requested path = %q, want %q", gotPath, wantPath)
+	}
+	for _, want := range []string{
+		"Service:         my-svc",
+		"URL:             https://my-svc.a.run.app",
+		"Ready:           True",
+		"Generation:      7 (observed 7)",
+		"  100%  my-svc-00007-abc",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("status stdout should contain %q:\n%s", want, stdout)
+		}
+	}
+	// 読み取り専用のコマンドなので stderr には何も出さない。
+	if stderr != "" {
+		t.Errorf("status stderr = %q, want empty", stderr)
+	}
+}
+
+// TestStatusJSONEndToEnd は --format json が機械可読な出力を出すことを確認する。
+func TestStatusJSONEndToEnd(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceStatusJSON))
+	})
+
+	stdout, _, err := executeRoot(t, "status", "my-svc", "--format", "json",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("status --format json error = %v", err)
+	}
+
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("status --format json produced invalid JSON: %v\n%s", err, stdout)
+	}
+	if got["service"] != "my-svc" {
+		t.Errorf("service = %v, want my-svc", got["service"])
+	}
+	if got["url"] != "https://my-svc.a.run.app" {
+		t.Errorf("url = %v", got["url"])
+	}
+	conds, _ := got["conditions"].([]interface{})
+	if len(conds) != 2 {
+		t.Fatalf("conditions = %v, want 2 entries", got["conditions"])
+	}
+	first, _ := conds[0].(map[string]interface{})
+	if first["type"] != "Ready" || first["status"] != "True" {
+		t.Errorf("conditions[0] = %v", conds[0])
+	}
+}
+
+// TestStatusRejectsInvalidFormat は不正な --format をクライアント生成より前に弾くことを
+// 確認する。順序が逆だと、認証エラーにフラグの間違いが隠れる。
+func TestStatusRejectsInvalidFormat(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call to %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	_, _, err := executeRoot(t, "status", "my-svc", "--format", "yaml")
+	if err == nil {
+		t.Fatal("status error = nil, want an invalid --format error")
+	}
+	if !strings.Contains(err.Error(), `invalid --format "yaml"`) {
+		t.Errorf("status error = %v, want it to name the bad format", err)
 	}
 }
 

@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
-manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`, and
-`init` subcommands. All five are implemented. (`init` was formerly `load`; `load` remains a cobra
-alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
+manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
+`init`, and `status` subcommands. All six are implemented. (`init` was formerly `load`; `load`
+remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
 ## Commands
@@ -171,6 +171,11 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
+  is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
+  presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
+  finds the `Ready` condition and is meant to be reused by `wait`. The JSON form is the `Status`
+  struct itself (`--format json`), so the two outputs cannot drift apart.
 - `init` (in [cmd/init.go](cmd/init.go), formerly `load`) fetches a service via `GetService`/
   `ToManifest` and scaffolds `manifest.yaml` (the `--output` file) plus `clrnd.yml` (project/region/
   service/manifest), refusing to overwrite existing files without `--force`.
@@ -189,3 +194,7 @@ revision-name conflicts, asynchronous rollout failures).
   stays data-only. This is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
+- Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
+  output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
+  name never means two different things. Validate the format value **before** building the client,
+  like every other local check.
