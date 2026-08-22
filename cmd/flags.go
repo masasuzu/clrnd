@@ -119,6 +119,25 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 	return project, region, true
 }
 
+// warnPinnedRevision はマニフェストがリビジョン名 (spec.template.metadata.name) を固定して
+// いる場合に stderr へ警告する。Cloud Run は設定の異なる同名リビジョンを拒否するため、次に
+// テンプレートを変えた deploy が必ず失敗する。verify と deploy で同じ警告を出す
+// (deploy だけを回す CI でも、不透明な API エラーの前に理由が分かるように)。
+func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
+	revision, err := cloudrun.RevisionName(manifest)
+	if err != nil {
+		return err
+	}
+	if revision == "" {
+		return nil
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: spec.template.metadata.name pins the revision name to %q; "+
+			"Cloud Run rejects a revision name that already exists with a different "+
+			"configuration, so a later deploy that changes the template will fail\n", revision)
+	return nil
+}
+
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
 // stdin の読み取りは中断できないため goroutine に逃がし、ctx が cancel されたら
 // (Ctrl-C など) 待たずに戻る。そうしないとプロンプト表示中は Ctrl-C が効かない。

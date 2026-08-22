@@ -116,12 +116,29 @@ gofmt -w .              # format
   (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
   `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
 - `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
-  `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices). `ToManifest`
-  applies it to a fetched service; `Normalize` applies the same to a local manifest file so the two
-  sides are comparable. YAML is produced with `sigs.k8s.io/yaml` (JSON tags → YAML), which sorts
-  keys alphabetically.
-- `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical. `diff`
-  normalizes both the live service and the local manifest before comparing.
+  `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices), and drops
+  `spec.template.metadata` entirely when nothing is left in it (local manifests normally have no
+  template metadata, so an empty `metadata: {}` would be a diff line that never goes away).
+  `ToManifest` applies it to a fetched service. YAML is produced with `sigs.k8s.io/yaml`
+  (JSON tags → YAML), which sorts keys alphabetically.
+- `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
+  **`Compare` is the single comparison path**: it parses the local manifest, aligns it with the
+  live service, normalizes both through `ToManifest`, and diffs them (a nil `current` means the
+  service does not exist yet, so everything is an addition). `cmd/diff.go` calls `Compare`;
+  `Client.Plan` calls the shared `compareServices`, so `diff` and `deploy` can never drift apart.
+  `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
+  a manifest problem is not hidden behind a credentials error.
+- **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one)
+  but always populated on read, and an existing revision cannot be recreated. clrnd therefore does
+  not manage revision names: `StripRevisionName` removes the field from what `init` scaffolds, and
+  `alignRevisionName` (called from `compareServices`) drops the live value from the comparison
+  **when the local manifest does not pin one** — without that, every manifest without a revision
+  name would show a permanent diff. When the manifest *does* pin a name it is kept on both sides
+  and shows up as a normal diff, and **both `verify` and `deploy`** warn (`warnPinnedRevision` in
+  [cmd/flags.go](cmd/flags.go), via `RevisionName`) that the next template-changing deploy will
+  fail with a 409. `deploy` warns too because a CI job that only runs `deploy` would otherwise see
+  nothing but the opaque API error. The warning is not a failure: pinning is legitimate for a
+  one-shot deploy.
 - `Validate` checks a local manifest with no API access: strict YAML unmarshal into `run.Service`
   (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
   service argument. Returns `errors.Join` of all problems so the user sees them at once. The local
@@ -146,9 +163,12 @@ gofmt -w .              # format
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
-- Subcommands succeed **silently**: on success they emit only data (e.g. the manifest) to stdout,
-  never a confirmation message. Errors are returned from `RunE` so cobra prints them to stderr and
-  sets a non-zero exit code. Exception: `deploy` is interactive — it prints the diff to stdout (data)
+- Subcommands succeed **silently on stdout**: on success they emit only data (e.g. the manifest)
+  there, never a confirmation message. Errors are returned from `RunE` so cobra prints them to
+  stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
+  `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
+  not fail the command — stdout stays data-only, which is what the rule protects.
+  Exception: `deploy` is interactive — it prints the diff to stdout (data)
   and status/prompt lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout
   stays data-only. This is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and

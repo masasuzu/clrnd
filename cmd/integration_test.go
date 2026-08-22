@@ -27,6 +27,19 @@ const liveServiceJSON = `{
   "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
 }`
 
+// liveServiceWithRevisionJSON は live のサービス定義。Cloud Run は取得時に必ず
+// spec.template.metadata.name (サーバ採番のリビジョン名) を埋めて返す。
+const liveServiceWithRevisionJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "uid": "abc-123", "generation": 7},
+  "spec": {"template": {
+    "metadata": {"name": "my-svc-00007-abc"},
+    "spec": {"containers": [{"image": "gcr.io/project/image:old"}]}
+  }},
+  "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
+}`
+
 // localManifest は cmd に食わせるローカルのマニフェスト。live とはイメージタグだけ違う。
 const localManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -254,6 +267,153 @@ func TestVerifyLocalOnlyNeedsNoAPI(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 	if _, _, err := executeRoot(t, "verify", "my-svc", manifest, "--local-only"); err != nil {
 		t.Fatalf("verify --local-only error = %v", err)
+	}
+}
+
+// TestInitScaffoldsWithoutRevisionName は init が live のリビジョン名を落として
+// マニフェストを書き出すことを確認する。残すとテンプレートを変えた 2 回目の deploy が
+// 「同名リビジョンは再作成できない」で失敗する。
+func TestInitScaffoldsWithoutRevisionName(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceWithRevisionJSON))
+	})
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, _, err := executeRoot(t, "init", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatalf("failed to read the scaffolded manifest: %v", err)
+	}
+	if strings.Contains(string(manifest), "my-svc-00007-abc") {
+		t.Errorf("scaffolded manifest pins the revision name:\n%s", manifest)
+	}
+	// 空になった spec.template.metadata ごと消えていること。
+	if strings.Contains(string(manifest), "metadata: {}") {
+		t.Errorf("scaffolded manifest keeps an empty template metadata:\n%s", manifest)
+	}
+}
+
+// TestDiffIsEmptyRightAfterInit は init 直後の diff が空であることを確認する。
+// live は必ずリビジョン名を持ち、init はそれを落とすので、比較時に live 側のリビジョン名を
+// 無視しないと「消えない差分」が出続ける。
+func TestDiffIsEmptyRightAfterInit(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceWithRevisionJSON))
+	})
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, _, err := executeRoot(t, "init", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	// init が書いた clrnd.yml から service/manifest/project/region を解決させる。
+	stdout, _, err := executeRoot(t, "diff")
+	if err != nil {
+		t.Fatalf("diff error = %v", err)
+	}
+	if stdout != "" {
+		t.Errorf("diff right after init = %q, want empty", stdout)
+	}
+}
+
+// TestVerifyWarnsWhenRevisionNameIsPinned は、リビジョン名を固定したマニフェストに対して
+// verify が警告を出しつつ成功することを確認する (使い捨てのデプロイでは正しい書き方なので
+// 失敗にはしない)。
+func TestVerifyWarnsWhenRevisionNameIsPinned(t *testing.T) {
+	manifest := writeManifest(t, `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    metadata:
+      name: my-svc-00007-abc
+    spec:
+      containers:
+      - image: gcr.io/project/image:new
+`)
+
+	_, stderr, err := executeRoot(t, "verify", "my-svc", manifest, "--local-only")
+	if err != nil {
+		t.Fatalf("verify error = %v, want success with a warning", err)
+	}
+	if !strings.Contains(stderr, "warning:") || !strings.Contains(stderr, "my-svc-00007-abc") {
+		t.Errorf("verify stderr = %q, want a warning naming the pinned revision", stderr)
+	}
+}
+
+// TestDeployWarnsWhenRevisionNameIsPinned は deploy でも同じ警告が出ることを確認する。
+// deploy だけを回す CI では verify の警告を見る機会が無く、Cloud Run からの 409 だけが
+// 出て原因が分からないため。
+func TestDeployWarnsWhenRevisionNameIsPinned(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceWithRevisionJSON))
+	})
+
+	manifest := writeManifest(t, `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    metadata:
+      name: my-svc-00007-abc
+    spec:
+      containers:
+      - image: gcr.io/project/image:new
+`)
+
+	_, stderr, err := executeRoot(t, "deploy", "my-svc", manifest,
+		"--project", "test-project", "--region", "asia-northeast1", "--dry-run")
+	if err != nil {
+		t.Fatalf("deploy error = %v", err)
+	}
+	if !strings.Contains(stderr, "warning:") || !strings.Contains(stderr, "my-svc-00007-abc") {
+		t.Errorf("deploy stderr = %q, want a warning naming the pinned revision", stderr)
+	}
+}
+
+// TestDeployDoesNotWarnWithoutRevisionName は通常のマニフェストで警告が出ないことを確認する。
+func TestDeployDoesNotWarnWithoutRevisionName(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceJSON))
+	})
+
+	manifest := writeManifest(t, localManifest)
+	_, stderr, err := executeRoot(t, "deploy", "my-svc", manifest,
+		"--project", "test-project", "--region", "asia-northeast1", "--dry-run")
+	if err != nil {
+		t.Fatalf("deploy error = %v", err)
+	}
+	if strings.Contains(stderr, "warning:") {
+		t.Errorf("deploy stderr = %q, want no warning", stderr)
+	}
+}
+
+// TestVerifyDoesNotWarnWithoutRevisionName は、リビジョン名を書いていない通常のマニフェスト
+// では警告が出ないことを確認する。
+func TestVerifyDoesNotWarnWithoutRevisionName(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+
+	_, stderr, err := executeRoot(t, "verify", "my-svc", manifest, "--local-only")
+	if err != nil {
+		t.Fatalf("verify error = %v", err)
+	}
+	if strings.Contains(stderr, "warning:") {
+		t.Errorf("verify stderr = %q, want no warning", stderr)
 	}
 }
 

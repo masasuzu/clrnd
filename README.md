@@ -170,6 +170,16 @@ All commands that take a `<service>` and `<manifest>` expect the service name to
 manifest's `metadata.name`. A typical workflow is `init` → edit → `render` → `verify` → `diff` →
 `deploy`.
 
+### Revision names
+
+clrnd does not manage revision names. `init` omits `spec.template.metadata.name` from the manifest
+it writes, and `diff`/`deploy` ignore the name Cloud Run reports for the live revision, so Cloud Run
+generates a fresh revision name on every deploy.
+
+You may still pin a name yourself. If you do, it shows up in `diff` like any other field, and
+`verify` warns you: Cloud Run cannot recreate an existing revision, so the next deploy that changes
+the template will be rejected. Pinning is only safe for a one-shot deploy.
+
 `--project` and `--region` may be omitted when the corresponding environment variable is set
 (gcloud-compatible): project falls back to `$CLOUDSDK_CORE_PROJECT` then `$GOOGLE_CLOUD_PROJECT`,
 region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag always wins.
@@ -178,8 +188,9 @@ region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag a
 
 Validate that a manifest is a well-formed Cloud Run service definition and contains the fields
 required to deploy. The schema check is local: it does not access the API and needs no
-credentials, so it is safe to run in CI. Nothing is printed when the manifest is valid; problems
-are reported to stderr with a non-zero exit code.
+credentials, so it is safe to run in CI. A valid manifest produces no output on stdout; problems
+are reported to stderr with a non-zero exit code. Advisory `warning:` lines (see
+[Revision names](#revision-names)) also go to stderr and do not fail the command.
 
 When `--project` / `--region` are resolvable (flag, env, or config) and `--local-only` is not set,
 `verify` additionally checks via the API that the resources the manifest references actually exist:
@@ -235,7 +246,7 @@ clrnd render service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
 
 Fetch the live definition of the service from Cloud Run and show a unified diff against the given
 manifest file. Both sides are normalized (read-only fields removed) before comparison, so a
-manifest produced by `load` compares cleanly. Nothing is printed when there is no difference.
+manifest produced by `init` compares cleanly. Nothing is printed when there is no difference.
 
 ```sh
 clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>

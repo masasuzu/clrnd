@@ -50,8 +50,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	desired, err := cloudrun.Normalize(local)
-	if err != nil {
+	// ローカルのパースはクライアント生成 (= ADC 探索) より先に行う。マニフェストの問題が
+	// 認証エラーに隠れないようにするため。Compare も同じパースをするが、純粋な処理で安い。
+	if err := cloudrun.CheckSyntax(local); err != nil {
 		return err
 	}
 
@@ -64,12 +65,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	current, err := cloudrun.ToManifest(obj)
-	if err != nil {
-		return err
-	}
 
-	out, err := cloudrun.Diff(current, desired, "live/"+service, manifestPath)
+	out, err := cloudrun.Compare(obj, local, "live/"+service, manifestPath)
 	if err != nil {
 		return err
 	}
