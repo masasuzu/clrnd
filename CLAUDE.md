@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, `wait`, `revisions`, and `rollback` subcommands. All nine are implemented. (`init` was formerly `load`; `load`
+`init`, `status`, `wait`, `revisions`, `rollback`, and `delete` subcommands. All ten are
+implemented. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -173,6 +174,16 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `delete` (in [cmd/delete.go](cmd/delete.go)) is the one command that destroys something, so it
+  fetches the service first: a missing service fails before any prompt, and what is about to go is
+  printed to stderr **with the project and region** — the realistic accident is deleting the right
+  service name in the wrong project. It does not use `applyPlan` (there is no diff to show) but
+  shares `confirmAction`, so the "no TTY and no `--auto-approve` → refuse" rule is identical.
+  `--dry-run` skips the prompt because nothing is destroyed, matching `deploy`.
+  **Deletion is asynchronous too**: the DELETE returns while the service is still readable for a
+  while, so `delete` polls with `Client.WaitDeleted` until a 404 comes back (`--no-wait` opts out).
+  Without it, "delete then recreate" races. `WaitDeleted` shares `waitDefaults`/`nextWaitInterval`
+  and the same transient-error tolerance as `Wait`.
 - `rollback` (in [internal/cloudrun/rollback.go](internal/cloudrun/rollback.go)) repoints
   `spec.traffic` at an earlier revision. It touches **only** the traffic split — `spec.template` is
   left alone, so no new revision is created and the revision-name conflict cannot apply. Traffic
@@ -236,7 +247,11 @@ revision-name conflicts, asynchronous rollout failures).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
   `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout`, and `applyPlan` runs the one flow
   (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
-  text differs per command. Do not re-implement that sequence.
+  text differs per command. Do not re-implement that sequence. `confirmAction` in the same file is
+  the confirmation rule on its own, for destructive commands that have no plan to show (`delete`).
+- `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
+  `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
+  tests pass or fail depending on whether `go test` was started from a terminal.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in

@@ -129,6 +129,19 @@ func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, erro
 	return applied, nil
 }
 
+// DeleteService はサービスを削除する。dryRun が true の場合はサーバ側で検証のみ行う。
+// 取り消せない操作なので、呼び出し側で確認を取ること。
+func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool) error {
+	call := c.api.Namespaces.Services.Delete(c.serviceName(service))
+	if dryRun {
+		call = call.DryRun(dryRunAll)
+	}
+	if _, err := call.Context(ctx).Do(); err != nil {
+		return fmt.Errorf("failed to delete service %q: %w", service, err)
+	}
+	return nil
+}
+
 // AppliedGeneration は Apply の戻り値から metadata.generation を nil セーフに取り出す。
 // 取れなければ 0 を返し、その場合 Wait は世代を問わずに Ready だけを見る。
 func AppliedGeneration(applied *run.Service) int64 {

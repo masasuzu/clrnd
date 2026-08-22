@@ -30,6 +30,27 @@ func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
 		"how long to wait for the rollout to finish")
 }
 
+// confirmAction は取り返しのつかない操作の前に確認を取る。autoApprove なら省略し、
+// 確認できない環境 (非対話な stdin) では拒否する。ok が false なら中止する
+// (中止メッセージは出力済み)。action はエラー文に埋める動詞。
+func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) (bool, error) {
+	if autoApprove {
+		return true, nil
+	}
+	if !isInteractive(cmd) {
+		return false, fmt.Errorf(
+			"refusing to %s without confirmation: re-run with --auto-approve (no interactive terminal)", action)
+	}
+	ok, err := confirm(cmd.Context(), cmd, prompt)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Aborted.")
+	}
+	return ok, nil
+}
+
 // applyPlan は差分を stdout に出し、必要なら確認を取り、適用してロールアウトを待つ。
 // 状態やプロンプトは stderr、stdout はデータ (差分) 専用。
 func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.DeployPlan, o applyOptions) error {
@@ -47,16 +68,12 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
 
 	// dry-run でなければ確認する。--auto-approve でスキップ。
-	if !o.DryRun && !o.AutoApprove {
-		if !isInteractive(cmd) {
-			return fmt.Errorf("refusing to apply without confirmation: re-run with --auto-approve (no interactive terminal)")
-		}
-		ok, err := confirm(ctx, cmd, o.Prompt)
+	if !o.DryRun {
+		ok, err := confirmAction(cmd, o.AutoApprove, "apply", o.Prompt)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Fprintln(cmd.ErrOrStderr(), "Aborted.")
 			return nil
 		}
 	}

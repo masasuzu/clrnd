@@ -495,6 +495,29 @@ if [ "$RC" -ne 0 ]; then
 else
   ng "deploy exited 0 for a rollout that cannot succeed"
 fi
+
+info "--- 1-9. delete ---"
+if [ -n "$OLD_REF" ]; then
+  info "skipping: phase 2 still needs the service"
+else
+  run_cmd "$CLRND" delete "$SERVICE" --dry-run
+  assert_rc_zero "delete --dry-run succeeds"
+  assert_contains "delete shows what it is about to remove" "About to delete:"
+  if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+    ok "delete --dry-run left the service alone"
+  else
+    ng "delete --dry-run removed the service"
+  fi
+
+  # 削除は非同期なので clrnd delete は消えるまで待つ。戻った直後に確認できる。
+  run_cmd "$CLRND" delete "$SERVICE" --auto-approve --timeout 120s
+  assert_rc_zero "delete succeeds"
+  if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+    ng "the service still exists right after delete returned"
+  else
+    ok "the service is gone by the time delete returns"
+  fi
+fi
 fi
 
 # =====================================================================

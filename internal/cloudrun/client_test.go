@@ -321,6 +321,47 @@ func TestApplyReportsServerErrors(t *testing.T) {
 	}
 }
 
+func TestDeleteService(t *testing.T) {
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		return http.StatusOK, map[string]interface{}{}
+	})
+
+	if err := c.DeleteService(context.Background(), "my-svc", false); err != nil {
+		t.Fatalf("DeleteService() error = %v", err)
+	}
+
+	del := lastRequest(t, api, http.MethodDelete)
+	wantPath := "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
+	if del.Path != wantPath {
+		t.Errorf("Delete path = %q, want %q", del.Path, wantPath)
+	}
+	if strings.Contains(del.Query, "dryRun") {
+		t.Errorf("Delete query = %q, want no dryRun parameter", del.Query)
+	}
+}
+
+func TestDeleteServiceDryRun(t *testing.T) {
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		return http.StatusOK, map[string]interface{}{}
+	})
+
+	if err := c.DeleteService(context.Background(), "my-svc", true); err != nil {
+		t.Fatalf("DeleteService() error = %v", err)
+	}
+	if del := lastRequest(t, api, http.MethodDelete); !strings.Contains(del.Query, "dryRun=all") {
+		t.Errorf("Delete query = %q, want it to contain dryRun=all", del.Query)
+	}
+}
+
+func TestDeleteServicePropagatesErrors(t *testing.T) {
+	c, _ := newTestClient(t, nil) // 既定の handler は 404
+
+	err := c.DeleteService(context.Background(), "missing", false)
+	if err == nil || !strings.Contains(err.Error(), `failed to delete service "missing"`) {
+		t.Fatalf("DeleteService() error = %v, want it to name the service", err)
+	}
+}
+
 // lastRequest は指定メソッドで最後に受け取ったリクエストを返す。
 func lastRequest(t *testing.T, api *fakeAPI, method string) recordedRequest {
 	t.Helper()

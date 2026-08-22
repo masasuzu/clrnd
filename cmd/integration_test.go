@@ -131,10 +131,15 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	var out, errOut bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&errOut)
+	// stdin を明示的に非対話にする。設定しないと os.Stdin にフォールバックし、
+	// 端末から go test を叩いたときだけ isInteractive が true になって、
+	// 確認プロンプト系のテストがローカルと CI で違う結果になる。
+	rootCmd.SetIn(strings.NewReader(""))
 	rootCmd.SetArgs(args)
 	t.Cleanup(func() {
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
+		rootCmd.SetIn(nil)
 		// nil に戻すと cobra が os.Args[1:] (= go test のフラグ) を読んでしまう。
 		rootCmd.SetArgs([]string{})
 	})
@@ -657,6 +662,30 @@ func TestDeployWaitsForTheRollout(t *testing.T) {
 	}
 }
 
+// TestDeployRefusesWithoutConfirmation は、非対話環境で --auto-approve が無ければ
+// 何も適用せずに失敗することを確認する。
+func TestDeployRefusesWithoutConfirmation(t *testing.T) {
+	gets := rolloutAPI(t, serviceJSON(8, 8, "True", ""))
+
+	manifest := writeManifest(t, localManifest)
+	stdout, _, err := executeRoot(t, "deploy", "my-svc", manifest,
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("deploy error = nil, want a refusal without a terminal")
+	}
+	if !strings.Contains(err.Error(), "refusing to apply without confirmation") {
+		t.Errorf("deploy error = %v", err)
+	}
+	// 差分は見せたうえで拒否する。
+	if !strings.Contains(stdout, "image:") {
+		t.Errorf("deploy stdout = %q, want the diff to be shown before refusing", stdout)
+	}
+	// Plan の GET だけで、適用も待機もしていない。
+	if gets() != 1 {
+		t.Errorf("GET count = %d, want 1", gets())
+	}
+}
+
 // TestDeployNoWaitSkipsTheWait は --no-wait が適用の受理だけで戻ることを確認する。
 func TestDeployNoWaitSkipsTheWait(t *testing.T) {
 	// 待てば失敗する状態にしておき、それでも成功することで「待っていない」と分かる。
@@ -888,6 +917,151 @@ func TestRollbackRejectsAnUnknownRevision(t *testing.T) {
 	}
 	if len(sentBody()) != 0 {
 		t.Error("rollback applied something despite the bad revision")
+	}
+}
+
+// startDeleteAPI はサービス取得と削除に応えるフェイク API を立てる。
+// vanish が true なら DELETE 後の GET は 404 を返す (実際に削除が反映された状態)。
+// false なら残り続けるので、待機しているかどうかを見分けられる。
+// 返り値は DELETE の回数と、DELETE 後の GET の回数。
+func startDeleteAPI(t *testing.T, vanish bool) (func() int, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	deletes, getsAfter := 0, 0
+
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if r.Method == http.MethodDelete {
+			deletes++
+		} else if deletes > 0 {
+			getsAfter++
+		}
+		gone := vanish && deletes > 0 && r.Method != http.MethodDelete
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodDelete:
+			_, _ = w.Write([]byte(`{}`))
+		case gone:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error": {"code": 404, "message": "not found"}}`))
+		default:
+			_, _ = w.Write([]byte(liveServiceStatusJSON))
+		}
+	})
+
+	count := func(p *int) func() int {
+		return func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return *p
+		}
+	}
+	return count(&deletes), count(&getsAfter)
+}
+
+// TestDeleteEndToEnd は、削除対象を stderr に示し、削除し、消えたことを確かめる
+// までを確認する。Cloud Run の削除は非同期なので、確かめずに戻ると
+// 「削除してから作り直す」ような手順が競合する。
+func TestDeleteEndToEnd(t *testing.T) {
+	deletes, getsAfter := startDeleteAPI(t, true)
+
+	stdout, stderr, err := executeRoot(t, "delete", "my-svc", "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("delete error = %v", err)
+	}
+	if deletes() != 1 {
+		t.Errorf("DELETE count = %d, want 1", deletes())
+	}
+	if getsAfter() < 1 {
+		t.Errorf("GET count after the delete = %d, want at least 1 (it must confirm the service is gone)", getsAfter())
+	}
+	// 消すものを取り違えないよう、project と region を必ず出す。
+	for _, want := range []string{"About to delete:", "service: my-svc", "project: test-project", "region:  asia-northeast1"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("delete stderr should contain %q:\n%s", want, stderr)
+		}
+	}
+	// stdout はデータ専用。削除は出力するデータを持たない。
+	if stdout != "" {
+		t.Errorf("delete stdout = %q, want empty", stdout)
+	}
+}
+
+// TestDeleteNoWaitSkipsTheWait は --no-wait が受理だけで戻ることを確認する。
+func TestDeleteNoWaitSkipsTheWait(t *testing.T) {
+	// 待てば消えないので、成功することで「待っていない」と分かる。
+	deletes, getsAfter := startDeleteAPI(t, false)
+
+	if _, _, err := executeRoot(t, "delete", "my-svc", "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("delete --no-wait error = %v", err)
+	}
+	if deletes() != 1 {
+		t.Errorf("DELETE count = %d, want 1", deletes())
+	}
+	if getsAfter() != 0 {
+		t.Errorf("GET count after the delete = %d, want 0 (no polling with --no-wait)", getsAfter())
+	}
+}
+
+// TestDeleteRefusesWithoutConfirmation は、非対話環境で --auto-approve が無ければ
+// 何も消さずに失敗することを確認する。
+func TestDeleteRefusesWithoutConfirmation(t *testing.T) {
+	deletes, _ := startDeleteAPI(t, true)
+
+	_, _, err := executeRoot(t, "delete", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("delete error = nil, want a refusal without a terminal")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete without confirmation") {
+		t.Errorf("delete error = %v", err)
+	}
+	if deletes() != 0 {
+		t.Errorf("DELETE count = %d, want 0 (nothing may be deleted without confirmation)", deletes())
+	}
+}
+
+// TestDeleteDryRunDoesNotPrompt は --dry-run が確認も待機もせずに検証だけすることを
+// 確認する (非対話環境でも通る)。
+func TestDeleteDryRunDoesNotPrompt(t *testing.T) {
+	deletes, getsAfter := startDeleteAPI(t, false)
+
+	if _, _, err := executeRoot(t, "delete", "my-svc", "--dry-run",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("delete --dry-run error = %v", err)
+	}
+	if deletes() != 1 {
+		t.Errorf("DELETE count = %d, want 1 (a dry-run request is still sent)", deletes())
+	}
+	if getsAfter() != 0 {
+		t.Errorf("GET count after the delete = %d, want 0 (nothing was deleted, so nothing to wait for)", getsAfter())
+	}
+}
+
+// TestDeleteFailsWhenTheServiceIsMissing は、実在しないサービスでは確認を求めず
+// エラーになることを確認する。
+func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
+	var deletes int
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletes++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error": {"code": 404, "message": "not found"}}`))
+	})
+
+	_, _, err := executeRoot(t, "delete", "missing", "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("delete error = nil, want a not-found error")
+	}
+	if deletes != 0 {
+		t.Errorf("DELETE count = %d, want 0", deletes)
 	}
 }
 

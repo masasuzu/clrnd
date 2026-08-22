@@ -72,6 +72,7 @@ not paste it into an issue or a pull request.
 | 1-6 | `verify` succeeds and prints no warning |
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
 | 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
+| 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
 
 Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
 A service deployed without one comes back with no `spec.template.metadata.name`
