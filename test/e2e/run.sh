@@ -19,8 +19,11 @@
 # $PROJECT or a local (git-ignored) project.env file next to this script.
 set -uo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
+# 解決に失敗したまま進むと HERE が空になり、WORK が /work を指してしまう
+# (直後に rm -rf する)。ここで必ず止める。
+HERE="$(cd "$(dirname "$0")" && pwd)" || { echo "error: cannot resolve the script directory" >&2; exit 1; }
 REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -n "$REPO" ] || { echo "error: cannot resolve the repository root" >&2; exit 1; }
 WORK="$HERE/work"
 BIN="$WORK/bin"
 
@@ -188,7 +191,9 @@ import re, sys
 path, value = sys.argv[1], sys.argv[2]
 s = open(path).read()
 if "CLRND_E2E" in s:
-    s = re.sub(r'(name: CLRND_E2E\n\s+value: )\S+', r'\g<1>%s' % value, s)
+    # 置換文字列に値を埋め込むと \1 などが展開されてしまうので、
+    # 関数形式にして value を literal として扱う。
+    s = re.sub(r'(name: CLRND_E2E\n\s+value: )\S+', lambda m: m.group(1) + value, s)
 else:
     s = s.replace("      containers:\n      - image:",
                   "      containers:\n      - env:\n        - name: CLRND_E2E\n          value: %s\n        image:" % value)
@@ -196,15 +201,46 @@ open(path, "w").write(s)
 PY
 }
 
-# pin_revision <manifest> <revision-name>
+# pin_live_revision <suffix> : live サービス側にリビジョン名を固定させる。
+# gcloud run deploy --revision-suffix は spec.template.metadata.name を設定する。
+# Terraform の template.metadata.name も同じ状態を作る。リビジョン名を指定せずに
+# 作ったサービスでは Cloud Run はこのフィールドを返さないので、init が名前を
+# 引き継ぐ経路を試すにはこの前提を明示的に作る必要がある。
+pin_live_revision() {
+  gcloud run deploy "$SERVICE" --image "$IMAGE" --revision-suffix="$1" \
+    --project "$PROJECT" --region "$REGION" --no-allow-unauthenticated --quiet >/dev/null 2>&1
+}
+
+# live_revision_name は live サービスが固定しているリビジョン名を返す (無ければ空)。
+live_revision_name() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format='value(spec.template.metadata.name)' 2>/dev/null
+}
+
+# pin_revision <manifest> <revision-name> : spec.template.metadata.name を設定する。
+# metadata ブロックが既に在る場合 (gcloud 由来のアノテーションが残っているときなど) は
+# その中に name を足す。無ければ metadata ごと作る。
 pin_revision() {
   python3 - "$1" "$2" <<'PY'
 import sys
 path, rev = sys.argv[1], sys.argv[2]
-s = open(path).read()
-if "  template:\n    metadata:\n" not in s:
-    s = s.replace("  template:\n", "  template:\n    metadata:\n      name: %s\n" % rev, 1)
-open(path, "w").write(s)
+lines = open(path).read().split("\n")
+out, i, done = [], 0, False
+while i < len(lines):
+    out.append(lines[i])
+    if not done and lines[i] == "  template:":
+        if i + 1 < len(lines) and lines[i + 1] == "    metadata:":
+            out.append(lines[i + 1])            # 既存の metadata: を維持し
+            out.append("      name: %s" % rev)  # その直下に name を挿す
+            i += 1
+        else:
+            out.append("    metadata:")
+            out.append("      name: %s" % rev)
+        done = True
+    i += 1
+if not done:
+    raise SystemExit("pin_revision: no 'spec.template:' block found in %s" % path)
+open(path, "w").write("\n".join(out))
 PY
 }
 
@@ -263,19 +299,33 @@ assert_contains "server defaults show up in the diff (containerConcurrency)" "co
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
 
-info "--- 1-3. the manifest that init scaffolds ---"
+info "--- 1-3. make the live service pin a revision name ---"
+info "Cloud Run only reports spec.template.metadata.name when a client set it,"
+info "so create that precondition the way --revision-suffix or Terraform would."
+pin_live_revision "pinned" || ng "failed to pin a revision name on the live service"
+wait_ready || ng "the pinned deploy never became ready"
+PINNED_REV="$(live_revision_name)"
+if [ -n "$PINNED_REV" ]; then
+  ok "the live service now pins a revision name"
+else
+  ng "the live service does not pin a revision name; the rest of phase 1 proves nothing"
+fi
+
+info "--- 1-4. the manifest that init scaffolds ---"
 D2="$WORK/current-init"; mkdir -p "$D2"; cd "$D2"
 run_cmd "$CLRND" init "$SERVICE"
 assert_rc_zero "init succeeds"
-assert_file_lacks "init does not pin the revision name" "$D2/manifest.yaml" "$SERVICE-0000"
+assert_file_lacks "init drops the revision name the live service pins" "$D2/manifest.yaml" "$PINNED_REV"
 assert_file_lacks "init leaves no empty template metadata" "$D2/manifest.yaml" "metadata: {}"
 
-info "--- 1-4. diff immediately after init ---"
+info "--- 1-5. diff immediately after init ---"
 run_cmd "$CLRND" diff
 assert_rc_zero "diff succeeds"
 assert_empty "diff right after init is empty"
 
-info "--- 1-5. change the template and deploy again ---"
+info "--- 1-5b. change the template and deploy again ---"
+info "This is the regression: with the revision name carried over, Cloud Run"
+info "rejects the new revision with a 409."
 set_env_value "$D2/manifest.yaml" "second"
 run_cmd "$CLRND" deploy --auto-approve
 assert_rc_zero "a second deploy that changes the template succeeds"
@@ -289,7 +339,9 @@ assert_missing "no warning when the revision name is not pinned" "warning:"
 info "--- 1-7. verify warns about a pinned revision name ---"
 cp "$D2/manifest.yaml" "$D2/pinned.yaml"
 REV="$(current_revision)"
-pin_revision "$D2/pinned.yaml" "$REV"
+[ -n "$REV" ] || ng "could not read the current revision name"
+pin_revision "$D2/pinned.yaml" "$REV" || ng "pin_revision failed"
+assert_file_has "the test manifest now pins the revision name" "$D2/pinned.yaml" "$REV"
 run_cmd "$CLRND" verify "$SERVICE" "$D2/pinned.yaml" --local-only
 assert_rc_zero "verify still succeeds with a pinned revision name"
 assert_contains "verify warns about the pinned revision name" "warning:"
@@ -318,6 +370,11 @@ if [ -n "$OLD_REF" ] && [ "${ONLY:-}" != "current" ]; then
 step "Phase 2: comparison against $OLD_REF"
 
 D3="$WORK/old-init"; mkdir -p "$D3"; cd "$D3"
+
+info "--- 2-0. make the live service pin a revision name again ---"
+info "Phase 1 left the service without a pinned name, so recreate the precondition."
+pin_live_revision "phase2" || ng "failed to pin a revision name on the live service"
+wait_ready || info "the pinned deploy is not ready; continuing anyway"
 
 info "--- 2-1. the manifest that the old init scaffolds ---"
 run_cmd "$OLD" init "$SERVICE"

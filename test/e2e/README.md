@@ -50,12 +50,17 @@ URL** — do not paste it into an issue or a pull request.
 | --- | --- |
 | 1-1 | `deploy` creates a new service and it becomes ready |
 | 1-2 | a hand-written minimal manifest keeps showing server defaults in `diff` (see issue #11) |
-| 1-3 | `init` scaffolds a manifest with no pinned revision name and no empty template metadata |
-| 1-4 | `diff` right after `init` is empty |
-| 1-5 | a second `deploy` that changes the template succeeds and becomes ready |
+| 1-3 | the live service is made to pin a revision name, the way `--revision-suffix` does |
+| 1-4 | `init` drops that revision name and leaves no empty template metadata |
+| 1-5 | `diff` right after `init` is empty, and a following template change deploys cleanly |
 | 1-6 | `verify` succeeds and prints no warning |
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
 | 1-8 | `deploy` warns about a pinned revision name, and Cloud Run rejects the reused name |
+
+Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
+A service deployed without one comes back with no `spec.template.metadata.name`
+at all, so `init` has nothing to carry over and the rest of phase 1 would pass
+for the wrong reason. The precondition has to be created deliberately.
 
 ## Phase 2: comparing against another revision
 
@@ -74,7 +79,15 @@ already exists., alreadyExists
 
 ## Behaviour worth knowing about
 
-Two things this test pinned down that are not obvious from the code:
+Things this test pinned down that are not obvious from the code:
+
+- **A revision name only comes back if a client set it.** Deploy without
+  `spec.template.metadata.name` and the field is absent from every later read —
+  `spec.template.metadata` holds just the server-managed labels. Deploy with
+  `gcloud run deploy --revision-suffix=<s>`, a Terraform `template.metadata.name`,
+  or a manifest that pins one, and the field is set and echoed back from then on.
+  That is the precondition under which carrying the name into a scaffolded
+  manifest breaks the next deploy.
 
 - **Reusing a revision name can fail asynchronously.** The `ReplaceService` call
   returns 200 and `clrnd deploy` exits 0, while the rollout fails with
