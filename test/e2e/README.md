@@ -40,15 +40,22 @@ Each run uses a unique service named `clrnd-e2e-<timestamp>` and deletes it on
 exit, including on failure and Ctrl-C. `kill -9` skips that cleanup; use
 `--cleanup-orphans` to remove anything left behind.
 
-`work/` holds the built binaries and the scratch directories from the last run.
-It is git-ignored, and **it contains the real service name, service account, and
-URL** — do not paste it into an issue or a pull request.
+Build output and scratch directories go to `$TMPDIR/clrnd-e2e-work` (override with
+`WORK=<dir>`), **not** into the repository. That is deliberate: when the checkout
+lives in a cloud-synced folder (Dropbox, iCloud, OneDrive), the sync client can
+restore an older copy of a binary while it is being rebuilt, or move the new one
+aside as a "conflicted copy" — and the run then silently tests a stale binary.
+`build_binary` also fails the run if the output was not actually rewritten.
+
+That directory **contains the real service name, service account, and URL** — do
+not paste it into an issue or a pull request.
 
 ## What phase 1 checks
 
 | # | Check |
 | --- | --- |
 | 1-1 | `deploy` creates a new service and it becomes ready |
+| 1-1b | `status` reports Ready, the URL and the traffic split, in text and JSON |
 | 1-2 | a hand-written minimal manifest keeps showing server defaults in `diff` (see issue #11) |
 | 1-3 | the live service is made to pin a revision name, the way `--revision-suffix` does |
 | 1-4 | `init` drops that revision name and leaves no empty template metadata |

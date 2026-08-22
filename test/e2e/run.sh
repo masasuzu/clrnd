@@ -24,7 +24,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)" || { echo "error: cannot resolve the script directory" >&2; exit 1; }
 REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
 [ -n "$REPO" ] || { echo "error: cannot resolve the repository root" >&2; exit 1; }
-WORK="$HERE/work"
+# 成果物はリポジトリの外に置く。リポジトリがクラウド同期フォルダ (Dropbox, iCloud,
+# OneDrive ...) の下にあると、同期クライアントがビルド中のバイナリを古い版に差し戻したり
+# "conflicted copy" を作ったりする。そうなると古いバイナリを黙ってテストしてしまう。
+WORK="${WORK:-${TMPDIR:-/tmp}/clrnd-e2e-work}"
 BIN="$WORK/bin"
 
 # 使い捨てサービスの共通プレフィクス。--cleanup-orphans の対象でもある。
@@ -121,6 +124,27 @@ assert_contains()   { if printf '%s' "$OUT" | grep -q -- "$2"; then ok "$1"; els
 assert_missing()    { if printf '%s' "$OUT" | grep -q -- "$2"; then ng "$1 (unexpected: $2)"; else ok "$1"; fi; }
 assert_file_has()   { if grep -q -- "$3" "$2"; then ok "$1"; else ng "$1 (missing in $(basename "$2"): $3)"; fi; }
 assert_file_lacks() { if grep -q -- "$3" "$2"; then ng "$1 (present in $(basename "$2"): $3)"; else ok "$1"; fi; }
+
+# ---------- build ----------
+# file_mtime <path> : 更新時刻を epoch 秒で返す (BSD/GNU stat の両対応)。
+file_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+# build_binary <dest> <srcdir> : ビルドし、出力が本当に更新されたかを確認する。
+# 差し戻しやキャッシュで古いバイナリが残っていると、テストが嘘の結果を出すため。
+build_binary() {
+  local dest="$1" src="$2" before
+  before="$(date +%s)"
+  (cd "$src" && go build -o "$dest" .) || return 1
+  [ -f "$dest" ] || { c '31' "     build produced no file at $dest"; return 1; }
+  local mtime
+  mtime="$(file_mtime "$dest")"
+  if [ -z "$mtime" ] || [ "$mtime" -lt "$before" ]; then
+    c '31' "     $dest was not rewritten by the build (stale binary?)"
+    return 1
+  fi
+}
 
 # ---------- Cloud Run helpers ----------
 # ready_condition は Ready 条件を "<status>\t<reason>\t<message>" で返す。
@@ -264,15 +288,16 @@ info "region  = $REGION"
 info "repo    = $REPO"
 info "service = ${SERVICE_PREFIX}<timestamp>"
 
+info "work    = $WORK"
 info "building the current binary ($(git -C "$REPO" rev-parse --abbrev-ref HEAD))..."
-(cd "$REPO" && go build -o "$BIN/clrnd" .) || die "build failed"
+build_binary "$BIN/clrnd" "$REPO" || die "build failed"
 CLRND="$BIN/clrnd"
 
 if [ -n "$OLD_REF" ]; then
   info "building the comparison binary from $OLD_REF..."
   mkdir -p "$WORK/old-src"
   git -C "$REPO" archive "$OLD_REF" | tar -x -C "$WORK/old-src" || die "git archive $OLD_REF failed"
-  (cd "$WORK/old-src" && go build -o "$BIN/clrnd-old" .) || die "build of $OLD_REF failed"
+  build_binary "$BIN/clrnd-old" "$WORK/old-src" || die "build of $OLD_REF failed"
   OLD="$BIN/clrnd-old"
 fi
 
@@ -290,6 +315,20 @@ write_manifest "$D1/manifest.yaml"
 run_cmd "$CLRND" deploy "$SERVICE" "$D1/manifest.yaml" --auto-approve
 assert_rc_zero "deploy creates a new service"
 wait_ready || ng "the first deploy never became ready"
+
+info "--- 1-1b. status ---"
+run_cmd "$CLRND" status "$SERVICE"
+assert_rc_zero "status succeeds"
+assert_contains "status reports Ready=True" "Ready:           True"
+assert_contains "status reports the service URL" "URL:             https://"
+assert_contains "status reports the traffic split" "100%"
+run_cmd "$CLRND" status "$SERVICE" --format json
+assert_rc_zero "status --format json succeeds"
+if printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("service") and d.get("conditions") else 1)'; then
+  ok "status --format json is valid JSON with service and conditions"
+else
+  ng "status --format json did not produce the expected JSON"
+fi
 
 info "--- 1-2. diff against a hand-written minimal manifest ---"
 info "Cloud Run fills in defaults on create, so this diff is expected to be non-empty."
