@@ -34,18 +34,23 @@ KEEP=1 ./run.sh                 # keep the service for inspection
 ONLY=current ./run.sh           # only the current-binary phase
 OLD_REF=<git-ref> ./run.sh      # also build that ref and compare its behaviour
 REGION=<region> ./run.sh        # default: asia-northeast1
+WORK_ROOT=<dir> ./run.sh        # parent of the build/scratch dir (default: $TMPDIR)
 ```
 
 Each run uses a unique service named `clrnd-e2e-<timestamp>` and deletes it on
 exit, including on failure and Ctrl-C. `kill -9` skips that cleanup; use
 `--cleanup-orphans` to remove anything left behind.
 
-Build output and scratch directories go to `$TMPDIR/clrnd-e2e-work` (override with
-`WORK=<dir>`), **not** into the repository. That is deliberate: when the checkout
-lives in a cloud-synced folder (Dropbox, iCloud, OneDrive), the sync client can
-restore an older copy of a binary while it is being rebuilt, or move the new one
-aside as a "conflicted copy" — and the run then silently tests a stale binary.
-`build_binary` also fails the run if the output was not actually rewritten.
+Build output and scratch directories go to `$TMPDIR/clrnd-e2e-work`, **not** into
+the repository. That is deliberate: when the checkout lives in a cloud-synced
+folder (Dropbox, iCloud, OneDrive), the sync client can restore an older copy of
+a binary while it is being rebuilt, or move the new one aside as a "conflicted
+copy" — and the run then silently tests a stale binary. `build_binary` also fails
+the run if the output was not actually rewritten.
+
+`WORK_ROOT=<dir>` moves that directory elsewhere. It names the **parent**: the run
+always works inside `<dir>/clrnd-e2e-work` and only ever deletes that
+subdirectory, so pointing `WORK_ROOT` at a directory of your own does not wipe it.
 
 That directory **contains the real service name, service account, and URL** — do
 not paste it into an issue or a pull request.

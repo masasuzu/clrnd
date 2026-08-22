@@ -14,6 +14,7 @@
 #   ONLY=current ./run.sh          # only the current-binary phase
 #   ONLY=old OLD_REF=<ref> ./run.sh
 #   PROJECT=<id> REGION=<region> ./run.sh
+#   WORK_ROOT=<dir> ./run.sh       # parent of the build/scratch dir (default: $TMPDIR)
 #
 # The project ID is deliberately not stored in this script. Provide it via
 # $PROJECT or a local (git-ignored) project.env file next to this script.
@@ -27,7 +28,13 @@ REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
 # 成果物はリポジトリの外に置く。リポジトリがクラウド同期フォルダ (Dropbox, iCloud,
 # OneDrive ...) の下にあると、同期クライアントがビルド中のバイナリを古い版に差し戻したり
 # "conflicted copy" を作ったりする。そうなると古いバイナリを黙ってテストしてしまう。
-WORK="${WORK:-${TMPDIR:-/tmp}/clrnd-e2e-work}"
+#
+# WORK_ROOT は「置き場所の親ディレクトリ」。実際に使うのは必ずその下の専用ディレクトリで、
+# 消すのもそこだけにする (WORK 自体を上書き可能にすると、後段の rm -rf が利用者の
+# 指定したディレクトリを丸ごと消してしまう)。
+WORK_DIR_NAME="clrnd-e2e-work"
+WORK_ROOT="${WORK_ROOT:-${TMPDIR:-/tmp}}"
+WORK="${WORK_ROOT%/}/$WORK_DIR_NAME"
 BIN="$WORK/bin"
 
 # 使い捨てサービスの共通プレフィクス。--cleanup-orphans の対象でもある。
@@ -126,9 +133,12 @@ assert_file_has()   { if grep -q -- "$3" "$2"; then ok "$1"; else ng "$1 (missin
 assert_file_lacks() { if grep -q -- "$3" "$2"; then ng "$1 (present in $(basename "$2"): $3)"; else ok "$1"; fi; }
 
 # ---------- build ----------
-# file_mtime <path> : 更新時刻を epoch 秒で返す (BSD/GNU stat の両対応)。
+# file_mtime <path> : 更新時刻を epoch 秒で返す (GNU/BSD stat の両対応)。
+# GNU を先に試す。逆順にすると、GNU stat では -f がファイルシステム情報の指定になり
+# %m を解釈できず "?" を exit 0 で返すため、フォールバックに到達しない。
+# BSD stat は -c を知らずに exit != 0 で失敗するので、この順序なら両方で正しく動く。
 file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
 # build_binary <dest> <srcdir> : ビルドし、出力が本当に更新されたかを確認する。
@@ -140,7 +150,14 @@ build_binary() {
   [ -f "$dest" ] || { c '31' "     build produced no file at $dest"; return 1; }
   local mtime
   mtime="$(file_mtime "$dest")"
-  if [ -z "$mtime" ] || [ "$mtime" -lt "$before" ]; then
+  case "$mtime" in
+    ''|*[!0-9]*)
+      # 検査できないまま素通りさせない (それでは保険にならない)。
+      c '31' "     cannot read the mtime of $dest; refusing to trust the build"
+      return 1
+      ;;
+  esac
+  if [ "$mtime" -lt "$before" ]; then
     c '31' "     $dest was not rewritten by the build (stale binary?)"
     return 1
   fi
@@ -282,6 +299,11 @@ trap cleanup EXIT
 step "Setup"
 command -v gcloud >/dev/null || die "gcloud is not on PATH"
 command -v go >/dev/null || die "go is not on PATH"
+# 自分が作る専用ディレクトリ以外は絶対に消さない。
+case "$WORK" in
+  */"$WORK_DIR_NAME") ;;
+  *) die "refusing to remove $WORK: not a $WORK_DIR_NAME directory" ;;
+esac
 rm -rf "$WORK"
 mkdir -p "$BIN"
 info "region  = $REGION"
