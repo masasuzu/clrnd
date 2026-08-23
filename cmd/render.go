@@ -54,10 +54,8 @@ func runRender(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("refusing to write over the manifest being rendered: %s", renderOutput)
 		}
 		// 展開後の内容は must_env などで秘密を含みうるので、他ユーザから読めないようにする。
-		if err := os.WriteFile(renderOutput, rendered, 0o600); err != nil {
-			return fmt.Errorf("failed to write to %s: %w", renderOutput, err)
-		}
-		return nil
+		// 既存の出力先が 0644 でも 0600 になり、書き込みに失敗しても前の内容が残る。
+		return writeFilePrivate(renderOutput, rendered)
 	}
 
 	fmt.Fprint(cmd.OutOrStdout(), string(rendered))

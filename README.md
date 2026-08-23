@@ -233,6 +233,13 @@ Three specific things to know:
   same property), not a bug in clrnd — but it means an untrusted state file is an untrusted input.
   Note that the *manifest* cannot choose a state location: only `--tfstate` and the config file
   do that, and a manifest can only reference a prefix that is already registered.
+- **Files clrnd writes can hold those same values.** `render -o` and `init` write mode `0600`, and
+  replace an existing file through a temporary file in the same directory, so a failed or
+  interrupted write leaves the previous content in place instead of a truncated file. Both of those
+  are Unix properties: on Windows `os.Rename` is `MoveFileEx`, which the OS does not guarantee to
+  be an atomic replacement, and file modes are reduced to the read-only bit, so `0600` does not
+  keep the file from other users there. On Windows, put those outputs where the filesystem's own
+  permissions protect them.
 - **Diffs contain plaintext values.** `sanitizeMap` strips server-managed fields, not secrets, so a
   `env[].value` shows up in `diff` and `deploy` output as written — and `clrnd deploy --auto-approve`
   in CI leaves it in the job log. Reference secrets with `secretKeyRef` or a secret volume rather
@@ -372,7 +379,7 @@ clrnd render <manifest> [--tfstate <location>] [--output <FILE>]
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
-| `-o`, `--output` | Output file. Writes to stdout if not set. Created with mode `0600`, and it may not be the manifest being rendered. |
+| `-o`, `--output` | Output file. Writes to stdout if not set. Written with mode `0600` through a temporary file, so a failed write does not destroy what was there and an existing file's mode is tightened (see [Trust boundary](#trust-boundary) for the Windows caveat). It may not be the manifest being rendered. |
 
 ```sh
 clrnd render service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
@@ -532,7 +539,10 @@ The config is written to `--config` when you pass it (it does not have to exist 
 creates it), otherwise to `clrnd.yml` in the current directory. The `manifest:` it records is
 relative to the config file, so `clrnd init my-service -c infra/clrnd.yml` keeps working from any
 directory. Both files are written with mode `0600`, since a live service definition can contain
-plaintext environment variables.
+plaintext environment variables. `--force` replaces them through a temporary file, so an
+interrupted or failing write leaves the previous content in place rather than a truncated file, and
+an existing file's mode is tightened to `0600` rather than kept as it was. See
+[Trust boundary](#trust-boundary) for what of that holds on Windows.
 
 For backward compatibility `load` is kept as an alias for `init` (it now scaffolds files rather than
 printing to stdout).

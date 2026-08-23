@@ -98,16 +98,27 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// 生成物には live の平文の環境変数が入りうるので、他ユーザから読めないようにする。
-	if err := os.WriteFile(initManifest, manifest, 0o600); err != nil {
-		return fmt.Errorf("failed to write %s: %w", initManifest, err)
+	// --force が無い場合は作成と存在確認を 1 回の操作で行い、上の確認の後に作られた
+	// ファイルを潰さない。--force の場合は原子的に置き換える。
+	if err := writeScaffold(initManifest, manifest, initForce); err != nil {
+		return err
 	}
-	if err := os.WriteFile(configFile, configYAML, 0o600); err != nil {
+	if err := writeScaffold(configFile, configYAML, initForce); err != nil {
 		// config の書き込みに失敗したら manifest を元に戻し、中途半端な scaffold を
 		// 残さない。巻き戻しは best-effort で、返すのは本来の書き込みエラー。
 		restoreManifest(initManifest, previousManifest, manifestExisted)
-		return fmt.Errorf("failed to write %s: %w", configFile, err)
+		return err
 	}
 	return nil
+}
+
+// writeScaffold は init の生成物を 1 つ書く。force なら既存ファイルを原子的に置き換え、
+// そうでなければ既に在る場合に失敗する。
+func writeScaffold(path string, data []byte, force bool) error {
+	if force {
+		return writeFilePrivate(path, data)
+	}
+	return writeFileExclusive(path, data)
 }
 
 // manifestPathFor は config ファイルから見たマニフェストの相対パスを返す。
@@ -128,7 +139,7 @@ func restoreManifest(path string, previous []byte, existed bool) {
 		return
 	}
 	if previous != nil {
-		_ = os.WriteFile(path, previous, 0o600)
+		_ = writeFilePrivate(path, previous)
 	}
 }
 
