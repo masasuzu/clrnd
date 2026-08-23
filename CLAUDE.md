@@ -328,9 +328,22 @@ revision-name conflicts, asynchronous rollout failures).
   overwrite existing files without `--force`. The config goes to `--config` when given, otherwise
   `clrnd.yml` (`initConfigFile`); the recorded `manifest:` is made relative to the config's directory
   by `manifestPathFor`, because `resolveConfigPath` resolves it from there. Both files are written
-  `0600` (they can carry plaintext `env[].value`). If the config write fails after the manifest was
+  `0600` (they can carry plaintext `env[].value`) through `writeScaffold`. If the config write fails
+  after the manifest was
   overwritten, `restoreManifest` puts the manifest back (best-effort) so `--force` cannot leave the
   old manifest destroyed with no config to show for it.
+- Every file clrnd generates goes through [cmd/write.go](cmd/write.go), never `os.WriteFile`:
+  `writeFilePrivate` writes a temporary file in the same directory and `rename`s it into place, and
+  `writeFileExclusive` creates with `O_CREATE|O_EXCL`. `os.WriteFile` is wrong for both of clrnd's
+  outputs because its `perm` only applies when the file is **created** — an existing `0644` output
+  stays `0644` after a secret is written into it — and because it truncates first, so a failed write
+  destroys the previous good content. The `rename` fixes both (`Chmod` on the temp file pins `0600`
+  regardless of umask, and the destination only ever holds the old or the new content). The one
+  exception is a destination that already exists and is **not a regular file** (`/dev/null`, a
+  process substitution): there is nothing to replace and nothing to chmod, so it is written
+  directly. `writeFileExclusive` is what `init` uses **without** `--force`, so a file created
+  between the `fileExists` check and the write is not silently overwritten; `--force` takes the
+  `writeFilePrivate` path.
 - `render -o` also writes `0600`, and refuses (`sameFile`, via `os.SameFile`) to write over the very
   manifest it is rendering — otherwise the template source is replaced by its own output.
 

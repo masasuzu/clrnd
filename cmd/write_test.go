@@ -205,3 +205,159 @@ func TestMissingConfigStillFailsForOtherCommands(t *testing.T) {
 		t.Errorf("render error = %v, want it to name the missing config", err)
 	}
 }
+
+// TestRenderTightensThePermissionsOfAnExistingOutput は、既にある出力先へ書いても
+// 0600 になることを確認する。os.WriteFile の perm は新規作成時にしか効かないので、
+// 0644 のファイルへ秘密混じりの展開結果を書くと誰からも読める状態が残っていた。
+func TestRenderTightensThePermissionsOfAnExistingOutput(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+	out := filepath.Join(t.TempDir(), "rendered.yaml")
+	if err := os.WriteFile(out, []byte("stale\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed the output: %v", err)
+	}
+
+	if _, _, err := executeRoot(t, "render", manifest, "-o", out); err != nil {
+		t.Fatalf("render error = %v", err)
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("failed to stat the output: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("failed to read the output: %v", err)
+	}
+	if string(got) == "stale\n" {
+		t.Error("the output was not replaced")
+	}
+}
+
+// TestInitTightensThePermissionsOfExistingFiles は、--force で既存ファイルを潰す場合も
+// 0600 になることを確認する。live の定義には平文の環境変数が入りうる。
+func TestInitTightensThePermissionsOfExistingFiles(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	// clrnd.yml は自動検出で読まれるので、パースできる中身にしておく。
+	seed := map[string]string{
+		"manifest.yaml": "# 手で編集したマニフェスト\n",
+		"clrnd.yml":     "project: test-project\nregion: asia-northeast1\nservice: my-svc\n",
+	}
+	for name, content := range seed {
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatalf("failed to seed %s: %v", name, err)
+		}
+	}
+
+	if _, _, err := executeRoot(t, "init", "my-svc", "--force",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	for _, name := range []string{"manifest.yaml", "clrnd.yml"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, perm)
+		}
+	}
+}
+
+// TestWriteFilePrivateKeepsTheOldContentOnFailure は、書き込みに失敗しても既存の
+// 内容が残ることを確認する。truncate してから書くと、途中で失敗した時点で以前の
+// 正常な内容まで失われる。
+func TestWriteFilePrivateKeepsTheOldContentOnFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.yaml")
+	const original = "original\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("failed to seed the file: %v", err)
+	}
+	// 一時ファイルを作れないようにして書き込みを失敗させる。
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("failed to change the directory mode: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := writeFilePrivate(path, []byte("new\n")); err == nil {
+		t.Fatal("writeFilePrivate() error = nil, want the write to fail")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the file is gone: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("file = %q, want the original contents untouched", got)
+	}
+}
+
+// TestWriteFilePrivateLeavesNoTemporaryFile は、rename に失敗しても一時ファイルを
+// 残さないことを確認する。残ると出力先の隣に中身の見えるゴミが溜まる。
+func TestWriteFilePrivateLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	// 出力先をディレクトリにして rename を失敗させる。
+	path := filepath.Join(dir, "taken")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("failed to create the directory: %v", err)
+	}
+
+	if err := writeFilePrivate(path, []byte("new\n")); err == nil {
+		t.Fatal("writeFilePrivate() error = nil, want the rename to fail")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read the directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "taken" {
+		t.Errorf("directory holds %d entries, want only the original one", len(entries))
+	}
+}
+
+// TestWriteFileExclusiveRefusesAnExistingFile は、--force が無い経路が既存ファイルを
+// 上書きしないことを確認する。存在確認と書き込みが別操作だと、その隙に作られた
+// ファイルを黙って潰す。
+func TestWriteFileExclusiveRefusesAnExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clrnd.yml")
+	const original = "original\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("failed to seed the file: %v", err)
+	}
+
+	err := writeFileExclusive(path, []byte("new\n"))
+	if err == nil {
+		t.Fatal("writeFileExclusive() error = nil, want it to refuse an existing file")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("writeFileExclusive() error = %v, want it to say the file exists", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("failed to read the file: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("file = %q, want the original contents untouched", got)
+	}
+}
+
+// TestWriteFileExclusiveCreatesAPrivateFile は、新規作成が 0600 になることを確認する。
+func TestWriteFileExclusiveCreatesAPrivateFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clrnd.yml")
+
+	if err := writeFileExclusive(path, []byte("new\n")); err != nil {
+		t.Fatalf("writeFileExclusive() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat the file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
+	}
+}

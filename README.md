@@ -372,7 +372,7 @@ clrnd render <manifest> [--tfstate <location>] [--output <FILE>]
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
-| `-o`, `--output` | Output file. Writes to stdout if not set. Created with mode `0600`, and it may not be the manifest being rendered. |
+| `-o`, `--output` | Output file. Writes to stdout if not set. Written with mode `0600` (an existing file is replaced atomically and its mode tightened), and it may not be the manifest being rendered. |
 
 ```sh
 clrnd render service.yaml --tfstate gs://my-tf-state/prod/default.tfstate
@@ -532,7 +532,9 @@ The config is written to `--config` when you pass it (it does not have to exist 
 creates it), otherwise to `clrnd.yml` in the current directory. The `manifest:` it records is
 relative to the config file, so `clrnd init my-service -c infra/clrnd.yml` keeps working from any
 directory. Both files are written with mode `0600`, since a live service definition can contain
-plaintext environment variables.
+plaintext environment variables. `--force` replaces them atomically, so an interrupted or failing
+write leaves the previous content in place rather than a truncated file, and an existing file's mode
+is tightened to `0600` rather than kept as it was.
 
 For backward compatibility `load` is kept as an alias for `init` (it now scaffolds files rather than
 printing to stdout).
