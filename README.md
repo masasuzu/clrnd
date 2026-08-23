@@ -637,6 +637,10 @@ my-svc-00007-abc  True                    90%      -       2026-08-22T10:00:00Z 
 my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z  gcr.io/p/i:v1
 ```
 
+`IMAGE` lists **every** container of the revision, comma-separated, in the order the manifest
+declares them — a service with a sidecar shows both images. In JSON the same values are the
+`images` array.
+
 `--format json` prints the same list as JSON:
 
 ```sh
@@ -650,8 +654,9 @@ clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 | `--format`  | Output format: `text` (default) or `json`.                     |
 
 Revisions are ordered newest-first by `creationTimestamp`, falling back to the revision name when a
-timestamp cannot be parsed. Cloud Run's own numbering (`-00007-abc`) sorts correctly that way; a
-hand-chosen `--revision-suffix` may not (`v10` sorts before `v2`).
+timestamp cannot be parsed. That fallback is a plain descending string comparison: Cloud Run's own
+numbering (`-00007-abc`) sorts correctly under it, but a hand-chosen `--revision-suffix` may not —
+`v2` comes out ahead of `v10`, however much later `v10` was created.
 
 ### refresh
 
