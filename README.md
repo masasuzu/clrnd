@@ -799,7 +799,12 @@ CI also checks the things that are not Go code. To reproduce those locally:
 
 ```sh
 go mod tidy -diff                                                  # go.mod / go.sum are tidy
-bash -n test/e2e/run.sh && shellcheck test/e2e/run.sh              # the end-to-end script
+
+# the shell scripts (bash -n only checks its first file argument, hence the loop)
+for f in test/e2e/run.sh .github/scripts/*.sh; do bash -n "$f"; done
+shellcheck test/e2e/run.sh .github/scripts/*.sh
+./.github/scripts/check-tool-pins.sh                               # the pins below agree
+
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12          # .github/workflows/*.yml
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check           # .goreleaser.yaml
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 build --snapshot --clean   # every release target

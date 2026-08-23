@@ -143,7 +143,10 @@ jobs:
       # 構文 (bash -n) と静的解析 (shellcheck) はタダで回せる。
       - name: Check the shell scripts
         run: |
-          bash -n test/e2e/run.sh
+          # bash -n は最初のファイルしか見ない (以降は位置引数になる) ので 1 つずつ回す。
+          for script in test/e2e/run.sh .github/scripts/*.sh; do
+            bash -n "$script"
+          done
           shellcheck test/e2e/run.sh .github/scripts/*.sh
 
       # Dependabot はアクションの SHA と go.mod しか追わない。version 入力や
