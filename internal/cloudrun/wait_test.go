@@ -3,12 +3,14 @@ package cloudrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/api/googleapi"
 	run "google.golang.org/api/run/v1"
 )
 
@@ -448,5 +450,131 @@ func TestWaitTimeoutReportsTheLastError(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Wait() error = %v, want it to contain %q", err, want)
 		}
+	}
+}
+
+// googleAPIErrorWithReason はエラー理由 (googleapi.Error.Errors[].Reason) を持つ
+// エラー応答を組み立てる。Google API はレート制限を 403 + 理由で返す。
+func googleAPIErrorWithReason(code int, message, reason string) map[string]interface{} {
+	return map[string]interface{}{
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+			"errors":  []map[string]interface{}{{"reason": reason, "message": message}},
+		},
+	}
+}
+
+// TestWaitFailsFastOnPermanentErrors は、待っても回復しないエラーをタイムアウトまで
+// 引きずらないことを確認する。原因は最初のポーリングで分かっているのに、既定 10 分の
+// タイムアウトまで CI のジョブを占有してから同じエラーで落ちるのは無駄でしかない。
+func TestWaitFailsFastOnPermanentErrors(t *testing.T) {
+	for _, code := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+	} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			c, api := newTestClient(t, func(*http.Request) (int, interface{}) {
+				return code, googleAPIError(code, "permanent failure")
+			})
+
+			_, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+			if err == nil {
+				t.Fatal("Wait() error = nil, want the permanent failure returned")
+			}
+			if !strings.Contains(err.Error(), "permanent failure") {
+				t.Errorf("Wait() error = %v, want the API error kept", err)
+			}
+			if n := len(api.recorded()); n != 1 {
+				t.Errorf("polled %d times, want 1 (a permanent failure must not be retried)", n)
+			}
+		})
+	}
+}
+
+// TestWaitRetriesARateLimitedForbidden は、403 でもレート制限は再試行することを
+// 確認する。権限不足と同じ扱いにすると、混み合っているだけの状況で待機が落ちる。
+func TestWaitRetriesARateLimitedForbidden(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls == 1 {
+			return http.StatusForbidden,
+				googleAPIErrorWithReason(403, "Quota exceeded", "rateLimitExceeded")
+		}
+		return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
+	})
+
+	got, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+	if err != nil {
+		t.Fatalf("Wait() error = %v, want the rate limit to be retried", err)
+	}
+	if got == nil || got.Ready() == nil || got.Ready().Status != conditionTrue {
+		t.Errorf("Wait() = %+v, want a ready status", got)
+	}
+}
+
+// TestWaitDeletedFailsFastOnPermanentErrors は、削除待ちも Wait と同じ分類で
+// 打ち切ることを確認する。両者がずれると、delete だけ 10 分待たされる。
+func TestWaitDeletedFailsFastOnPermanentErrors(t *testing.T) {
+	c, api := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusForbidden, googleAPIError(403, "permission denied")
+	})
+
+	err := c.WaitDeleted(context.Background(), "my-svc", fastWait(0))
+	if err == nil {
+		t.Fatal("WaitDeleted() error = nil, want the permanent failure returned")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("WaitDeleted() error = %v, want the API error kept", err)
+	}
+	if n := len(api.recorded()); n != 1 {
+		t.Errorf("polled %d times, want 1 (a permanent failure must not be retried)", n)
+	}
+}
+
+func TestIsRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, true},
+		{"connection reset", errors.New("connection reset by peer"), true},
+		{"400", &googleapi.Error{Code: 400}, false},
+		{"401", &googleapi.Error{Code: 401}, false},
+		{"403", &googleapi.Error{Code: 403}, false},
+		{"404", &googleapi.Error{Code: 404}, false},
+		{"409", &googleapi.Error{Code: 409}, false},
+		{"408", &googleapi.Error{Code: 408}, true},
+		{"429", &googleapi.Error{Code: 429}, true},
+		{"500", &googleapi.Error{Code: 500}, true},
+		{"503", &googleapi.Error{Code: 503}, true},
+		{
+			name: "403 rate limited",
+			err: &googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{
+				{Reason: "rateLimitExceeded"},
+			}},
+			want: true,
+		},
+		{
+			name: "403 with an unrelated reason",
+			err: &googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{
+				{Reason: "forbidden"},
+			}},
+			want: false,
+		},
+		{"wrapped 403", fmt.Errorf("failed to get service: %w", &googleapi.Error{Code: 403}), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRetryable(tt.err); got != tt.want {
+				t.Errorf("isRetryable(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

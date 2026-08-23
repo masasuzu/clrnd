@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/pmezard/go-difflib/difflib"
 	"google.golang.org/api/googleapi"
@@ -295,6 +296,47 @@ func isNotFound(err error) bool {
 		return gerr.Code == 404
 	}
 	return false
+}
+
+// retryableForbiddenReasons は 403 でも待てば回復しうる理由。Google API はレート制限や
+// クォータ超過を 403 で返すことがあり、こちらは時間が解決する。権限不足の 403 とは
+// 区別が必要なので理由で見分ける。
+var retryableForbiddenReasons = map[string]bool{
+	"rateLimitExceeded":       true,
+	"userRateLimitExceeded":   true,
+	"quotaExceeded":           true,
+	"concurrentLimitExceeded": true,
+}
+
+// isRetryable は待機中の取得エラーが再試行で回復しうるかを返す。
+//
+// ステータスの分からないエラー (接続断/DNS 解決失敗/EOF など) は一時的なものとして扱う。
+// 生成された API クライアントは再試行しないので、単発の 503 で待機を打ち切ると、適用は
+// 成功しているのに deploy が失敗を返す。一方、400 の不正な要求や 401/403 の認証・権限は
+// 待っても同じ結果にしかならず、原因が最初のポーリングで分かっているのにタイムアウト
+// (既定 10 分) まで CI を占有してから落ちることになる。
+func isRetryable(err error) bool {
+	var gerr *googleapi.Error
+	if !errors.As(err, &gerr) {
+		return true
+	}
+	switch {
+	case gerr.Code == http.StatusRequestTimeout, gerr.Code == http.StatusTooManyRequests:
+		return true
+	case gerr.Code == http.StatusForbidden:
+		for _, item := range gerr.Errors {
+			if retryableForbiddenReasons[item.Reason] {
+				return true
+			}
+		}
+		return false
+	case gerr.Code >= 500:
+		return true
+	case gerr.Code >= 400:
+		// 400/401/403/404/409 など。恒久的な失敗。
+		return false
+	}
+	return true
 }
 
 // isConflict は resourceVersion の不一致 (楽観的並行制御の失敗) かを返す。

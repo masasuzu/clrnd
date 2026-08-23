@@ -730,8 +730,11 @@ clrnd wait --timeout 5m --interval 5s
 | `--interval` | How long to wait between polls (default `2s`). The interval backs off up to `15s`; a value you set is never shrunk below that cap. |
 
 A failed poll is not a failed rollout: a transient error is reported and retried until the timeout,
-because a single 503 would otherwise turn an already-applied deploy into a red CI run. A `404` is
-the exception — a service that does not exist will not appear, so `wait` returns at once.
+because a single 503 would otherwise turn an already-applied deploy into a red CI run. Retried means
+`408`, `429`, `5xx`, and errors with no HTTP status (a dropped connection, a DNS failure). Errors
+that will not heal are returned at once instead of holding the job for the whole timeout: `400`,
+`401`, `403`, and `404` (a service that does not exist will not appear). A `403` that reports a rate
+limit is the exception — quota clears on its own, so it is retried.
 
 ## Exit codes
 
