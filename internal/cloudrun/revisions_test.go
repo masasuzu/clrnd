@@ -89,6 +89,10 @@ func TestNewRevisionsKeepsEveryContainerImage(t *testing.T) {
 	if strings.Join(got[0].Images, ",") != strings.Join(want, ",") {
 		t.Errorf("Images = %v, want %v in spec order", got[0].Images, want)
 	}
+	// 既存の JSON 利用 (jq '.[].image') を壊さないため、image は残して先頭を指す。
+	if got[0].Image != want[0] {
+		t.Errorf("Image = %q, want the first container %q", got[0].Image, want[0])
+	}
 	// 表の IMAGE 列にも両方出る。
 	text := Revisions{got[0]}.Text()
 	if !strings.Contains(text, "gcr.io/p/app:v2,gcr.io/p/proxy:v1") {
@@ -107,7 +111,7 @@ func TestNewRevisionsIsNilSafe(t *testing.T) {
 		t.Fatalf("newRevisions() = %+v, want the nil entry skipped", got)
 	}
 	for _, r := range got {
-		if len(r.Images) != 0 || r.Ready != "" {
+		if r.Image != "" || len(r.Images) != 0 || r.Ready != "" {
 			t.Errorf("revision = %+v, want empty fields", r)
 		}
 	}

@@ -27,7 +27,11 @@ const listRevisionsMaxPages = 1000
 // Revision はサービスに属するリビジョン 1 件の要約。JSON 出力の構造でもある。
 type Revision struct {
 	Name string `json:"name"`
-	// Images はこのリビジョンのコンテナイメージ。マニフェストに書かれた順で、
+	// Image は最初のコンテナのイメージ。Images[0] と同じ値で、JSON の後方互換の
+	// ために残している (jq '.[].image' を書いている利用者を黙って壊さない)。
+	// 新しく書くなら Images を見ること。
+	Image string `json:"image,omitempty"`
+	// Images はこのリビジョンの全コンテナのイメージ。マニフェストに書かれた順で、
 	// サイドカーがあれば複数入る。
 	Images []string `json:"images,omitempty"`
 	// Created は API が返す作成時刻の文字列 (RFC3339)。
@@ -107,6 +111,9 @@ func newRevisions(items []*run.Revision, status *Status) Revisions {
 			continue
 		}
 		r := Revision{Images: revisionImages(item)}
+		if len(r.Images) > 0 {
+			r.Image = r.Images[0]
+		}
 		if item.Metadata != nil {
 			r.Name = item.Metadata.Name
 			r.Created = item.Metadata.CreationTimestamp

@@ -639,7 +639,8 @@ my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z 
 
 `IMAGE` lists **every** container of the revision, comma-separated, in the order the manifest
 declares them — a service with a sidecar shows both images. In JSON the same values are the
-`images` array.
+`images` array; `image` is still there and holds the first container, so an existing
+`jq '.[].image'` keeps working.
 
 `--format json` prints the same list as JSON:
 
