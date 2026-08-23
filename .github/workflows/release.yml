@@ -13,7 +13,19 @@ concurrency:
 permissions: {}
 
 jobs:
+  # タグ push では通常 CI (ci.yml の push.branches: [main]) が起動しないので、
+  # ここで同じ検査を呼ぶ。これが無いと、テストが落ちるコミットや main に入って
+  # いないコミットに付けたタグからでも、署名と provenance の付いた正式なリリースが
+  # 公開できてしまう。署名は「そのコミットからビルドした」ことしか保証しない。
+  # 呼び出し先の checkout はこのワークフローと同じ ref (タグ) を見るので、
+  # 検査した SHA と GoReleaser がビルドする SHA は一致する。
+  verify:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+
   goreleaser:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write      # リリースの作成と成果物のアップロード
