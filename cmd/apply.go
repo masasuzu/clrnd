@@ -64,14 +64,23 @@ func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) 
 func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.DeployPlan, o applyOptions) error {
 	ctx := cmd.Context()
 
-	// 差分が無ければ通常は何もしない。--dry-run はサーバ側検証のために続行する。
+	// 差分が無ければ適用はしない。--dry-run はサーバ側検証のために続行する。
 	if plan.Diff == "" {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No changes.")
-		if !o.DryRun {
+		if o.DryRun {
+			_, err := plan.Apply(ctx, o.DryRun)
+			return err
+		}
+		if o.NoWait {
 			return nil
 		}
-		_, err := plan.Apply(ctx, o.DryRun)
-		return err
+		// 適用するものは無いが、サービスが健全かは確認する。
+		// 失敗したデプロイの後に同じマニフェストで再実行すると差分はゼロになるので、
+		// ここを素通りさせると壊れたまま成功扱いになる (待機を入れた意味が消える)。
+		// Generation は指定しない = 世代を問わず「いま Ready か」だけを見る。
+		return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
+			Timeout: o.Timeout,
+		})
 	}
 	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
 

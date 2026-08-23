@@ -287,7 +287,8 @@ Show the diff against the live service, ask for confirmation, then apply the man
 locally before the request is sent. When there is no difference, nothing is applied.
 
 **After applying, `deploy` waits until the new revision is serving** and exits non-zero if the
-rollout fails. Cloud Run accepts the request before the revision starts, so without this a broken
+rollout fails. When there is nothing to apply it still checks that the service is currently healthy,
+so re-running after a failed rollout does not report success. Cloud Run accepts the request before the revision starts, so without this a broken
 revision would still exit 0 and CI would treat the deploy as successful. Pass `--no-wait` to return
 as soon as the request is accepted.
 

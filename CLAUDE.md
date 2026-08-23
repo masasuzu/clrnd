@@ -274,7 +274,11 @@ revision-name conflicts, asynchronous rollout failures).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
   `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout`, and `applyPlan` runs the one flow
   (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
-  text differs per command. Do not re-implement that sequence. `confirmAction` in the same file is
+  text differs per command. Do not re-implement that sequence.
+  An **empty diff still waits** (for readiness only, with no generation to reach): a deploy that
+  failed its rollout leaves live == desired, so a retry with the same manifest produces no diff, and
+  returning early there would hand CI a green run over a broken service — the exact failure the wait
+  exists to catch. `confirmAction` in the same file is
   the confirmation rule on its own, for destructive commands that have no plan to show (`delete`).
 - `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
   `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
