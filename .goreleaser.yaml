@@ -5,7 +5,10 @@ project_name: clrnd
 
 before:
   hooks:
-    - go mod tidy
+    # tidy はリリースの最中に go.mod/go.sum を書き換え、モジュールグラフを
+    # 引き直す。CI が検証した依存の集合とリリースされたバイナリの依存が
+    # 一致する保証が無くなるので、取得だけにする。
+    - go mod download
 
 builds:
   - id: clrnd
@@ -20,9 +23,14 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      # 絶対パスをバイナリに埋め込まない (再現性)。
+      - -trimpath
     ldflags:
       - -s -w
       - -X github.com/masasuzu/clrnd/cmd.version={{ .Version }}
+    # ビルド時刻ではなくコミット時刻を使う (再現性)。
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - id: default
@@ -36,6 +44,24 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+# checksums.txt に keyless で署名する。成果物と同じ場所から配られる
+# チェックサムだけでは、配布元が乗っ取られたときに何の保証にもならない。
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+sboms:
+  - artifacts: archive
 
 changelog:
   use: github
