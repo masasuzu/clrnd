@@ -48,7 +48,13 @@ func runRender(cmd *cobra.Command, args []string) error {
 	}
 
 	if renderOutput != "" {
-		if err := os.WriteFile(renderOutput, rendered, 0o644); err != nil {
+		// -o に入力と同じファイルを渡すと、レンダリング元が結果で潰れる。
+		// 上書き自体は render の通常の使い方なので禁止しないが、これだけは断る。
+		if sameFile(manifestPath, renderOutput) {
+			return fmt.Errorf("refusing to write over the manifest being rendered: %s", renderOutput)
+		}
+		// 展開後の内容は must_env などで秘密を含みうるので、他ユーザから読めないようにする。
+		if err := os.WriteFile(renderOutput, rendered, 0o600); err != nil {
 			return fmt.Errorf("failed to write to %s: %w", renderOutput, err)
 		}
 		return nil
@@ -56,4 +62,18 @@ func runRender(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprint(cmd.OutOrStdout(), string(rendered))
 	return nil
+}
+
+// sameFile は 2 つのパスが同じファイルを指すかを返す。シンボリックリンクや
+// ハードリンク越しでも同一と判定できるよう os.SameFile を使う。
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }

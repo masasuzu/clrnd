@@ -72,6 +72,10 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
+// annotationConfigOptional が付いたサブコマンドは、--config で明示されたファイルが
+// 無くてもエラーにしない。設定ファイルを「読む」のではなく「作る」コマンド (init) 用。
+const annotationConfigOptional = "clrnd/config-optional"
+
 // loadConfig は --config か、未指定ならデフォルト名の設定ファイルを読み込む。
 // --config 明示時にファイルが無ければエラー。自動検出時は無ければ何もしない。
 func loadConfig(cmd *cobra.Command, args []string) error {
@@ -79,6 +83,12 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 	if path == "" {
 		path = findDefaultConfig()
 		if path == "" {
+			return nil
+		}
+	} else if _, ok := cmd.Annotations[annotationConfigOptional]; ok {
+		// init は clrnd.yml を生成する側なので、-c で指定した書き込み先がまだ
+		// 無いのは正常。存在する場合だけ読み、値を引き継ぐ。
+		if !fileExists(path) {
 			return nil
 		}
 	}
