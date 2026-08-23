@@ -13,6 +13,7 @@ var (
 	diffRegion     string
 	diffTfstate    []string
 	diffNoDefaults bool
+	diffExitCode   bool
 )
 
 var diffCmd = &cobra.Command{
@@ -24,6 +25,8 @@ var diffCmd = &cobra.Command{
 		"Cloud Run fills in a lot of fields on its own, so by default diff asks it to resolve them\n" +
 		"first (via a dry run) and compares against that; pass --no-server-defaults to compare\n" +
 		"against the manifest as written, which also avoids needing update permission.\n" +
+		"Nothing is printed when there is no difference, and diff succeeds either way unless\n" +
+		"--exit-code is given.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runDiff,
@@ -33,6 +36,8 @@ func init() {
 	addTargetFlags(diffCmd, &diffProject, &diffRegion)
 	addManifestFlags(diffCmd, &diffTfstate)
 	addServerDefaultsFlag(diffCmd, &diffNoDefaults)
+	diffCmd.Flags().BoolVar(&diffExitCode, "exit-code", false,
+		"exit with 2 when there is a difference (0 when there is none, 1 on error)")
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
@@ -73,5 +78,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprint(cmd.OutOrStdout(), out)
+	if diffExitCode && out != "" {
+		return errDiffFound
+	}
 	return nil
 }

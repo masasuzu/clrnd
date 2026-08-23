@@ -304,6 +304,7 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
+| `--exit-code` | Exit with 2 when there is a difference. Use this for drift checks in CI. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
 
@@ -511,6 +512,28 @@ Ctrl-C stops the wait.
 clrnd wait <service> --project <PROJECT> --region <REGION>
 clrnd wait --timeout 5m --interval 5s
 ```
+
+## Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Success. Also what `diff` returns when it found differences, unless `--exit-code` is given, and what any command returns when you answer `n` at a confirmation prompt. |
+| `1`  | Something went wrong. The message is on stderr. |
+| `2`  | `diff --exit-code` only: the command succeeded and there **is** a difference. |
+
+The split follows `terraform plan -detailed-exitcode`, so a drift check reads naturally:
+
+```sh
+clrnd diff --exit-code
+case $? in
+  0) echo "in sync" ;;
+  2) echo "drift detected"; exit 1 ;;
+  *) echo "diff failed"; exit 1 ;;
+esac
+```
+
+Without `--exit-code`, `diff` exits 0 whether or not it printed anything — so a CI step that
+just runs `clrnd diff` will always pass.
 
 ## License
 
