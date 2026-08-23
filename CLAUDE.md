@@ -222,8 +222,10 @@ revision-name conflicts, asynchronous rollout failures).
   tags are kept (pinned at 0%) so a rollback does not silently remove tag URLs; untagged entries
   (including `latestRevision`) are dropped because the target now takes all of it.
   `RollbackTarget` shallow-copies the Spec rather than mutating the live service.
-  `SelectRollbackRevision` picks the first ready revision *older* than the one currently taking the
-  largest share. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
+  `SelectRollbackRevision` picks the first ready revision *older* than the **newest revision that is
+  serving any traffic** — not the one with the largest share. Mid-canary (new 10% / stable 90%) the
+  largest share is the *stable* revision, so choosing by share rolls straight past the known-good
+  version. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
   its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
   `False`, so "the previous working version" is still findable.
 - `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.

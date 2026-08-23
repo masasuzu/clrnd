@@ -487,7 +487,8 @@ leaves behind, where a new revision would be created but would serve nothing.
 ### rollback
 
 Send all traffic back to an earlier revision. Without `--revision`, the revision just before the
-one currently serving is chosen.
+newest one currently serving traffic is chosen — so during a canary (new revision at 10%, stable at
+90%) a rollback lands on the stable revision, not two generations back.
 
 Only the traffic split changes: `spec.template` is untouched, so **no new revision is created**.
 Traffic tags are kept (pinned at 0%) so a rollback does not remove tag URLs.
