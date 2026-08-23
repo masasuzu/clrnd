@@ -1228,6 +1228,105 @@ func TestDiffServerDefaults(t *testing.T) {
 	}
 }
 
+// unchangedServiceJSON は localManifest と同じ内容の live サービス。
+// 正規化すると desired と一致するので、deploy の差分はゼロになる。
+// ready / reason で Ready 条件を差し替える。
+func unchangedServiceJSON(ready, reason string) string {
+	return fmt.Sprintf(`{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 7},
+  "spec": {"template": {"spec": {"containers": [{"image": "gcr.io/project/image:new"}]}}},
+  "status": {"observedGeneration": 7, "conditions": [{"type": "Ready", "status": %q, "reason": %q}]}
+}`, ready, reason)
+}
+
+// startUnchangedAPI は「マニフェストと同じ内容の live サービス」を返すフェイク API を
+// 立て、GET の回数を数える。
+func startUnchangedAPI(t *testing.T, ready, reason string) func() int {
+	t.Helper()
+	var mu sync.Mutex
+	gets := 0
+
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if echoDryRun(w, r) {
+			return
+		}
+		if r.Method == http.MethodGet {
+			mu.Lock()
+			gets++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(unchangedServiceJSON(ready, reason)))
+	})
+
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return gets
+	}
+}
+
+// TestDeployWithNoChangesStillChecksTheRollout は、差分がゼロでもサービスが健全か
+// 確認することを検証する。失敗したデプロイの後に同じマニフェストで再実行すると
+// 差分はゼロになるので、ここを素通りさせると壊れたまま成功扱いになる。
+func TestDeployWithNoChangesStillChecksTheRollout(t *testing.T) {
+	gets := startUnchangedAPI(t, "False", "RevisionFailed")
+
+	manifest := writeManifest(t, localManifest)
+	_, stderr, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("deploy error = nil, want the unhealthy service to surface")
+	}
+	if !strings.Contains(err.Error(), "RevisionFailed") {
+		t.Errorf("deploy error = %v, want the rollout failure reason", err)
+	}
+	if !strings.Contains(stderr, "No changes.") {
+		t.Errorf("deploy stderr = %q, want it to report that there is nothing to apply", stderr)
+	}
+	// Plan の GET に加えて、健全性を見るためのポーリングが走っている。
+	if gets() < 2 {
+		t.Errorf("GET count = %d, want the plan lookup plus at least one health poll", gets())
+	}
+}
+
+// TestDeployWithNoChangesSucceedsWhenHealthy は、健全なら差分ゼロで成功することを
+// 確認する (余計な失敗を作っていないこと)。
+func TestDeployWithNoChangesSucceedsWhenHealthy(t *testing.T) {
+	startUnchangedAPI(t, "True", "")
+
+	manifest := writeManifest(t, localManifest)
+	stdout, stderr, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("deploy error = %v", err)
+	}
+	if !strings.Contains(stderr, "No changes.") {
+		t.Errorf("deploy stderr = %q, want it to report that there is nothing to apply", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("deploy stdout = %q, want empty (there is no diff to print)", stdout)
+	}
+}
+
+// TestDeployWithNoChangesSkipsTheCheckWithNoWait は --no-wait が健全性の確認も
+// 省くことを確認する。
+func TestDeployWithNoChangesSkipsTheCheckWithNoWait(t *testing.T) {
+	// 待てば失敗する状態にしておき、それでも成功することで「見ていない」と分かる。
+	gets := startUnchangedAPI(t, "False", "RevisionFailed")
+
+	manifest := writeManifest(t, localManifest)
+	if _, _, err := executeRoot(t, "deploy", "my-svc", manifest, "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("deploy --no-wait error = %v", err)
+	}
+	if gets() != 1 {
+		t.Errorf("GET count = %d, want 1 (no health poll with --no-wait)", gets())
+	}
+}
+
 // TestVersion は --version がバージョンを出すことを確認する。
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")
