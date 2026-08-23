@@ -47,14 +47,18 @@ checksum:
 
 # checksums.txt に keyless で署名する。成果物と同じ場所から配られる
 # チェックサムだけでは、配布元が乗っ取られたときに何の保証にもならない。
+#
+# cosign v3 は新しい bundle 形式が既定 (--new-bundle-format=true) で、
+# --output-signature / --output-certificate は警告を出したうえで無視される。
+# その状態で --bundle を渡さないと空パスへ書こうとして落ちる:
+#   Error: signing dist/checksums.txt: create bundle file: open : no such file or directory
+# 署名と証明書は 1 つの .bundle にまとめて出す。検証方法は README にある。
 signs:
   - cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
