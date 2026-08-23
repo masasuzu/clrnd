@@ -479,6 +479,31 @@ else
   ng "serving revision is $AFTER_REV, want $EXPECTED_REV"
 fi
 
+info "--- 1-5c2. refresh refuses when it cannot do its job ---"
+# (a) 現在と同じリビジョン名を指定した場合。同名では新しいリビジョンが作られず、
+#     差分ゼロで "No changes." になって何も起きないまま成功してしまう経路。
+CURRENT_TEMPLATE_REV="$(live_revision_name)"
+if [ -n "$CURRENT_TEMPLATE_REV" ]; then
+  SAME_SUFFIX="${CURRENT_TEMPLATE_REV#$SERVICE-}"
+  run_cmd "$CLRND" refresh "$SERVICE" --revision-suffix "$SAME_SUFFIX" --auto-approve
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "already the current template revision"; then
+    ok "refresh refuses a suffix that would not create a revision"
+  else
+    ng "refresh accepted a suffix that creates no revision (exit=$RC)"
+  fi
+else
+  info "skipping: the live service pins no template revision name"
+fi
+
+# (b) rollback 直後はトラフィックが特定のリビジョンへ固定されている。この状態の
+#     refresh は新しいリビジョンを作っても 0% にしかならない。
+run_cmd "$CLRND" refresh "$SERVICE" --auto-approve
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "receives no traffic"; then
+  ok "refresh refuses while traffic is pinned to specific revisions"
+else
+  ng "refresh created a revision that would serve nothing (exit=$RC)"
+fi
+
 info "--- 1-5d. deploy again after the rollback ---"
 # rollback は spec.traffic を固定するので、その後の deploy が新しいリビジョンへ
 # 戻せることを確認する (固定したまま動けなくならないこと)。
@@ -517,6 +542,19 @@ if [ "$RC" -ne 0 ]; then
   fi
 else
   ng "deploy exited 0 for a rollout that cannot succeed"
+fi
+
+info "--- 1-8b. re-deploying the same manifest does not report success ---"
+# 1-8 でサービスは壊れたまま。同じマニフェストなので差分はゼロになり、
+# 以前はここで "No changes." のまま exit 0 になっていた。
+run_cmd "$CLRND" deploy "$SERVICE" "$D2/pinned.yaml" --auto-approve --timeout 60s
+if [ "$RC" -ne 0 ]; then
+  ok "a retry with no changes still fails while the service is unhealthy (exit=$RC)"
+  if printf '%s' "$OUT" | grep -q "No changes."; then
+    info "confirmed via the no-changes path (nothing was applied, health was still checked)"
+  fi
+else
+  ng "a retry with no changes reported success while the service is unhealthy"
 fi
 
 info "--- 1-9. delete ---"
