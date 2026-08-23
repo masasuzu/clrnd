@@ -405,6 +405,14 @@ revision-name conflicts, asynchronous rollout failures).
 - `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
   `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
   tests pass or fail depending on whether `go test` was started from a terminal.
+- CI's third job, `release-build`, cross-compiles **the release matrix** before any tag exists, by
+  running `goreleaser check` and `goreleaser build --snapshot --clean` — the ordinary `Build` step
+  only ever compiles for the runner (linux/amd64), so a Windows-only compile error or a broken
+  `.goreleaser.yaml` used to surface after the tag was pushed. It drives GoReleaser rather than a
+  hand-written `GOOS`/`GOARCH` matrix precisely so the covered targets cannot drift from
+  [.goreleaser.yaml](.goreleaser.yaml); `--snapshot` publishes nothing and signs nothing. Its
+  GoReleaser version is pinned to the same value as `release.yml` — raise them together, or the
+  config a PR validated is not the one that builds the release.
 - CI checks live in [.github/workflows/verify.yml](.github/workflows/verify.yml), which is
   `workflow_call`-only: [ci.yml](.github/workflows/ci.yml) calls it on `pull_request`/`push` to
   main, and [release.yml](.github/workflows/release.yml) calls it as `needs:` of the GoReleaser job.
