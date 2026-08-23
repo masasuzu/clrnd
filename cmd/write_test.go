@@ -75,6 +75,13 @@ func TestInitRecordsTheManifestPathRelativeToTheConfig(t *testing.T) {
 	}
 }
 
+// 存在しないディレクトリの下を config の書き込み先にする。init は「既に在る --config
+// だけを読む」ので loadConfig は素通りし、マニフェストを書いた *後* の config 書き込み
+// だけが失敗する。config 自体をディレクトリにする手もあるが、それだと loadConfig が
+// それを設定ファイルとして読もうとして落ち、runInit に入る前に終わってしまう
+// (復元を検証しているつもりで、書き換えが起きていないだけの状態を見ることになる)。
+const unwritableConfig = "nodir/clrnd.yml"
+
 // TestInitRestoresTheManifestWhenTheConfigWriteFails は、config の書き込みに失敗した
 // ときに --force で潰したマニフェストが戻ることを確認する。戻さないと、手で編集した
 // マニフェストが live の内容で潰れたまま config も無い状態が残る。
@@ -87,15 +94,16 @@ func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
 	if err := os.WriteFile("manifest.yaml", []byte(original), 0o600); err != nil {
 		t.Fatalf("failed to seed the manifest: %v", err)
 	}
-	// config の書き込み先をディレクトリにして、確実に失敗させる。
-	if err := os.Mkdir("taken.yml", 0o755); err != nil {
-		t.Fatalf("failed to create the directory: %v", err)
-	}
 
-	_, _, err := executeRoot(t, "init", "my-svc", "--config", "taken.yml", "--force",
+	_, _, err := executeRoot(t, "init", "my-svc", "--config", unwritableConfig, "--force",
 		"--project", "test-project", "--region", "asia-northeast1")
 	if err == nil {
 		t.Fatal("init error = nil, want the config write to fail")
+	}
+	// マニフェストを書いた後の config 書き込みで落ちたことを確かめる。ここが手前で
+	// 落ちていると、復元ではなく「そもそも書き換えていない」状態を見てしまう。
+	if !strings.Contains(err.Error(), unwritableConfig) {
+		t.Fatalf("init error = %v, want it to fail on writing the config", err)
 	}
 
 	got, readErr := os.ReadFile("manifest.yaml")
@@ -104,6 +112,28 @@ func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
 	}
 	if string(got) != original {
 		t.Errorf("manifest = %q, want the original contents restored", got)
+	}
+}
+
+// TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails は、元々マニフェストが
+// 無かった場合に、config の書き込みに失敗したら作りかけのマニフェストを残さないことを
+// 確認する。restoreManifest のもう一方の分岐。
+func TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	_, _, err := executeRoot(t, "init", "my-svc", "--config", unwritableConfig,
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("init error = nil, want the config write to fail")
+	}
+	if !strings.Contains(err.Error(), unwritableConfig) {
+		t.Fatalf("init error = %v, want it to fail on writing the config", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); !os.IsNotExist(statErr) {
+		t.Errorf("manifest.yaml is still there (stat error = %v), want the half-done scaffold removed", statErr)
 	}
 }
 

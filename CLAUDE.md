@@ -395,6 +395,13 @@ revision-name conflicts, asynchronous rollout failures).
   returning early there would hand CI a green run over a broken service — the exact failure the wait
   exists to catch. `confirmAction` in the same file is
   the confirmation rule on its own, for destructive commands that have no plan to show (`delete`).
+- A `cmd` test that wants a command to fail **inside** `RunE` must keep `loadConfig`
+  (`PersistentPreRunE`) happy first. Pointing `--config` at something unreadable — a directory, say
+  — fails before `RunE` ever runs, and a test written that way passes while never executing the
+  code it names (`TestInitRestoresTheManifestWhenTheConfigWriteFails` did exactly that: `runInit`
+  and `restoreManifest` were both at 0% coverage). To fail a *write* instead, point it somewhere
+  that cannot be created but can be skipped by the reader, e.g. `nodir/clrnd.yml`, and assert the
+  error names that path so the test cannot silently slide back to failing early.
 - `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
   `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
   tests pass or fail depending on whether `go test` was started from a terminal.
