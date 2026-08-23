@@ -257,10 +257,13 @@ Fetch the live definition of the service from Cloud Run and show a unified diff 
 manifest file. Both sides are normalized (read-only fields removed) before comparison, so a
 manifest produced by `init` compares cleanly. Nothing is printed when there is no difference.
 
-A hand-written minimal manifest is a different story: Cloud Run defaults a lot of fields, and those
-show up as a difference forever. Pass `--server-defaults` to have Cloud Run resolve them first (via
-a dry run) so the comparison converges. It is off by default because the dry run needs permission to
-update the service, which `diff` does not otherwise require.
+A hand-written minimal manifest would otherwise be a different story: Cloud Run defaults a lot of
+fields, and those would show up as a difference forever. `diff` therefore asks Cloud Run to resolve
+them first (via a dry run) so the comparison converges.
+
+> **This means `diff` needs permission to update the service**, because a dry run is a write-shaped
+> call. If you run `diff` with read-only credentials, pass `--no-server-defaults` to compare against
+> the manifest as written.
 
 ```sh
 clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
@@ -271,7 +274,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
-| `--server-defaults` | Resolve Cloud Run's own defaults before comparing (needs permission to update the service). |
+| `--no-server-defaults` | Compare against the manifest as written, without resolving Cloud Run's defaults (read-only credentials are enough). |
 
 ```sh
 clrnd diff my-service service.yaml --project my-project --region asia-northeast1
@@ -299,15 +302,17 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
-| `--server-defaults` | Resolve Cloud Run's own defaults before showing the diff (needs update permission). |
+| `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
 
-Cloud Run fills in many fields on its own, so a hand-written minimal manifest keeps showing them as
-a difference. `--server-defaults` asks Cloud Run to resolve those first (via a dry run) and compares
-against the result, which makes the diff converge. It is off by default because the dry run is a
-write-shaped call and needs permission to update the service. What gets applied is always your
-manifest — the resolved values are used only for the comparison.
+Cloud Run fills in many fields on its own, so a hand-written minimal manifest would otherwise keep
+showing them as a difference. The diff therefore asks Cloud Run to resolve those first (via a dry
+run) and compares against the result. What gets applied is always your manifest — the resolved
+values are used only for the comparison.
+
+That dry run is a write-shaped call, so it needs permission to update the service. Pass
+`--no-server-defaults` to compare against the manifest as written instead.
 
 The diff is printed to stdout; the confirmation prompt is on stderr. Without `--auto-approve`, a
 non-interactive run (no TTY, e.g. a pipeline) refuses to apply and exits with an error — pass

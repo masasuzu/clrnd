@@ -30,11 +30,12 @@ func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
 		"how long to wait for the rollout to finish")
 }
 
-// addServerDefaultsFlag は --server-defaults を登録する。diff と deploy で共有する。
-func addServerDefaultsFlag(cmd *cobra.Command, resolve *bool) {
-	cmd.Flags().BoolVar(resolve, "server-defaults", false,
-		"ask Cloud Run to fill in the fields it defaults before comparing, so a minimal manifest "+
-			"does not show them as a difference (needs permission to update the service)")
+// addServerDefaultsFlag は --no-server-defaults を登録する。diff と deploy で共有する。
+// 既定でサーバ既定値を解決するので、フラグは「やめる」側に置く (--no-wait と同じ形)。
+func addServerDefaultsFlag(cmd *cobra.Command, skip *bool) {
+	cmd.Flags().BoolVar(skip, "no-server-defaults", false,
+		"compare against the manifest as written, without asking Cloud Run to fill in the fields "+
+			"it defaults (avoids the dry-run write, so read-only credentials are enough)")
 }
 
 // confirmAction は取り返しのつかない操作の前に確認を取る。autoApprove なら省略し、

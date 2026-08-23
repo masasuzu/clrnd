@@ -63,8 +63,8 @@ not paste it into an issue or a pull request.
 | 1-1b | `status` reports Ready, the URL and the traffic split, in text and JSON |
 | 1-1c | `wait` returns once the service is ready and reports progress on stderr |
 | 1-1d | `revisions` lists the revisions with their traffic share, in text and JSON |
-| 1-2 | a hand-written minimal manifest keeps showing server defaults in `diff` (see issue #11) |
-| 1-2b | `diff --server-defaults` resolves them and converges on the same manifest |
+| 1-2 | `diff --no-server-defaults` on a hand-written minimal manifest still shows the server defaults (see issue #11) |
+| 1-2b | plain `diff` resolves them and converges on the same manifest |
 | 1-3 | the live service is made to pin a revision name, the way `--revision-suffix` does |
 | 1-4 | `init` drops that revision name and leaves no empty template metadata |
 | 1-5 | `diff` right after `init` is empty, and a following template change deploys cleanly |

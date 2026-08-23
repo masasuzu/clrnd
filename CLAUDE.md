@@ -145,14 +145,15 @@ revision-name conflicts, asynchronous rollout failures).
   path performs a real (dry-run) write and gets the same validation as `deploy`.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
-- **Server defaults** (`--server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
+- **Server defaults** (`--no-server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
   of fields on create (`containerConcurrency`, container `ports`, `resources.limits`, `startupProbe`,
   `serviceAccountName`, `timeoutSeconds`, `spec.traffic`, several annotations and labels), so a
   hand-written minimal manifest never diffs clean (issue #11). A `dryRun=all` write returns the
   service *with those defaults applied* — verified against the real API — so `resolveDefaults` sends
-  the desired definition through one and compares that instead. Two rules matter: it is **opt-in**,
-  because `dryRun` is a write-shaped call and `diff` is otherwise usable with read-only credentials;
-  and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
+  the desired definition through one and compares that instead. Two rules matter: it is **on by
+  default** (like `kubectl diff`), which means `diff` now needs permission to update the service —
+  `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
+  `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
   clrnd never writes back values the server computed (which would pin today's defaults forever).
   Because the dry run is a real request, `CompareManifest` runs `validate` first when the option is
   on: a `metadata.name` that does not match the service argument would otherwise come back as an

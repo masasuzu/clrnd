@@ -203,8 +203,8 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	}
 	for _, want := range []string{
 		"failed to resolve server defaults",
-		"permission denied",  // 原因をそのまま見せる
-		"drop it to compare", // 対処を示す
+		"permission denied",    // 原因をそのまま見せる
+		"--no-server-defaults", // 対処を示す
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Plan() error = %v, want it to contain %q", err, want)

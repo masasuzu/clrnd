@@ -62,9 +62,11 @@ type PlanOptions struct {
 	// 既定値を入れるため、手書きの最小マニフェストは何もしなくても差分が出続ける
 	// (issue #11)。これを有効にすると、その分が両側で揃って消える。
 	//
-	// dry-run は書き込み系の API なので、読むだけの権限では使えない。だから
-	// 既定は false のまま。適用に送るのは常に元の desired で、サーバが埋めた値を
-	// 書き戻すことはしない。
+	// dry-run は書き込み系の API なので、読むだけの権限では使えない。CLI は既定で
+	// これを有効にし、--no-server-defaults で外せるようにしている (この構造体の
+	// ゼロ値は「解決しない」のままで、live 由来の定義を扱う rollback / refresh は
+	// 既に既定値が入っているので解決を必要としない)。
+	// 適用に送るのは常に元の desired で、サーバが埋めた値を書き戻すことはしない。
 	ResolveDefaults bool
 }
 
@@ -180,8 +182,8 @@ func (c *Client) resolveDefaults(ctx context.Context, service string, desired *r
 		// 断定せず、この経路が何をしているかだけを添える。
 		return nil, fmt.Errorf(
 			"failed to resolve server defaults for service %q: %w "+
-				"(--server-defaults performs a dry-run update, which needs permission to update the "+
-				"service; drop it to compare without one)", service, err)
+				"(resolving them performs a dry-run update, which needs permission to update the "+
+				"service; pass --no-server-defaults to compare without one)", service, err)
 	}
 	return resolved, nil
 }

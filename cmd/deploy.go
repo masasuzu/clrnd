@@ -9,11 +9,11 @@ import (
 )
 
 var (
-	deployProject  string
-	deployRegion   string
-	deployTfstate  []string
-	deployDefaults bool
-	deployApply    applyOptions
+	deployProject    string
+	deployRegion     string
+	deployTfstate    []string
+	deployNoDefaults bool
+	deployApply      applyOptions
 )
 
 var deployCmd = &cobra.Command{
@@ -25,8 +25,8 @@ var deployCmd = &cobra.Command{
 		"After applying, deploy waits until the new revision is serving and fails if the rollout\n" +
 		"fails; pass --no-wait to return as soon as the request is accepted.\n" +
 		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
-		"without applying any changes. Pass --server-defaults to have Cloud Run fill in the fields it\n" +
-		"defaults, so a minimal manifest does not show them as a difference.\n" +
+		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
+		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runDeploy,
@@ -36,7 +36,7 @@ func init() {
 	addTargetFlags(deployCmd, &deployProject, &deployRegion)
 	addManifestFlags(deployCmd, &deployTfstate)
 	addApplyFlags(deployCmd, &deployApply)
-	addServerDefaultsFlag(deployCmd, &deployDefaults)
+	addServerDefaultsFlag(deployCmd, &deployNoDefaults)
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -76,7 +76,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{ResolveDefaults: deployDefaults})
+	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{ResolveDefaults: !deployNoDefaults})
 	if err != nil {
 		return err
 	}

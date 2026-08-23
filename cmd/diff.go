@@ -9,10 +9,10 @@ import (
 )
 
 var (
-	diffProject  string
-	diffRegion   string
-	diffTfstate  []string
-	diffDefaults bool
+	diffProject    string
+	diffRegion     string
+	diffTfstate    []string
+	diffNoDefaults bool
 )
 
 var diffCmd = &cobra.Command{
@@ -21,8 +21,9 @@ var diffCmd = &cobra.Command{
 	Long: "Fetch the live definition of the service from Cloud Run and show a unified diff\n" +
 		"against the given manifest file. Both sides are normalized (read-only fields removed)\n" +
 		"before comparison. Nothing is printed when there is no difference.\n" +
-		"Cloud Run fills in a lot of fields on its own, so a hand-written minimal manifest keeps\n" +
-		"showing them; pass --server-defaults to have those resolved before comparing.\n" +
+		"Cloud Run fills in a lot of fields on its own, so by default diff asks it to resolve them\n" +
+		"first (via a dry run) and compares against that; pass --no-server-defaults to compare\n" +
+		"against the manifest as written, which also avoids needing update permission.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runDiff,
@@ -31,7 +32,7 @@ var diffCmd = &cobra.Command{
 func init() {
 	addTargetFlags(diffCmd, &diffProject, &diffRegion)
 	addManifestFlags(diffCmd, &diffTfstate)
-	addServerDefaultsFlag(diffCmd, &diffDefaults)
+	addServerDefaultsFlag(diffCmd, &diffNoDefaults)
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
@@ -66,7 +67,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	out, err := client.CompareManifest(ctx, service, local, manifestPath,
-		cloudrun.PlanOptions{ResolveDefaults: diffDefaults})
+		cloudrun.PlanOptions{ResolveDefaults: !diffNoDefaults})
 	if err != nil {
 		return err
 	}
