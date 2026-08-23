@@ -257,6 +257,11 @@ Fetch the live definition of the service from Cloud Run and show a unified diff 
 manifest file. Both sides are normalized (read-only fields removed) before comparison, so a
 manifest produced by `init` compares cleanly. Nothing is printed when there is no difference.
 
+A hand-written minimal manifest is a different story: Cloud Run defaults a lot of fields, and those
+show up as a difference forever. Pass `--server-defaults` to have Cloud Run resolve them first (via
+a dry run) so the comparison converges. It is off by default because the dry run needs permission to
+update the service, which `diff` does not otherwise require.
+
 ```sh
 clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 ```
@@ -293,8 +298,15 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
+| `--server-defaults` | Resolve Cloud Run's own defaults before showing the diff (needs update permission). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+
+Cloud Run fills in many fields on its own, so a hand-written minimal manifest keeps showing them as
+a difference. `--server-defaults` asks Cloud Run to resolve those first (via a dry run) and compares
+against the result, which makes the diff converge. It is off by default because the dry run is a
+write-shaped call and needs permission to update the service. What gets applied is always your
+manifest — the resolved values are used only for the comparison.
 
 The diff is printed to stdout; the confirmation prompt is on stderr. Without `--auto-approve`, a
 non-interactive run (no TTY, e.g. a pipeline) refuses to apply and exits with an error — pass

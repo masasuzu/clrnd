@@ -142,6 +142,15 @@ revision-name conflicts, asynchronous rollout failures).
   `Client.Plan` calls the shared `compareServices`, so `diff` and `deploy` can never drift apart.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
+- **Server defaults** (`--server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
+  of fields on create (`containerConcurrency`, container `ports`, `resources.limits`, `startupProbe`,
+  `serviceAccountName`, `timeoutSeconds`, `spec.traffic`, several annotations and labels), so a
+  hand-written minimal manifest never diffs clean (issue #11). A `dryRun=all` write returns the
+  service *with those defaults applied* — verified against the real API — so `resolveDefaults` sends
+  the desired definition through one and compares that instead. Two rules matter: it is **opt-in**,
+  because `dryRun` is a write-shaped call and `diff` is otherwise usable with read-only credentials;
+  and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
+  clrnd never writes back values the server computed (which would pin today's defaults forever).
 - **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
   and a name Cloud Run generated is **never echoed back** — the field is only present on read when a
   client set it (`gcloud run deploy --revision-suffix`, a Terraform `template.metadata.name`, or a

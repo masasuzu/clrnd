@@ -1151,6 +1151,52 @@ func TestRefreshRejectsAnInvalidRevisionName(t *testing.T) {
 	}
 }
 
+// defaultedServiceJSON は Cloud Run が既定値を埋めたあとの定義。
+// localManifest (最小) には無いフィールドが入っている。
+const defaultedServiceJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 7},
+  "spec": {
+    "template": {"spec": {
+      "containerConcurrency": 80,
+      "timeoutSeconds": 300,
+      "containers": [{"image": "gcr.io/project/image:new"}]
+    }},
+    "traffic": [{"latestRevision": true, "percent": 100}]
+  },
+  "status": {"observedGeneration": 7, "conditions": [{"type": "Ready", "status": "True"}]}
+}`
+
+// TestDiffServerDefaults は --server-defaults がサーバ既定値ぶんの差分を消すことを
+// 確認する (issue #11)。
+func TestDiffServerDefaults(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(defaultedServiceJSON))
+	})
+
+	manifest := writeManifest(t, localManifest)
+	target := []string{"--project", "test-project", "--region", "asia-northeast1"}
+
+	plain, _, err := executeRoot(t, append([]string{"diff", "my-svc", manifest}, target...)...)
+	if err != nil {
+		t.Fatalf("diff error = %v", err)
+	}
+	if !strings.Contains(plain, "containerConcurrency") {
+		t.Errorf("diff without --server-defaults = %q, want the defaults to show", plain)
+	}
+
+	resolved, _, err := executeRoot(t,
+		append([]string{"diff", "my-svc", manifest, "--server-defaults"}, target...)...)
+	if err != nil {
+		t.Fatalf("diff --server-defaults error = %v", err)
+	}
+	if resolved != "" {
+		t.Errorf("diff --server-defaults = %q, want empty", resolved)
+	}
+}
+
 // TestVersion は --version がバージョンを出すことを確認する。
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")

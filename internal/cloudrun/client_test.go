@@ -180,7 +180,7 @@ func TestGetServiceNotFound(t *testing.T) {
 func TestPlanCreatesWhenServiceIsMissing(t *testing.T) {
 	c, _ := newTestClient(t, nil) // GET は 404
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -197,7 +197,7 @@ func TestPlanDiffsAgainstLiveService(t *testing.T) {
 		return http.StatusOK, liveService("gcr.io/project/image:old")
 	})
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -221,7 +221,7 @@ func TestPlanNoDiffWhenIdentical(t *testing.T) {
 		return http.StatusOK, liveService("gcr.io/project/image:tag")
 	})
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -235,7 +235,7 @@ func TestPlanRejectsInvalidManifestBeforeCallingTheAPI(t *testing.T) {
 		return http.StatusOK, liveService("gcr.io/p/img:v1")
 	})
 
-	_, err := c.Plan(context.Background(), "other-svc", []byte(validManifest))
+	_, err := c.Plan(context.Background(), "other-svc", []byte(validManifest), PlanOptions{})
 	if err == nil {
 		t.Fatal("Plan() error = nil, want a name mismatch error")
 	}
@@ -252,7 +252,7 @@ func TestApplyCreate(t *testing.T) {
 		return http.StatusNotFound, googleAPIError(404, "not found")
 	})
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -285,7 +285,7 @@ func TestApplyReplaceWithDryRun(t *testing.T) {
 		return http.StatusOK, liveService("gcr.io/project/image:old")
 	})
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -311,7 +311,7 @@ func TestApplyReportsServerErrors(t *testing.T) {
 		return http.StatusOK, liveService("gcr.io/project/image:old")
 	})
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest))
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}

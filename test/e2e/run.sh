@@ -395,6 +395,12 @@ assert_contains "server defaults show up in the diff (containerConcurrency)" "co
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
 
+info "--- 1-2b. diff --server-defaults ---"
+info "Cloud Run に既定値を解決させれば、同じ最小マニフェストでも差分は消えるはず。"
+run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml" --server-defaults
+assert_rc_zero "diff --server-defaults succeeds"
+assert_empty "diff --server-defaults converges on a minimal manifest"
+
 info "--- 1-3. make the live service pin a revision name ---"
 info "Cloud Run only reports spec.template.metadata.name when a client set it,"
 info "so create that precondition the way --revision-suffix or Terraform would."
