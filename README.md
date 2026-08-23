@@ -1,10 +1,24 @@
 # clrnd
 
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
-It takes a service name and a manifest file as arguments and provides subcommands to verify, render,
-diff, deploy, and initialize Cloud Run services.
+It takes a service name and a manifest file as arguments and provides eleven subcommands:
+`verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `delete`,
+and `refresh`.
 
 ## Installation
+
+Download a binary for your platform from the
+[releases page](https://github.com/masasuzu/clrnd/releases) — linux, macOS and Windows, on amd64
+and arm64. Each release ships a `checksums.txt` (signed with cosign, keyless) and an SBOM.
+
+```sh
+# example: macOS arm64
+tar xzf clrnd_<version>_darwin_arm64.tar.gz
+install clrnd /usr/local/bin/
+clrnd --version
+```
+
+With a Go toolchain (**Go 1.25.8 or newer**, matching `go.mod`):
 
 ```sh
 go install github.com/masasuzu/clrnd@latest
@@ -18,6 +32,9 @@ cd clrnd
 go build -o clrnd .
 ```
 
+`clrnd completion bash|zsh|fish|powershell` prints a shell completion script (cobra's built-in);
+`clrnd completion <shell> --help` explains where your shell wants it installed.
+
 ## Authentication
 
 `clrnd` uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials)
@@ -26,6 +43,34 @@ to access the Cloud Run Admin API. Authenticate once with:
 ```sh
 gcloud auth application-default login
 ```
+
+### Required permissions
+
+| Command | Permissions |
+| ------- | ----------- |
+| `render` | none — it never contacts the API |
+| `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get` and `secretmanager.secrets.get` |
+| `status`, `wait`, `init` | `run.services.get` |
+| `revisions` | `run.services.get`, `run.revisions.list` |
+| `diff` | `run.services.get` **and `run.services.update`** — see below |
+| `deploy` | `run.services.get`, `run.services.update`, and `run.services.create` for a service that does not exist yet |
+| `rollback` | `run.services.get`, `run.revisions.list`, `run.services.update` |
+| `refresh` | `run.services.get`, `run.services.update` |
+| `delete` | `run.services.get`, `run.services.delete` |
+
+`roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest. Deploying a
+service that runs as a service account also needs `iam.serviceAccounts.actAs` on that service
+account (`roles/iam.serviceAccountUser`) — a Cloud Run requirement, not a clrnd one.
+
+**`diff` needs write permission by default.** It asks Cloud Run to fill in the fields it defaults,
+and the only way to get those is a `dryRun=all` write, which is checked against
+`run.services.update` even though it changes nothing. Pass `--no-server-defaults` to compare
+against the manifest as written and stay within `roles/run.viewer` — at the cost of a diff that
+shows Cloud Run's defaults as differences on a hand-written manifest.
+
+A missing `iam.serviceAccounts.get` or `secretmanager.secrets.get` does **not** fail `verify`. It
+cannot tell "the secret is absent" from "I am not allowed to look", so it prints a `warning:` on
+stderr and succeeds. Only a confirmed 404 fails the command.
 
 ## Configuration file
 
@@ -66,12 +111,21 @@ Resolution order (highest first), matching gcloud:
 | manifest | positional `[manifest]` → config `manifest` |
 | tfstate  | `--tfstate` (if any given, replaces config) → config `tfstate` |
 
+The config is parsed strictly: **an unknown key is an error**, not a warning. A misspelled
+`regoin:` fails loudly instead of silently falling back to the environment. A `--config` you pass
+explicitly must exist (`init` is the exception — it is the command that creates it); an
+auto-detected `clrnd.yml` that is absent is simply an empty config.
+
 ## Templating with Terraform state
 
 Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
 so you can fill placeholders from Terraform state outputs (or any resource attribute) and from
 environment variables, using the same notation as [ecspresso](https://github.com/kayac/ecspresso).
 This applies to `verify`, `render`, `diff`, and `deploy`.
+
+> **The manifest is always rendered as a template**, even with no `--tfstate` configured. A manifest
+> that needs a literal `{{` — a container argument for another templating system, say — will fail to
+> parse. Write it as `{{ "{{" }}` to get one through.
 
 ```yaml
 spec:
@@ -146,6 +200,52 @@ clrnd deploy my-svc manifest.yaml \
 Reading the state needs `storage.objects.get` (e.g. `roles/storage.objectViewer`) on the bucket.
 If you use a non-default workspace, the object is `<prefix>/<workspace>.tfstate`; confirm the exact
 path with `gcloud storage ls gs://my-tf-state/cloudrun/prod/`.
+
+## Trust boundary
+
+**Treat the manifest, the config file, and the Terraform state you point at as executable input —
+the same trust level you give a `Makefile`.** Rendering one is not a read-only operation. Do not
+run `clrnd` against a manifest, config, or state that someone outside your trust boundary can
+write, and be careful with a CI job that renders a manifest from a fork's pull request.
+
+Three specific things to know:
+
+- **A manifest can read any environment variable.** It is a Go template, so
+  `{{ env "GITHUB_TOKEN" }}` works anywhere in the file. In CI that means the job's secrets can end
+  up in the rendered output (the job log) or in the deployed container's environment.
+- **A Terraform state can redirect where clrnd connects.** `tfstate-lookup`, the library behind
+  `{{ tfstate }}`, follows the `backend` recorded **inside the state document**. Whoever can write
+  that file can therefore make clrnd send your `$TFE_TOKEN` to a host of their choosing, or make an
+  authenticated request to a bucket they control. This is how the library works (ecspresso has the
+  same property), not a bug in clrnd — but it means an untrusted state file is an untrusted input.
+  Note that the *manifest* cannot choose a state location: only `--tfstate` and the config file
+  do that, and a manifest can only reference a prefix that is already registered.
+- **Diffs contain plaintext values.** `sanitizeMap` strips server-managed fields, not secrets, so a
+  `env[].value` shows up in `diff` and `deploy` output as written — and `clrnd deploy --auto-approve`
+  in CI leaves it in the job log. Reference secrets with `secretKeyRef` or a secret volume rather
+  than putting them in `value:`; `verify` understands both and checks that they exist.
+
+## What clrnd does not manage
+
+`clrnd` deploys the Cloud Run **service definition** — what a Knative-style Service YAML can
+express. These live next to it and are deliberately out of scope:
+
+- **IAM policy, including public access.** clrnd never calls `GetIamPolicy`/`SetIamPolicy`. A
+  service made public with `gcloud run deploy --allow-unauthenticated` carries an `allUsers`
+  binding that is **not** part of the manifest, so `diff` will never show it and `init` will not
+  capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
+  silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
+  or Terraform.
+- **Cloud Run jobs.** Only services (`kind: Service`) are supported. `verify` rejects a job
+  manifest — `kind must be "Service", got "Job"` — but it says nothing about jobs being
+  unsupported, so this is the place that says it.
+- **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
+- **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
+  and `rollback` preserves existing tags at 0%, but there is no command to add or move one.
+
+Two smaller edges worth knowing: a mistyped `--region` becomes a DNS failure rather than "unknown
+region", because the region goes straight into the API endpoint; and the diff is a plain unified
+diff with three lines of context and no pager, so a large service produces a large diff.
 
 ## Usage
 
@@ -295,6 +395,24 @@ so re-running after a failed rollout does not report success. Cloud Run accepts 
 revision would still exit 0 and CI would treat the deploy as successful. Pass `--no-wait` to return
 as soon as the request is accepted.
 
+Like `verify`, `deploy` warns on stderr when the manifest pins `spec.template.metadata.name` — the
+next deploy that changes the template will be rejected by Cloud Run. `deploy` repeats the warning
+because a CI job that only runs `deploy` would otherwise see nothing but the API error when that
+happens. It is a warning, not a failure: pinning is legitimate for a one-shot deploy.
+
+**Every change is a compare-and-swap.** `clrnd` sends the `metadata.resourceVersion` it computed the
+diff against, so if the service changed in between — a colleague's `gcloud run deploy`, a Terraform
+apply, another CI job — the write is rejected instead of silently overwriting them:
+
+```
+Error: service "my-service" changed after the diff was computed; re-run to compare against the
+current state: googleapi: Error 409: Conflict for resource 'my-service': version '...' was
+specified but current version is '...'., aborted
+```
+
+Re-run the command: the second attempt diffs against the new state, so you see what the other change
+did before deciding to apply on top of it. This applies to `deploy`, `rollback`, and `refresh` alike.
+
 ```sh
 clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]
 ```
@@ -364,6 +482,15 @@ exits with an error. A service that does not exist fails before any prompt.
 Cloud Run deletes asynchronously — the request is accepted while the service is still readable for
 a little longer — so `delete` waits until it is actually gone. Pass `--no-wait` to return as soon
 as the request is accepted, or `--timeout` to change how long it waits (default `10m`).
+
+| Flag             | Description                                                    |
+| ---------------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--auto-approve` | Delete without the interactive confirmation prompt. Use this in CI/CD. |
+| `--dry-run`      | Validate the request server-side without deleting anything (no prompt). |
+| `--no-wait`      | Return as soon as the request is accepted, without waiting for the service to disappear. |
+| `--timeout`      | How long to wait for the service to disappear (default `10m`). |
 
 ### init
 
@@ -451,6 +578,12 @@ clrnd status --format json | jq -r '.conditions[] | select(.type == "Ready") | .
 
 `service` may be omitted when set in the config file.
 
+| Flag        | Description                                                    |
+| ----------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--format`  | Output format: `text` (default) or `json`.                     |
+
 ### revisions
 
 List the revisions of a service, newest first, with the share of traffic each one currently
@@ -473,6 +606,16 @@ my-svc-00006-def  False (RevisionFailed)  0%       -       2026-08-21T09:00:00Z 
 clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 ```
 
+| Flag        | Description                                                    |
+| ----------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--format`  | Output format: `text` (default) or `json`.                     |
+
+Revisions are ordered newest-first by `creationTimestamp`, falling back to the revision name when a
+timestamp cannot be parsed. Cloud Run's own numbering (`-00007-abc`) sorts correctly that way; a
+hand-chosen `--revision-suffix` may not (`v10` sorts before `v2`).
+
 ### refresh
 
 Re-apply the live definition of a service so that a new revision is created, without changing
@@ -488,8 +631,9 @@ clrnd refresh --revision-suffix rebuild-42 --auto-approve
 
 Cloud Run only creates a revision when `spec.template` changes, so `refresh` gives the new revision
 an explicit name: `<service>-r<UTC timestamp>`, or `<service>-<--revision-suffix>`. This is the one
-place clrnd sets a revision name (see [Revision names](#revision-names)); the next `deploy` from a
-manifest drops it again, and `diff` ignores it in the meantime.
+place clrnd sets a revision name (see [Revision names](#revision-names)); the next `deploy` that
+**actually changes something** drops it again, and `diff` ignores it in the meantime. A `deploy`
+with no difference applies nothing, so the name stays until there is a real change to write.
 
 The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
 `--no-wait` is given.
@@ -498,6 +642,16 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 the revision the service already points at (run it again a second later, or pass a different
 `--revision-suffix`), and when traffic is pinned to specific revisions — the state a `rollback`
 leaves behind, where a new revision would be created but would serve nothing.
+
+| Flag                | Description                                                    |
+| ------------------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--revision-suffix` | Name the new revision `<service>-<suffix>` instead of `<service>-r<UTC timestamp>`. |
+| `--auto-approve`    | Apply without the interactive confirmation prompt. Use this in CI/CD. |
+| `--dry-run`         | Validate the request server-side without applying any changes (no prompt). |
+| `--no-wait`         | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--timeout`         | How long to wait for the rollout to finish (default `10m`).    |
 
 ### rollback
 
@@ -514,7 +668,21 @@ clrnd rollback --revision my-service-00006-def --auto-approve
 ```
 
 The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
-`--no-wait` is given. `--dry-run`, `--auto-approve`, and `--timeout` behave as they do for `deploy`.
+`--no-wait` is given.
+
+| Flag             | Description                                                    |
+| ---------------- | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--revision`     | Revision to send traffic to (default: the one before the revision currently serving). |
+| `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
+| `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
+| `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+
+A `--revision` that is not `Ready` is a warning on stderr, not an error: the rollback goes ahead.
+Sending traffic to a revision that failed is sometimes what you want (to reproduce a failure), and
+Cloud Run is the authority on whether it can serve.
 
 ### wait
 
@@ -526,6 +694,17 @@ Ctrl-C stops the wait.
 clrnd wait <service> --project <PROJECT> --region <REGION>
 clrnd wait --timeout 5m --interval 5s
 ```
+
+| Flag         | Description                                                    |
+| ------------ | ------------------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
+| `--timeout`  | How long to wait before giving up (default `10m`).             |
+| `--interval` | How long to wait between polls (default `2s`). The interval backs off up to `15s`; a value you set is never shrunk below that cap. |
+
+A failed poll is not a failed rollout: a transient error is reported and retried until the timeout,
+because a single 503 would otherwise turn an already-applied deploy into a red CI run. A `404` is
+the exception — a service that does not exist will not appear, so `wait` returns at once.
 
 ## Exit codes
 
@@ -548,6 +727,23 @@ esac
 
 Without `--exit-code`, `diff` exits 0 whether or not it printed anything — so a CI step that
 just runs `clrnd diff` will always pass.
+
+## Contributing
+
+Bug reports and feature requests go to [issues](https://github.com/masasuzu/clrnd/issues); what
+changed in each version is on the [releases page](https://github.com/masasuzu/clrnd/releases).
+
+Before opening a pull request:
+
+```sh
+go build ./... && go vet ./... && gofmt -l . && go test -race ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2 run ./...
+```
+
+Anything that touches the Cloud Run API should also be run through the end-to-end test in
+[test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
+and needs a project you are happy to create Cloud Run services in — see
+[test/e2e/README.md](test/e2e/README.md).
 
 ## License
 

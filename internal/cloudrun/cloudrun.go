@@ -123,6 +123,14 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 		current = nil
 	}
 
+	// 更新の場合は、いま読んだ状態の resourceVersion を desired に載せて
+	// compare-and-swap にする。載せずに送ると Cloud Run は無条件の上書きとして
+	// 受け付けるので (実 API で確認済み)、並走した deploy が互いの変更を黙って
+	// 消す。差分を計算した相手そのものに対して書き込むことになるので、この GET
+	// より前に取得した定義 (rollback/refresh の live) を渡された場合も、ここで
+	// 最新に揃う。
+	setResourceVersion(desired, current)
+
 	// 差分に使う desired だけを既定値まで解決する。plan.desired (適用に送るもの) は
 	// 元のままにしておき、サーバが埋めた値を書き戻さない。
 	compared := desired
@@ -238,9 +246,24 @@ func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, erro
 	}
 	applied, err := call.Context(ctx).Do()
 	if err != nil {
+		if isConflict(err) {
+			// resourceVersion を送っているので、409 は「差分を計算してから適用するまでの
+			// 間に誰かが書き換えた」ケース。API の文面 (version 'X' was specified but
+			// current version is 'Y') だけでは何をすべきか分からないので言い換える。
+			return nil, fmt.Errorf("service %q changed after the diff was computed; re-run to compare against the current state: %w", p.Service, err)
+		}
 		return nil, fmt.Errorf("failed to update service %q: %w", p.Service, err)
 	}
 	return applied, nil
+}
+
+// setResourceVersion は current の resourceVersion を desired に写して楽観的並行制御を
+// 効かせる。current が nil (新規作成) のときは何もしない。
+func setResourceVersion(desired, current *run.Service) {
+	if desired == nil || desired.Metadata == nil || current == nil || current.Metadata == nil {
+		return
+	}
+	desired.Metadata.ResourceVersion = current.Metadata.ResourceVersion
 }
 
 // DeleteService はサービスを削除する。dryRun が true の場合はサーバ側で検証のみ行う。
@@ -270,6 +293,17 @@ func isNotFound(err error) bool {
 	var gerr *googleapi.Error
 	if errors.As(err, &gerr) {
 		return gerr.Code == 404
+	}
+	return false
+}
+
+// isConflict は resourceVersion の不一致 (楽観的並行制御の失敗) かを返す。
+// Cloud Run は古い (しかし形式として正しい) resourceVersion に 409 を返す。
+// 形式が壊れている場合は 400 なので、ここには入らない。
+func isConflict(err error) bool {
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) {
+		return gerr.Code == 409
 	}
 	return false
 }
