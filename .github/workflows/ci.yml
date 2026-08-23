@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# 同じ PR / ブランチへ続けて push したとき、古い run を止めて新しいものだけ走らせる。
+# 結果を見るのは最新のコミットに対するものだけなので、古い run は runner を使うだけ。
+# release.yml は逆に直列化して中断しない (成果物が中途半端に公開されるのを避ける)。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # 検査の中身は verify.yml にあり、release.yml も同じものを呼ぶ。
   # ここに直接書くと、リリース前検査と通常 CI がいずれずれる。

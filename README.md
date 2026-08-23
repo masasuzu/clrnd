@@ -795,6 +795,29 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...
 CI pins the same golangci-lint version, so this is the check it runs — not a different one that
 happens to be the latest release that day.
 
+CI also checks the things that are not Go code. To reproduce those locally:
+
+```sh
+go mod tidy -diff                                                  # go.mod / go.sum are tidy
+
+# the shell scripts (bash -n only checks its first file argument, hence the loop)
+for f in test/e2e/run.sh .github/scripts/*.sh; do bash -n "$f"; done
+shellcheck test/e2e/run.sh .github/scripts/*.sh
+./.github/scripts/check-tool-pins.sh                               # the pins below agree
+
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12          # .github/workflows/*.yml
+go run github.com/goreleaser/goreleaser/v2@v2.17.1 check           # .goreleaser.yaml
+go run github.com/goreleaser/goreleaser/v2@v2.17.1 build --snapshot --clean   # every release target
+```
+
+CI uses ShellCheck v0.11.0 (installed from a pinned, checksummed release); any recent version is
+close enough locally.
+
+Those tool versions are pinned by hand: Dependabot updates the action SHAs and `go.mod`, but not a
+version passed to an action, a `go run tool@version`, or the ShellCheck release CI downloads. When
+you bump one, bump it everywhere it is written — `.github/scripts/check-tool-pins.sh` (run in CI)
+fails when the copies disagree, which is what kept CI on `latest` while this file said `v2.6.2`.
+
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
 [test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
 and needs a project you are happy to create Cloud Run services in — see
