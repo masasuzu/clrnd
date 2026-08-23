@@ -22,8 +22,9 @@ var refreshCmd = &cobra.Command{
 		"changing anything about it. Useful when the image tag still points somewhere new, or to\n" +
 		"restart the containers.\n" +
 		"Cloud Run only creates a revision when spec.template changes, so refresh gives the new\n" +
-		"revision an explicit name (<service>-r<UTC timestamp>, or --revision-suffix). That name\n" +
-		"is dropped again by the next deploy from a manifest.\n" +
+		"revision an explicit name (<service>-r<UTC timestamp>, or --revision-suffix). The next\n" +
+		"deploy from a manifest that actually changes something drops that name again; a deploy\n" +
+		"with no difference applies nothing, so the name stays until there is a real change.\n" +
 		"The diff is shown and confirmed the same way deploy does, and the rollout is waited for\n" +
 		"unless --no-wait is given. service may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(1),

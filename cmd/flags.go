@@ -27,12 +27,15 @@ const (
 )
 
 // addTargetFlags は --project / --region フラグを登録する。これらは必須だが、未指定の
-// 場合は環境変数にフォールバックするため MarkFlagRequired は使わず resolve* で検証する。
+// 場合は環境変数と config ファイルにフォールバックするため MarkFlagRequired は使わず
+// resolve* で検証する。usage にも両方を書く (フラグを渡していないのに動く/動かない
+// 理由が --help から分かるように)。
 func addTargetFlags(cmd *cobra.Command, project, region *string) {
 	cmd.Flags().StringVar(project, "project", "",
-		fmt.Sprintf("GCP project ID (env: %s, %s)", envProjectPrimary, envProjectSecondary))
+		fmt.Sprintf("GCP project ID (env: %s, %s; config: project)", envProjectPrimary, envProjectSecondary))
 	cmd.Flags().StringVar(region, "region", "",
-		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s)", envRegionPrimary, envRegionSecondary))
+		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s; config: region)",
+			envRegionPrimary, envRegionSecondary))
 }
 
 // 機械可読な出力を持つサブコマンドの出力形式。

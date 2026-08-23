@@ -56,12 +56,19 @@ subdirectory, so pointing `WORK_ROOT` at a directory of your own does not wipe i
 That directory **contains the real service name, service account, and URL** — do
 not paste it into an issue or a pull request.
 
-The script's own output, on the other hand, is safe to paste: every line goes
-through a redaction filter that replaces the project ID, the service name,
-`*.run.app` URLs, the default compute service account, and any other long number
-with placeholders. Assertions still match on the real names — only the display is
-redacted — so nothing is weakened by it. `RAW=1` turns the filter off when you
-need the real values while debugging locally.
+The script's own output is far safer to paste: every line the script itself
+prints goes through a redaction filter that replaces the project ID, the service
+name, `*.run.app` URLs, the default compute service account, and any other long
+number with placeholders. Assertions still match on the real names — only the
+display is redacted — so nothing is weakened by it. `RAW=1` turns the filter off
+when you need the real values while debugging locally.
+
+The filter covers what the script prints, **not** what external commands write
+straight to the terminal: `go build` inside `build_binary`, and the
+`git archive | tar` used to build the comparison binary. Those are not Cloud Run
+output — they leak local absolute paths, your user name, and whatever the tool
+chose to print — but they do bypass the filter, so give the log a read before
+pasting it rather than trusting the redaction blindly.
 
 ## What phase 1 checks
 
@@ -121,9 +128,13 @@ Things this test pinned down that are not obvious from the code:
   manifest breaks the next deploy.
 
 - **Reusing a revision name can fail asynchronously.** The `ReplaceService` call
-  returns 200 and `clrnd deploy` exits 0, while the rollout fails with
-  `Ready=False / ConflictingRevisionName`. A CI job would treat that as success.
-  This is the concrete argument for the `wait` subcommand (issue #8).
+  returns 200, and the rollout fails afterwards with
+  `Ready=False / ConflictingRevisionName`. Before `wait` existed, `clrnd deploy`
+  exited 0 right there and a CI job treated the broken rollout as success — this
+  is the concrete argument that produced the `wait` subcommand (issue #8).
+  `deploy` now waits for the rollout by default and exits non-zero either way:
+  whether Cloud Run rejects the name synchronously (409) or the rollout fails
+  afterwards. That is what check 1-8 asserts.
 - **Cloud Run fills in a lot of defaults on create** — `containerConcurrency`,
   container `ports`, `resources.limits`, `startupProbe`, `serviceAccountName`,
   `timeoutSeconds`, `spec.traffic`, and several annotations and labels. A
