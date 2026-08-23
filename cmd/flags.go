@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -197,7 +198,7 @@ func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, erro
 		fmt.Fprintln(cmd.ErrOrStderr())
 		return false, fmt.Errorf("aborted: %w", ctx.Err())
 	case a := <-ch:
-		if a.err != nil && a.err != io.EOF {
+		if a.err != nil && !errors.Is(a.err, io.EOF) {
 			return false, a.err
 		}
 		reply := strings.ToLower(strings.TrimSpace(a.line))

@@ -84,7 +84,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		// clrnd.yml の書き込みに失敗したら、今回新規作成した manifest を巻き戻して
 		// 中途半端な scaffold を残さない (元から在ったファイルには触れない)。
 		if !manifestExisted {
-			os.Remove(initManifest)
+			// 巻き戻しは best-effort。ここで失敗しても、返すのは本来の
+			// 書き込みエラーの方が利用者にとって有用。
+			_ = os.Remove(initManifest)
 		}
 		return fmt.Errorf("failed to write %s: %w", initConfigFile, err)
 	}
