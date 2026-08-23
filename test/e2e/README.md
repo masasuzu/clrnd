@@ -84,6 +84,7 @@ need the real values while debugging locally.
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
 | 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
 | 1-8b | re-deploying the same manifest while the service is unhealthy still fails (the no-changes path checks health) |
+| 1-8b2 | `verify` confirms a real Artifact Registry image, **fails** on a tag that does not exist, and stays quiet about a `gcr.io` image it cannot check |
 | 1-8c | `render` expands `{{ tfstate }}` / `{{ must_env }}` / `{{ env }}`, `-o` writes the result and refuses to overwrite its own input, and `verify` accepts what it produced |
 | 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
 

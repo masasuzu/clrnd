@@ -161,7 +161,7 @@ func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string
 func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusNotFound })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -208,7 +208,7 @@ func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -225,7 +225,7 @@ func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -235,4 +235,114 @@ func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	if n := len(recorded()); n != 0 {
 		t.Errorf("requests = %d, want 0 (the manifest references no service account or secret)", n)
 	}
+}
+
+// arManifest は Artifact Registry のイメージ (タグ指定と入れ子パスのダイジェスト指定) を
+// 参照するマニフェスト。SA もシークレットも持たないので、確認されるのはイメージだけ。
+const arManifest = `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    spec:
+      containers:
+      - image: asia-northeast1-docker.pkg.dev/img-project/repo/app:v1
+      - image: us-docker.pkg.dev/img-project/repo/team/side@sha256:abc123
+`
+
+// TestVerifyRemoteChecksArtifactRegistryImages は、イメージの実在確認が
+// タグ指定とダイジェスト指定でそれぞれ正しいリソースを引くことを確認する。
+// ロケーションもプロジェクトもイメージ参照から取るので、別プロジェクトのイメージが
+// そのまま通る (実行 SA と同じ扱い)。
+func TestVerifyRemoteChecksArtifactRegistryImages(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Missing) > 0 || len(res.Unchecked) > 0 {
+		t.Fatalf("VerifyRemote() = %+v, want everything to check out", res)
+	}
+
+	paths := recorded()
+	want := []string{
+		"/v1/projects/img-project/locations/asia-northeast1/repositories/repo/packages/app/tags/v1",
+		"/v1/projects/img-project/locations/us/repositories/repo/dockerImages/team%2Fside@sha256:abc123",
+	}
+	for _, w := range want {
+		if !containsPath(paths, w) {
+			t.Errorf("requested %v, want it to include %q", paths, w)
+		}
+	}
+}
+
+// TestVerifyRemoteReportsAMissingImage は、404 だけを Missing にすることを確認する。
+func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
+	_, opts := startVerifyAPI(t, func(path string) int {
+		if strings.Contains(path, "/packages/") {
+			return http.StatusNotFound
+		}
+		return http.StatusOK
+	})
+
+	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Missing) != 1 || !strings.Contains(res.Missing[0], "app:v1") {
+		t.Errorf("Missing = %v, want the tagged image reported as absent", res.Missing)
+	}
+	if len(res.Unchecked) != 0 {
+		t.Errorf("Unchecked = %v, want empty (404 is a decision, not an unknown)", res.Unchecked)
+	}
+}
+
+// TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked は、403 を Missing にしないことを
+// 確認する。実 API では存在しない (またはアクセスできない) プロジェクトが 403 を返すので、
+// ここを Missing にすると正当な構成の verify を落とす。
+func TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked(t *testing.T) {
+	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
+
+	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Missing) != 0 {
+		t.Errorf("Missing = %v, want empty (403 does not prove absence)", res.Missing)
+	}
+	if len(res.Unchecked) != 2 {
+		t.Errorf("Unchecked = %v, want both images reported as undecidable", res.Unchecked)
+	}
+}
+
+// TestVerifyRemoteSkipsRegistriesItCannotCheck は、確認できないレジストリについては
+// 何も言わないことを確認する。ここを警告にすると、Docker Hub のイメージを使っている
+// だけで毎回 warning が出て、警告そのものが読み飛ばされるようになる。
+func TestVerifyRemoteSkipsRegistriesItCannotCheck(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	// validManifest のイメージは gcr.io。
+	res, err := VerifyRemote(context.Background(), testProject, []byte(validManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Missing) != 0 || len(res.Unchecked) != 0 {
+		t.Errorf("VerifyRemote() = %+v, want nothing to report", res)
+	}
+	for _, p := range recorded() {
+		if strings.Contains(p, "/repositories/") {
+			t.Errorf("requested %q, want no Artifact Registry call for a gcr.io image", p)
+		}
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
 }
