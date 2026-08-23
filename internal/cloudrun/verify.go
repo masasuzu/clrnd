@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	iam "google.golang.org/api/iam/v1"
+	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
 	secretmanager "google.golang.org/api/secretmanager/v1"
 )
@@ -24,7 +25,11 @@ type RemoteCheck struct {
 // シークレットの実在を ADC で確認する。404 (実在しない) のみを Missing として返し、それ
 // 以外のエラー (クライアント初期化失敗・権限不足・API 無効など) は Unchecked に振り分ける。
 // region は将来のイメージ (Artifact Registry) チェック用に受け取るが、現状は未使用。
-func VerifyRemote(ctx context.Context, project, region string, manifest []byte) (*RemoteCheck, error) {
+//
+// opts は NewClient と同じくテストからフェイク API を差し込むための拡張点。
+// ここを塞いでいたせいで、この関数はこれまで一度もテストできていなかった。
+func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
+	opts ...option.ClientOption) (*RemoteCheck, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
 		return nil, err
@@ -35,11 +40,14 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte) 
 	res := &RemoteCheck{}
 
 	if sa != "" {
-		iamSvc, err := iam.NewService(ctx)
+		iamSvc, err := iam.NewService(ctx, opts...)
 		if err != nil {
 			res.Unchecked = append(res.Unchecked, fmt.Sprintf("service account %q: %v", sa, err))
 		} else {
-			name := fmt.Sprintf("projects/%s/serviceAccounts/%s", project, sa)
+			// プロジェクト部分はワイルドカード。Cloud Run は別プロジェクトの
+			// サービスアカウントを実行 SA にできるので、検証対象のプロジェクトで
+			// 固定すると、正当な構成なのに 404 = Missing として verify を失敗させる。
+			name := fmt.Sprintf("projects/-/serviceAccounts/%s", sa)
 			if _, err := iamSvc.Projects.ServiceAccounts.Get(name).Context(ctx).Do(); err != nil {
 				if isNotFound(err) {
 					res.Missing = append(res.Missing, fmt.Sprintf("service account %q does not exist", sa))
@@ -52,7 +60,7 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte) 
 
 	if len(secrets) > 0 {
 		aliases := secretAliases(svc)
-		smSvc, err := secretmanager.NewService(ctx)
+		smSvc, err := secretmanager.NewService(ctx, opts...)
 		if err != nil {
 			for _, s := range secrets {
 				res.Unchecked = append(res.Unchecked, fmt.Sprintf("secret %q: %v", s, err))
