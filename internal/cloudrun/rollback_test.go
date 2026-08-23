@@ -99,20 +99,42 @@ func TestSelectRollbackRevision(t *testing.T) {
 	}
 }
 
-// TestSelectRollbackRevisionPicksTheHighestShare は、複数のリビジョンに配分されて
-// いるときに「いま主に動いている版」を基準にすることを確認する。
-func TestSelectRollbackRevisionPicksTheHighestShare(t *testing.T) {
+// TestSelectRollbackRevisionDuringACanary は、トラフィックが分割されている最中に
+// 「安定版」へ戻すことを確認する。割合の最も大きいものを現行とみなすと、安定版を
+// 現行と誤認してその 1 つ前まで戻り、既知の良い版を飛び越してしまう。
+func TestSelectRollbackRevisionDuringACanary(t *testing.T) {
 	revisions := Revisions{
-		rev("my-svc-00003", conditionTrue, 10),
-		rev("my-svc-00002", conditionTrue, 90),
+		rev("my-svc-00003", conditionTrue, 10), // 新しいカナリア
+		rev("my-svc-00002", conditionTrue, 90), // 安定版
+		rev("my-svc-00001", conditionTrue, 0),  // 2 世代前
+	}
+	got, err := SelectRollbackRevision(revisions, "")
+	if err != nil {
+		t.Fatalf("SelectRollbackRevision() error = %v", err)
+	}
+	if got.Name != "my-svc-00002" {
+		t.Errorf("SelectRollbackRevision() = %q, want the stable revision the canary is being tested against",
+			got.Name)
+	}
+}
+
+// TestSelectRollbackRevisionUsesTheNewestServingRevision は、古い版の方が割合が
+// 大きくても、現行は「トラフィックを受けている中で最も新しいもの」であることを
+// 確認する。
+func TestSelectRollbackRevisionUsesTheNewestServingRevision(t *testing.T) {
+	revisions := Revisions{
+		rev("my-svc-00004", conditionTrue, 0),  // 配信していない
+		rev("my-svc-00003", conditionTrue, 1),  // 最も新しい配信版
+		rev("my-svc-00002", conditionTrue, 99), // 割合は最大だが古い
 		rev("my-svc-00001", conditionTrue, 0),
 	}
 	got, err := SelectRollbackRevision(revisions, "")
 	if err != nil {
 		t.Fatalf("SelectRollbackRevision() error = %v", err)
 	}
-	if got.Name != "my-svc-00001" {
-		t.Errorf("SelectRollbackRevision() = %q, want the one before the 90%% revision", got.Name)
+	if got.Name != "my-svc-00002" {
+		t.Errorf("SelectRollbackRevision() = %q, want the one just below the newest serving revision",
+			got.Name)
 	}
 }
 

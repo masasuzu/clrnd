@@ -14,6 +14,10 @@ import (
 // 省略時は、いまトラフィックを受けているリビジョンより 1 つ古い Ready なリビジョンを選ぶ。
 // トラフィックを失った古いリビジョンも Ready=True (Reason=Retired) のままなので、
 // これで「直前に動いていた版」が選べる。
+//
+// 「いまトラフィックを受けているリビジョン」は *最も新しいもの* を指す。最も割合の
+// 大きいものではない。カナリア中 (新 10% / 安定 90%) に割合で選ぶと、安定版を現行と
+// 誤認してその 1 つ前まで戻してしまい、既知の良い版を飛び越すことになる。
 func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, error) {
 	if requested != "" {
 		for i := range revisions {
@@ -24,11 +28,12 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 		return nil, fmt.Errorf("revision %q does not belong to this service", requested)
 	}
 
+	// revisions は新しい順なので、最初に見つかった「割合を持つもの」が最新の配信版。
 	current := -1
-	var highest int64
 	for i, r := range revisions {
-		if r.Percent > highest {
-			highest, current = r.Percent, i
+		if r.Percent > 0 {
+			current = i
+			break
 		}
 	}
 	if current < 0 {
