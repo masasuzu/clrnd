@@ -119,3 +119,17 @@ Things this test pinned down that are not obvious from the code:
   `timeoutSeconds`, `spec.traffic`, and several annotations and labels. A
   hand-written minimal manifest therefore never diffs clean (issue #11); a
   manifest produced by `init` does.
+- **`metadata.resourceVersion` is what makes a write conditional** (issue #26).
+  Sending no `resourceVersion` is accepted as an unconditional overwrite, which is
+  how two concurrent deploys used to lose one of the changes with no error at all.
+  A stale but well-formed value gets `409 aborted`
+  (`Conflict for resource '<svc>': version 'X' was specified but current version is 'Y'`),
+  and a malformed one gets `400` (`Invalid resource version provided`) — so the
+  field may only ever be copied from a live read, never invented. This was found by
+  probing the API directly rather than by this script: the race is too narrow to
+  reproduce from a shell, since `clrnd` re-reads the service immediately before it
+  writes.
+- **`run.googleapis.com/client-name` / `client-version` are set by the writing
+  tool**, at both `metadata` and `spec.template.metadata` (issue #25). A service
+  created by `gcloud` carries `gcloud`; one created by `clrnd` carries neither,
+  which is why this script alone never saw them.

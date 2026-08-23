@@ -295,6 +295,19 @@ so re-running after a failed rollout does not report success. Cloud Run accepts 
 revision would still exit 0 and CI would treat the deploy as successful. Pass `--no-wait` to return
 as soon as the request is accepted.
 
+**Every change is a compare-and-swap.** `clrnd` sends the `metadata.resourceVersion` it computed the
+diff against, so if the service changed in between — a colleague's `gcloud run deploy`, a Terraform
+apply, another CI job — the write is rejected instead of silently overwriting them:
+
+```
+Error: service "my-service" changed after the diff was computed; re-run to compare against the
+current state: googleapi: Error 409: Conflict for resource 'my-service': version '...' was
+specified but current version is '...'., aborted
+```
+
+Re-run the command: the second attempt diffs against the new state, so you see what the other change
+did before deciding to apply on top of it. This applies to `deploy`, `rollback`, and `refresh` alike.
+
 ```sh
 clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]
 ```

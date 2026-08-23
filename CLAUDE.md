@@ -107,7 +107,14 @@ revision-name conflicts, asynchronous rollout failures).
 - Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
   `Client.PlanService` (`Get` the live service, compute the `Diff` of live vs desired; `Create` when
   404 via `isNotFound`/`googleapi.Error`). Commands that edit the live definition rather than a
-  manifest — `rollback`, and `refresh` later — go straight to `PlanService`. `DeployPlan.Apply`
+  manifest — `rollback`, and `refresh` — go straight to `PlanService`. `PlanService` also copies the
+  `resourceVersion` of the service it just fetched onto `desired` (`setResourceVersion`), so **every
+  write is a compare-and-swap against the exact state the diff was computed from**. Verified against
+  the real API: a write with no `resourceVersion` is accepted as an unconditional overwrite (so two
+  concurrent deploys silently lose one of the changes), a stale-but-well-formed one gets a `409`,
+  and a malformed one gets a `400` — which is why nothing may ever be invented for the field.
+  `Apply` translates that 409 (`isConflict`) into "changed after the diff was computed; re-run",
+  keeping the API message. `DeployPlan.Apply`
   (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
   `confirm`s on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
   (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. Empty diff →
