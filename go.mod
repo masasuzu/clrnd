@@ -1,6 +1,6 @@
 module github.com/masasuzu/clrnd
 
-go 1.25.8
+go 1.26.7
 
 require (
 	github.com/fujiwara/tfstate-lookup v1.12.1

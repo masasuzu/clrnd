@@ -42,10 +42,16 @@ jobs:
       # tfstate-lookup pulls in the AWS SDK, the Azure SDK, go-tfe, go-jsonnet and
       # gojq, so most of the dependency tree is indirect. This is the only thing
       # that looks at it, and it covers stdlib advisories too.
+      #
+      # GOTOOLCHAIN=local で go.mod が指定する Go に対して走らせる。govulncheck-action は
+      # 既定で最新の stable を入れてしまい、そちらは常に綺麗なので、リリースが実際に使う
+      # ツールチェーン (setup-go が go.mod から入れるもの) の stdlib 脆弱性を見逃す。
+      # 実際 go.mod が go1.25.8 のまま到達可能な 15 件を抱えていたのを、v0.3.0 の
+      # リリース前確認で初めて見つけた。ここで見えていなければならない。
       - name: Vulnerability check
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          go-version-file: go.mod
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+        env:
+          GOTOOLCHAIN: local
 
   lint:
     runs-on: ubuntu-latest

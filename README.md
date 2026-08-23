@@ -18,7 +18,7 @@ install clrnd /usr/local/bin/
 clrnd --version
 ```
 
-With a Go toolchain (**Go 1.25.8 or newer**, matching `go.mod`):
+With a Go toolchain (**Go 1.26.7 or newer**, matching `go.mod`):
 
 ```sh
 go install github.com/masasuzu/clrnd@latest
