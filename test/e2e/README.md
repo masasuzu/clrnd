@@ -70,10 +70,12 @@ not paste it into an issue or a pull request.
 | 1-5 | `diff` right after `init` is empty, and a following template change deploys cleanly |
 | 1-5b2 | `refresh` creates a new revision without changing the definition, and `diff` stays empty afterwards |
 | 1-5c | `rollback` moves traffic to the previous ready revision |
+| 1-5c2 | `refresh` refuses a suffix that creates no revision, and refuses while traffic is pinned |
 | 1-5d | a `deploy` after a rollback still works |
 | 1-6 | `verify` succeeds and prints no warning |
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
 | 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
+| 1-8b | re-deploying the same manifest while the service is unhealthy still fails (the no-changes path checks health) |
 | 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
 
 Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
