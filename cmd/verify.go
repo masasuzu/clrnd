@@ -83,7 +83,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest)
+	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest, clientOptions...)
 	if err != nil {
 		return err
 	}
