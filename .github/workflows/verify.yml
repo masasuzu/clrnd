@@ -55,6 +55,40 @@ jobs:
         env:
           GOTOOLCHAIN: local
 
+  # リリースが作る組み合わせ (linux/darwin/windows x amd64/arm64) を、タグを打つ前に
+  # コンパイルできるか確かめる。通常の Build は runner (linux/amd64) の 1 通りしか見ない
+  # ので、Windows 固有のコンパイルエラーや .goreleaser.yaml の壊れがタグ push まで
+  # 分からなかった。matrix を手で書くと .goreleaser.yaml とずれるため、GoReleaser 自身に
+  # 同じ設定でビルドさせる。--snapshot なのでリリースの作成も署名も provenance も無い。
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser は履歴を見るので shallow clone にしない。
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # release.yml と同じバージョンを入れる。ここだけ上げると、PR で通った設定が
+      # リリース本番で別の GoReleaser に食わされることになる。
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "2.17.1"
+          install-only: true
+
+      - name: Check the GoReleaser config
+        run: goreleaser check
+
+      - name: Cross-compile every release target
+        run: goreleaser build --snapshot --clean
+
   lint:
     runs-on: ubuntu-latest
     steps:
