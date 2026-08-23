@@ -338,7 +338,14 @@ revision-name conflicts, asynchronous rollout failures).
   outputs because its `perm` only applies when the file is **created** — an existing `0644` output
   stays `0644` after a secret is written into it — and because it truncates first, so a failed write
   destroys the previous good content. The `rename` fixes both (`Chmod` on the temp file pins `0600`
-  regardless of umask, and the destination only ever holds the old or the new content). The one
+  regardless of umask, and the destination only ever holds the old or the new content). **Both of
+  those guarantees are Unix ones.** Windows' `os.Rename` is `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`,
+  whose replacement the OS does not promise to be atomic, and Go maps a file mode there to the
+  read-only bit, so `0600` carries no confidentiality. What still holds on Windows is the part that
+  matters most in practice: a write that fails never touches the destination, so the previous
+  content survives. Do not restate the atomic-replacement claim without that scoping — and do not
+  reach for a library to fix it, because none of them can: `renameio` is Linux-only and the
+  alternatives call the same `os.Rename` underneath. The one
   exception is a destination that already exists and is **not a regular file** (`/dev/null`, a
   process substitution): there is nothing to replace and nothing to chmod, so it is written
   directly. `writeFileExclusive` is what `init` uses **without** `--force`, so a file created
