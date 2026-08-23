@@ -479,6 +479,11 @@ manifest drops it again, and `diff` ignores it in the meantime.
 The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
 `--no-wait` is given.
 
+`refresh` refuses two cases rather than succeeding without effect: when the generated name matches
+the revision the service already points at (run it again a second later, or pass a different
+`--revision-suffix`), and when traffic is pinned to specific revisions — the state a `rollback`
+leaves behind, where a new revision would be created but would serve nothing.
+
 ### rollback
 
 Send all traffic back to an earlier revision. Without `--revision`, the revision just before the

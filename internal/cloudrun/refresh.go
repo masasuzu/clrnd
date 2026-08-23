@@ -43,6 +43,21 @@ func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, err
 	if err := validateRevisionName(name); err != nil {
 		return nil, err
 	}
+	// 同じ名前では新しいリビジョンが作られない。差分がゼロになって
+	// "No changes." で成功してしまい、流し直したつもりが何も起きない。
+	if revisionName(live) == name {
+		return nil, fmt.Errorf(
+			"revision %q is already the current template revision, so refreshing would do nothing; "+
+				"wait a second or pass a different --revision-suffix", name)
+	}
+	// トラフィックが特定のリビジョンへ固定されていると、新しいリビジョンは作られるが
+	// 何も配信しない。rollback の直後がこの状態になる。refresh の目的を果たせないので断る。
+	if !servesLatestRevision(live) {
+		return nil, fmt.Errorf(
+			"refresh would create a revision that receives no traffic: this service pins traffic to " +
+				"specific revisions, so nothing follows the latest one; deploy the change you want, " +
+				"or send traffic back to the latest revision first")
+	}
 
 	meta := run.ObjectMeta{}
 	if live.Spec.Template.Metadata != nil {
@@ -57,6 +72,22 @@ func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, err
 	out := *live
 	out.Spec = &spec
 	return &out, nil
+}
+
+// servesLatestRevision は「最新リビジョンへトラフィックが向くか」を返す。
+// spec.traffic が未指定なら Cloud Run の既定 (latestRevision に 100%) と同じなので真。
+// rollback はトラフィックを特定のリビジョンへ固定するため、その後は偽になる。
+func servesLatestRevision(live *run.Service) bool {
+	if len(live.Spec.Traffic) == 0 {
+		return true
+	}
+	for _, t := range live.Spec.Traffic {
+		// 割合 0 のタグ専用エントリは配信しないので数えない。
+		if t != nil && t.LatestRevision && t.Percent > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // validateRevisionName は Cloud Run が拒否する名前を手元で弾く。サーバに投げても

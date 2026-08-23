@@ -201,6 +201,11 @@ revision-name conflicts, asynchronous rollout failures).
   the constraints confirmed against the real API: the name must be prefixed with `<service>-`, may
   contain only lowercase letters, digits and hyphens, must start with a letter, may not end with a
   hyphen, and must be shorter than 64 characters.
+  `RefreshTarget` also refuses two situations where the command would succeed without doing its job:
+  a name equal to the one already on `spec.template` (no new revision is created, so the diff is
+  empty and `applyPlan` reports "No changes."), and a service whose `spec.traffic` pins every target
+  to a specific revision (`servesLatestRevision`) — the state `rollback` leaves behind, where a new
+  revision would be created but serve nothing.
 - `delete` (in [cmd/delete.go](cmd/delete.go)) is the one command that destroys something, so it
   fetches the service first: a missing service fails before any prompt, and what is about to go is
   printed to stderr **with the project and region** — the realistic accident is deleting the right
