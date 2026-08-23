@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, `wait`, `revisions`, `rollback`, and `delete` subcommands. All ten are
-implemented. (`init` was formerly `load`; `load`
+`init`, `status`, `wait`, `revisions`, `rollback`, `delete`, and `refresh` subcommands. All eleven
+are implemented, which is the whole ecspresso-shaped set Cloud Run's model allows. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -174,6 +174,16 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off, and warns when only one of project/region is
   set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
   plumbed through for them); see the TODO in `verify.go`.
+- `refresh` (in [internal/cloudrun/refresh.go](internal/cloudrun/refresh.go)) re-applies the **live**
+  definition unchanged so a new revision is created — it never reads a local manifest.
+  This is the **one deliberate exception** to "clrnd does not manage revision names": Cloud Run only
+  creates a revision when `spec.template` changes, so forcing a rollout requires naming the revision
+  explicitly (`<service>-r<UTC timestamp>`, or `--revision-suffix`). The name is dropped again by the
+  next `deploy` from a manifest, and `alignRevisionName` keeps `diff` clean in the meantime because
+  the local manifest pins nothing. `validateRevisionName` rejects names the API would reject, using
+  the constraints confirmed against the real API: the name must be prefixed with `<service>-`, may
+  contain only lowercase letters, digits and hyphens, must start with a letter, may not end with a
+  hyphen, and must be shorter than 64 characters.
 - `delete` (in [cmd/delete.go](cmd/delete.go)) is the one command that destroys something, so it
   fetches the service first: a missing service fails before any prompt, and what is about to go is
   printed to stderr **with the project and region** — the realistic accident is deleting the right
