@@ -357,6 +357,16 @@ revision-name conflicts, asynchronous rollout failures).
 - `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
   `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
   tests pass or fail depending on whether `go test` was started from a terminal.
+- CI checks live in [.github/workflows/verify.yml](.github/workflows/verify.yml), which is
+  `workflow_call`-only: [ci.yml](.github/workflows/ci.yml) calls it on `pull_request`/`push` to
+  main, and [release.yml](.github/workflows/release.yml) calls it as `needs:` of the GoReleaser job.
+  **Add new checks there, not in `ci.yml`.** Tag pushes do not match `ci.yml`'s branch filter, so
+  before this split a tag on an untested (or not-even-on-main) commit produced a fully signed
+  release; signing and provenance attest *which commit was built*, never that it passed anything.
+  The called workflow checks out the same ref as its caller, so the verified SHA is the SHA
+  GoReleaser builds. Note the consequence of gating on `govulncheck`: an advisory published after a
+  tag blocks re-running that release until the dependency (or the Go toolchain in `go.mod`) is
+  bumped.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in

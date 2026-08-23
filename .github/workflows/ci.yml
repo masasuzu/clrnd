@@ -10,59 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files are not gofmt-formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test -race ./...
-
-      # tfstate-lookup pulls in the AWS SDK, the Azure SDK, go-tfe, go-jsonnet and
-      # gojq, so most of the dependency tree is indirect. This is the only thing
-      # that looks at it, and it covers stdlib advisories too.
-      #
-      # GOTOOLCHAIN=local で go.mod が指定する Go に対して走らせる。govulncheck-action は
-      # 既定で最新の stable を入れてしまい、そちらは常に綺麗なので、リリースが実際に使う
-      # ツールチェーン (setup-go が go.mod から入れるもの) の stdlib 脆弱性を見逃す。
-      # 実際 go.mod が go1.25.8 のまま到達可能な 15 件を抱えていたのを、v0.3.0 の
-      # リリース前確認で初めて見つけた。ここで見えていなければならない。
-      - name: Vulnerability check
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
-        env:
-          GOTOOLCHAIN: local
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+  # 検査の中身は verify.yml にあり、release.yml も同じものを呼ぶ。
+  # ここに直接書くと、リリース前検査と通常 CI がいずれずれる。
+  verify:
+    uses: ./.github/workflows/verify.yml
