@@ -199,7 +199,10 @@ revision-name conflicts, asynchronous rollout failures).
   commands agree on what a valid input is; scoping it to the dry-run path let `diff` render a
   "you can rename a service" diff that `deploy` would refuse. It also mirrors `PlanService`'s 404
   handling (`current = nil`, everything is an addition), so `diff` works on a service that does not
-  exist yet — and passes `create` to `resolveDefaults`, since a *replace* dry run would 404 too. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
+  exist yet — and passes `create` to `resolveDefaults`, since a *replace* dry run would 404 too.
+  That path is checked against `run.services.create`, not `run.services.update`, so the failure
+  message names whichever call was actually made: telling someone to grant `update` when the dry
+  run was a `create` sends them to fix the wrong permission. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
   one, but a rejected manifest or a service deleted mid-run look the same from here.
 - **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
   and a name Cloud Run generated is **never echoed back** — the field is only present on read when a

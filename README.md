@@ -64,7 +64,7 @@ gcloud auth application-default login
 | `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get`, `secretmanager.secrets.get`, and `artifactregistry.tags.get` / `artifactregistry.dockerimages.get` |
 | `status`, `wait`, `init` | `run.services.get` |
 | `revisions` | `run.services.get`, `run.revisions.list` |
-| `diff` | `run.services.get` **and `run.services.update`** — see below |
+| `diff` | `run.services.get` **and `run.services.update`** — plus `run.services.create` for a service that does not exist yet. See below |
 | `deploy` | `run.services.get`, `run.services.update`, and `run.services.create` for a service that does not exist yet |
 | `rollback` | `run.services.get`, `run.revisions.list`, `run.services.update` |
 | `refresh` | `run.services.get`, `run.services.update` |
@@ -76,9 +76,12 @@ account (`roles/iam.serviceAccountUser`) — a Cloud Run requirement, not a clrn
 
 **`diff` needs write permission by default.** It asks Cloud Run to fill in the fields it defaults,
 and the only way to get those is a `dryRun=all` write, which is checked against
-`run.services.update` even though it changes nothing. Pass `--no-server-defaults` to compare
-against the manifest as written and stay within `roles/run.viewer` — at the cost of a diff that
-shows Cloud Run's defaults as differences on a hand-written manifest.
+`run.services.update` even though it changes nothing. For a service that does not exist yet the
+dry run has to be a *create* (a replace would 404), so that case needs `run.services.create`
+instead — the same permission `deploy` would need to create it for real. Pass
+`--no-server-defaults` to make no write-shaped call at all: the comparison then stays within
+`roles/run.viewer`, at the cost of a diff that shows Cloud Run's defaults as differences on a
+hand-written manifest.
 
 None of the permissions `verify` uses for its existence checks are required — a missing one does
 **not** fail the command. It
@@ -398,9 +401,10 @@ A hand-written minimal manifest would otherwise be a different story: Cloud Run 
 fields, and those would show up as a difference forever. `diff` therefore asks Cloud Run to resolve
 them first (via a dry run) so the comparison converges.
 
-> **This means `diff` needs permission to update the service**, because a dry run is a write-shaped
-> call. If you run `diff` with read-only credentials, pass `--no-server-defaults` to compare against
-> the manifest as written.
+> **This means `diff` needs permission to update the service** (or to *create* it, when the service
+> does not exist yet), because a dry run is a write-shaped call. If you run `diff` with read-only
+> credentials, pass `--no-server-defaults` to compare against the manifest as written — with that
+> flag no dry run is performed at all.
 
 ```sh
 clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
