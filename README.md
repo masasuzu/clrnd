@@ -271,6 +271,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--server-defaults` | Resolve Cloud Run's own defaults before comparing (needs permission to update the service). |
 
 ```sh
 clrnd diff my-service service.yaml --project my-project --region asia-northeast1

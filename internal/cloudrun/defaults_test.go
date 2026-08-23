@@ -131,6 +131,61 @@ func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 	}
 }
 
+// TestCompareManifestValidatesBeforeTheDryRun は、--server-defaults のとき
+// サービス名の不一致を API に投げる前に弾くことを確認する。dry-run は path の
+// サービス名と body の metadata.name が一致していないと 400 になるので、投げると
+// 「権限が要る」と誤読される紛らわしいエラーになる。
+func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
+	c, recorded := defaultingAPI(t)
+
+	_, err := c.CompareManifest(context.Background(), "other-svc", []byte(validManifest),
+		"manifest.yaml", PlanOptions{ResolveDefaults: true})
+	if err == nil {
+		t.Fatal("CompareManifest() error = nil, want the name mismatch to be caught locally")
+	}
+	if !strings.Contains(err.Error(), "does not match service argument") {
+		t.Errorf("CompareManifest() error = %v, want the local validation error", err)
+	}
+	for _, r := range recorded() {
+		if r.Method == http.MethodPut {
+			t.Error("a dry-run request was sent despite the local validation failure")
+		}
+	}
+}
+
+// TestCompareManifestSetsTheNamespace は、dry-run に送る定義が deploy と同じ
+// 前処理 (namespace を送信先に合わせる) を通ることを確認する。これが無いと、
+// namespace 付きのマニフェストで diff --server-defaults だけが API に弾かれる。
+func TestCompareManifestSetsTheNamespace(t *testing.T) {
+	c, recorded := defaultingAPI(t)
+
+	manifest := []byte(`apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+  namespace: "123456789"
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/project/image:tag
+`)
+	if _, err := c.CompareManifest(context.Background(), "my-svc", manifest,
+		"manifest.yaml", PlanOptions{ResolveDefaults: true}); err != nil {
+		t.Fatalf("CompareManifest() error = %v", err)
+	}
+
+	var sent string
+	for _, r := range recorded() {
+		if r.Method == http.MethodPut {
+			sent = string(r.Body)
+		}
+	}
+	if !strings.Contains(sent, `"namespace":"`+testProject+`"`) {
+		t.Errorf("the dry-run body = %s, want the namespace replaced with the target project", sent)
+	}
+}
+
 // TestResolveDefaultsErrorPointsAtTheFlag は、権限不足のときに何をすればよいかを
 // 伝えることを確認する。dry-run は書き込み系なので、読むだけの権限では通らない。
 func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
@@ -146,7 +201,11 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	if err == nil {
 		t.Fatal("Plan() error = nil, want the permission failure to surface")
 	}
-	for _, want := range []string{"failed to resolve server defaults", "drop --server-defaults"} {
+	for _, want := range []string{
+		"failed to resolve server defaults",
+		"permission denied",  // 原因をそのまま見せる
+		"drop it to compare", // 対処を示す
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Plan() error = %v, want it to contain %q", err, want)
 		}

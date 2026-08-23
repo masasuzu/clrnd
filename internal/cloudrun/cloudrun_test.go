@@ -221,6 +221,17 @@ func TestToManifestStripsServerManagedFields(t *testing.T) {
 	}
 }
 
+// compareManifest は「live サービスとローカルのマニフェストを比較する」純粋な処理を
+// テストから呼ぶためのヘルパ。本体では Client.CompareManifest / PlanService が
+// 同じ compareServices を通る。
+func compareManifest(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
+	desired, err := parseManifest(manifest)
+	if err != nil {
+		return "", err
+	}
+	return compareServices(current, desired, currentName, desiredName)
+}
+
 // normalize はテスト用に「ローカルのマニフェストを live 側と同じ正規化にそろえる」処理。
 // かつて Normalize として公開していたが、今は Compare がこの経路を内包している。
 func normalize(t *testing.T, manifest []byte) []byte {
@@ -283,9 +294,9 @@ spec:
       containers:
       - image: gcr.io/x/y
 `)
-	_, err := Compare(nil, manifest, "live", "local")
+	_, err := compareManifest(nil, manifest, "live", "local")
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("Compare() error = %v, want unknown field", err)
+		t.Fatalf("compareManifest() error = %v, want unknown field", err)
 	}
 }
 
@@ -318,22 +329,22 @@ status:
 		Status: &run.ServiceStatus{ObservedGeneration: 9},
 	}
 
-	got, err := Compare(live, manifest, "live", "local")
+	got, err := compareManifest(live, manifest, "live", "local")
 	if err != nil {
-		t.Fatalf("Compare() error = %v", err)
+		t.Fatalf("compareManifest() error = %v", err)
 	}
 	if got != "" {
-		t.Errorf("Compare() = %q, want empty", got)
+		t.Errorf("compareManifest() = %q, want empty", got)
 	}
 }
 
 func TestCompareTreatsMissingServiceAsFullAddition(t *testing.T) {
-	got, err := Compare(nil, []byte(validManifest), "live/my-svc", "my-svc")
+	got, err := compareManifest(nil, []byte(validManifest), "live/my-svc", "my-svc")
 	if err != nil {
-		t.Fatalf("Compare() error = %v", err)
+		t.Fatalf("compareManifest() error = %v", err)
 	}
 	if !strings.Contains(got, "+kind: Service") {
-		t.Errorf("Compare() = %q, want the whole manifest added", got)
+		t.Errorf("compareManifest() = %q, want the whole manifest added", got)
 	}
 }
 
@@ -407,11 +418,11 @@ func TestCompareDoesNotMutateCurrent(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
 
-	if _, err := Compare(live, []byte(validManifest), "live", "local"); err != nil {
-		t.Fatalf("Compare() error = %v", err)
+	if _, err := compareManifest(live, []byte(validManifest), "live", "local"); err != nil {
+		t.Fatalf("compareManifest() error = %v", err)
 	}
 	if got := revisionName(live); got != "my-svc-00007-abc" {
-		t.Errorf("Compare() mutated current: revisionName() = %q, want it untouched", got)
+		t.Errorf("compareManifest() mutated current: revisionName() = %q, want it untouched", got)
 	}
 }
 
@@ -422,12 +433,12 @@ func TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
 
-	got, err := Compare(live, []byte(validManifest), "live", "local")
+	got, err := compareManifest(live, []byte(validManifest), "live", "local")
 	if err != nil {
-		t.Fatalf("Compare() error = %v", err)
+		t.Fatalf("compareManifest() error = %v", err)
 	}
 	if got != "" {
-		t.Errorf("Compare() = %q, want empty (the live revision name must be ignored)", got)
+		t.Errorf("compareManifest() = %q, want empty (the live revision name must be ignored)", got)
 	}
 }
 
@@ -449,13 +460,13 @@ spec:
       containers:
       - image: gcr.io/project/image:tag
 `)
-	got, err := Compare(live, manifest, "live", "local")
+	got, err := compareManifest(live, manifest, "live", "local")
 	if err != nil {
-		t.Fatalf("Compare() error = %v", err)
+		t.Fatalf("compareManifest() error = %v", err)
 	}
 	if !strings.Contains(got, "-      name: my-svc-00007-abc") ||
 		!strings.Contains(got, "+      name: my-svc-00008-def") {
-		t.Errorf("Compare() = %q, want the pinned revision name change", got)
+		t.Errorf("compareManifest() = %q, want the pinned revision name change", got)
 	}
 }
 

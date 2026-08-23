@@ -87,10 +87,7 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 	if desired == nil {
 		return nil, errors.New("no desired service to plan")
 	}
-	// 送信先プロジェクトと body の namespace を一致させる。
-	if desired.Metadata != nil {
-		desired.Metadata.Namespace = c.project
-	}
+	c.setNamespace(desired)
 
 	plan := &DeployPlan{Service: service, client: c, desired: desired}
 
@@ -131,6 +128,17 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 	if err != nil {
 		return "", err
 	}
+	// 送信先に合わせる。--server-defaults の dry-run は本物の書き込みと同じ検証を
+	// 受けるので、deploy と同じ前処理を通しておかないと diff だけが弾かれる。
+	c.setNamespace(desired)
+
+	if opts.ResolveDefaults {
+		// dry-run は path のサービス名と body の metadata.name が一致していないと
+		// 400 になる。API に投げる前に、分かる言葉で落とす。
+		if err := validate(desired, service); err != nil {
+			return "", err
+		}
+	}
 
 	current, err := c.GetService(ctx, service)
 	if err != nil {
@@ -143,6 +151,14 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 		}
 	}
 	return compareServices(current, desired, "live/"+service, desiredLabel)
+}
+
+// setNamespace は送信先プロジェクトと body の namespace を一致させる。
+// 適用も dry-run もこれを通した定義で行う。
+func (c *Client) setNamespace(svc *run.Service) {
+	if svc != nil && svc.Metadata != nil {
+		svc.Metadata.Namespace = c.project
+	}
 }
 
 // resolveDefaults はサーバ側の dry-run を通して、Cloud Run が埋める既定値まで入った
@@ -160,9 +176,12 @@ func (c *Client) resolveDefaults(ctx context.Context, service string, desired *r
 			DryRun(dryRunAll).Context(ctx).Do()
 	}
 	if err != nil {
+		// 原因は権限とは限らない (マニフェストの内容が拒否された、途中で削除された等)。
+		// 断定せず、この経路が何をしているかだけを添える。
 		return nil, fmt.Errorf(
-			"failed to resolve server defaults for service %q (this needs permission to update the "+
-				"service; drop --server-defaults to compare without it): %w", service, err)
+			"failed to resolve server defaults for service %q: %w "+
+				"(--server-defaults performs a dry-run update, which needs permission to update the "+
+				"service; drop it to compare without one)", service, err)
 	}
 	return resolved, nil
 }
@@ -248,19 +267,7 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 	return manifest, nil
 }
 
-// Compare は live サービス (current) とローカルのマニフェストを同じ正規化にそろえて
-// 統一 diff を返す。current は書き換えない。current が nil ならサービス未存在として、
-// desired 全体が追加された diff になる。`clrnd diff` と `clrnd deploy` が同一の差分を表示するための共通経路。
-// マニフェストは厳密にパースするので、未知フィールドはここでエラーになる。
-func Compare(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
-	desired, err := parseManifest(manifest)
-	if err != nil {
-		return "", err
-	}
-	return compareServices(current, desired, currentName, desiredName)
-}
-
-// compareServices は Compare と Plan が共有する比較の実装。引数は書き換えない。
+// compareServices は差分を取る各経路が共有する比較の実装。引数は書き換えない。
 func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
 	current = alignRevisionName(current, desired)
 
