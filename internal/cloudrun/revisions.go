@@ -20,7 +20,8 @@ const listRevisionsPageLimit = 100
 // listRevisionsMaxPages はページ送りの上限。1 サービスあたり 100 * 1000 件を超える
 // リビジョンは現実には存在しないので、ここに当たるのはサーバが同じトークンを返し続けた
 // ような異常時に限る。上限が無いと items が際限なく伸び、--timeout の無い ctx では
-// 止める手段が無くなる。
+// 止める手段が無くなる。上限に当たった場合は打ち切った一覧を返さずエラーにする
+// (理由は ListRevisions のコメントを参照)。
 const listRevisionsMaxPages = 1000
 
 // Revision はサービスに属するリビジョン 1 件の要約。JSON 出力の構造でもある。
@@ -48,6 +49,11 @@ type Revisions []Revision
 
 // ListRevisions はサービスに属するリビジョンを新しい順に返す。
 // トラフィック配分は Service 側にしか無いので、両方を引いて突き合わせる。
+//
+// ページ送りが正常に終わらなかった場合 (同じ Continue トークンが返る、上限ページ数に
+// 達してもトークンが残る) は、そこまでの一覧ではなくエラーを返す。不完全な一覧を
+// 完全なものとして扱うと、rollback が現行のリビジョンや直前の Ready なリビジョンを
+// 見落として誤った版へ戻しうる。表示だけの revisions でも、黙って欠けるより落ちたほうがよい。
 func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, error) {
 	svc, err := c.GetService(ctx, service)
 	if err != nil {
@@ -57,7 +63,11 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 	selector := fmt.Sprintf("%s=%s", serviceLabel, service)
 	var items []*run.Revision
 	token := ""
-	for page := 0; page < listRevisionsMaxPages; page++ {
+	for page := 0; ; page++ {
+		if page >= listRevisionsMaxPages {
+			return nil, fmt.Errorf("failed to list revisions of service %q: gave up after %d pages "+
+				"with more still to read", service, listRevisionsMaxPages)
+		}
 		call := c.api.Namespaces.Revisions.List(c.parent()).
 			LabelSelector(selector).
 			Limit(listRevisionsPageLimit)
@@ -68,14 +78,17 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to list revisions of service %q: %w", service, err)
 		}
-		items = append(items, resp.Items...)
 		if resp.Metadata == nil || resp.Metadata.Continue == "" {
+			items = append(items, resp.Items...)
 			break
 		}
-		// 同じトークンが返ってきたら、次のページも同じ応答になる。進んでいないので打ち切る。
+		// 同じトークンが返ってきたら、次のページも同じ応答になる。追い続けても進まないので
+		// 止めるが、ここまでの一覧は「同じページを 2 回読んだもの」で重複も欠落もありうる。
 		if resp.Metadata.Continue == token {
-			break
+			return nil, fmt.Errorf("failed to list revisions of service %q: pagination did not advance "+
+				"(the API returned the same continue token twice)", service)
 		}
+		items = append(items, resp.Items...)
 		token = resp.Metadata.Continue
 	}
 
