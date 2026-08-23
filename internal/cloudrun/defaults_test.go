@@ -271,10 +271,44 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	for _, want := range []string{
 		"failed to resolve server defaults",
 		"permission denied",    // 原因をそのまま見せる
+		"dry-run update",       // 実際に投げた呼び出し
 		"--no-server-defaults", // 対処を示す
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Plan() error = %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// TestResolveDefaultsErrorNamesTheCreatePath は、まだ存在しないサービスに対する diff で
+// 権限不足になったときに create の権限を案内することを確認する。この経路の dry-run は
+// Create なので run.services.create が要る。update と案内すると、権限を足す人が
+// 案内どおりに直しても通らないままになる。
+func TestResolveDefaultsErrorNamesTheCreatePath(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		switch r.Method {
+		case http.MethodGet:
+			return http.StatusNotFound, googleAPIError(404, "not found")
+		case http.MethodPost:
+			return http.StatusForbidden, googleAPIError(403, "permission denied")
+		}
+		return http.StatusOK, defaultedService()
+	})
+
+	_, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+		"local/manifest.yaml", PlanOptions{ResolveDefaults: true})
+	if err == nil {
+		t.Fatal("CompareManifest() error = nil, want the permission failure to surface")
+	}
+	for _, want := range []string{
+		"failed to resolve server defaults",
+		"permission denied",
+		"dry-run create",       // update ではない
+		"permission to create", // 足すべき権限
+		"--no-server-defaults",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("CompareManifest() error = %v, want it to contain %q", err, want)
 		}
 	}
 }

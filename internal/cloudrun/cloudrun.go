@@ -213,11 +213,18 @@ func (c *Client) resolveDefaults(ctx context.Context, service string, desired *r
 	}
 	if err != nil {
 		// 原因は権限とは限らない (マニフェストの内容が拒否された、途中で削除された等)。
-		// 断定せず、この経路が何をしているかだけを添える。
+		// 断定せず、この経路が何をしているかだけを添える。ただし create と update では
+		// 要る権限が違うので、実際に投げたほうを言う。未存在のサービスに対する diff で
+		// 「update の権限が要る」と案内すると、run.services.create を足すべき人が
+		// いつまでも直せない。
+		call := "update"
+		if create {
+			call = "create"
+		}
 		return nil, fmt.Errorf(
 			"failed to resolve server defaults for service %q: %w "+
-				"(resolving them performs a dry-run update, which needs permission to update the "+
-				"service; pass --no-server-defaults to compare without one)", service, err)
+				"(resolving them performs a dry-run %s, which needs permission to %s the "+
+				"service; pass --no-server-defaults to compare without one)", service, err, call, call)
 	}
 	return resolved, nil
 }
