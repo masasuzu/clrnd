@@ -1,0 +1,26 @@
+# 既定の linter に、このリポジトリで実際にやりがちな取りこぼし
+# (エラーの握りつぶし、比較でのエラー判定) を足す。
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - errorlint
+    - misspell
+  settings:
+    errcheck:
+      # 端末への書き込みは失敗しても打つ手が無く、全箇所を `_ =` で潰すと
+      # 本当に見るべきエラーが埋もれる。tabwriter は Flush で失敗を返すので
+      # そちらを見れば足りる。
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

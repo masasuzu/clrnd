@@ -1,0 +1,20 @@
+# Actions is SHA-pinned and Go modules are tracked in go.sum, so neither updates on
+# its own. Without this file the pins simply grow stale, which is worse than not
+# pinning at all.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # The google.golang.org/api tree pulls a large number of indirect modules;
+      # updating them one PR at a time is unreadable.
+      go-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
