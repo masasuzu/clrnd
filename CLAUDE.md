@@ -48,11 +48,15 @@ revision-name conflicts, asynchronous rollout failures).
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout.
-- Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional
-  (`cobra.MaximumNArgs(2)` for verify/render/diff/deploy, `MaximumNArgs(1)` for init); `resolveService`/
-  `resolveManifest` fill them from the config file when absent (positional → config). args fill
-  service first, then manifest. `render` does not match the service name, so it calls only
-  `resolveManifest` (the `[service]` slot is still accepted for positional consistency).
+- Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional and
+  `resolveService`/`resolveManifest` fill them from the config file when absent (positional →
+  config); args fill service first, then manifest. Only the three commands that take **both** a
+  service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy`.
+  Every other command uses `MaximumNArgs(1)`: `init`, `status`,
+  `revisions`, `rollback`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
+  only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
+  `render` does not match the service name, so it calls `resolveManifestAt(args, 0)` rather than
+  `resolveManifest`.
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
   Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
 - `clrnd --version` is served by [cmd/version.go](cmd/version.go): the `version` var is filled by
@@ -115,10 +119,13 @@ revision-name conflicts, asynchronous rollout failures).
   and a malformed one gets a `400` — which is why nothing may ever be invented for the field.
   `Apply` translates that 409 (`isConflict`) into "changed after the diff was computed; re-run",
   keeping the API message. `DeployPlan.Apply`
-  (the actual `Create`/`ReplaceService`). `cmd/deploy.go` prints `plan.Diff` (stdout), then
-  `confirm`s on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
-  (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. Empty diff →
-  skip apply. `--dry-run` passes `dryRun=all` for server-side validation with no mutation; when it
+  (the actual `Create`/`ReplaceService`). The print → confirm → apply → wait sequence itself lives
+  in `applyPlan` ([cmd/apply.go](cmd/apply.go)), shared by every mutating command; `cmd/deploy.go`
+  only builds the plan and hands it over. `applyPlan` prints `plan.Diff` (stdout), then `confirm`s
+  on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
+  (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. An empty diff
+  skips the apply but still waits (see the `cmd/apply.go` entry under Conventions).
+  `--dry-run` passes `dryRun=all` for server-side validation with no mutation; when it
   is off the `DryRun` setter is **not** called at all (passing `""` would send an empty `dryRun=`
   query parameter).
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
@@ -160,8 +167,9 @@ revision-name conflicts, asynchronous rollout failures).
   service does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
   `diff`) and `Client.PlanService` (used by `deploy`, `rollback`, `refresh`) both go through it, so
   the commands can never drift apart. Both also run the same pre-processing before anything is sent
-  — `setNamespace` puts the target project on the body — because with `--server-defaults` the diff
-  path performs a real (dry-run) write and gets the same validation as `deploy`.
+  — `setNamespace` puts the target project on the body — because while server defaults are being
+  resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
+  (dry-run) write and gets the same validation as `deploy`.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
 - **Server defaults** (`--no-server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
@@ -209,9 +217,11 @@ revision-name conflicts, asynchronous rollout failures).
   `cmd/verify.go` as a `warning:` on stderr and NOT a failure). This split keeps an ambient
   project/region in CI from turning a passing offline lint red. Auth is the same ADC; the IAM/Secret
   Manager clients are subpackages of `google.golang.org/api` (no new module). `cmd/verify.go` runs it
-  only when a target resolves and `--local-only` is off, and warns when only one of project/region is
-  set. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
-  plumbed through for them); see the TODO in `verify.go`.
+  only when a target resolves and `--local-only` is off. When a target does not resolve it warns
+  **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a half-set
+  environment is skipped silently, so an ambient `CLOUDSDK_*` in CI does not produce noise on every
+  run. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
+  plumbed through for them); see the TODO in `verify.go` and issue #54.
 - `refresh` (in [internal/cloudrun/refresh.go](internal/cloudrun/refresh.go)) re-applies the **live**
   definition unchanged so a new revision is created — it never reads a local manifest.
   This is the **one deliberate exception** to "clrnd does not manage revision names": Cloud Run only
@@ -219,9 +229,10 @@ revision-name conflicts, asynchronous rollout failures).
   explicitly (`<service>-r<UTC timestamp>`, or `--revision-suffix`). The name is dropped again by the
   next `deploy` from a manifest, and `alignRevisionName` keeps `diff` clean in the meantime because
   the local manifest pins nothing. `validateRevisionName` rejects names the API would reject, using
-  the constraints confirmed against the real API: the name must be prefixed with `<service>-`, may
-  contain only lowercase letters, digits and hyphens, must start with a letter, may not end with a
-  hyphen, and must be shorter than 64 characters.
+  the constraints confirmed against the real API: only lowercase letters, digits and hyphens,
+  starting with a letter, not ending with a hyphen, and shorter than 64 characters. It does **not**
+  check the `<service>-` prefix Cloud Run also requires — that one is guaranteed by construction in
+  `RefreshTarget`, which builds the name as `<service>-<suffix>`.
   `RefreshTarget` also refuses two situations where the command would succeed without doing its job:
   a name equal to the one already on `spec.template` (no new revision is created, so the diff is
   empty and `applyPlan` reports "No changes."), and a service whose `spec.traffic` pins every target
@@ -253,7 +264,10 @@ revision-name conflicts, asynchronous rollout failures).
   Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
   `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
   in `status.traffic` more than once (a percentage entry plus a tag entry), so the shares are summed
-  and the tags collected. The list is paged through with the `Continue` token. `newRevisions` is the
+  and the tags collected. The list is paged through with the `Continue` token, with two
+  guards: it stops when the same token comes back (the next page would repeat the last one) and
+  after `listRevisionsMaxPages` pages. Without them a server that keeps returning the same token
+  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. `newRevisions` is the
   pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
   the API. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
   (Cloud Run numbers them sequentially) when the timestamp will not parse.
@@ -310,9 +324,10 @@ revision-name conflicts, asynchronous rollout failures).
   stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
   `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
   not fail the command — stdout stays data-only, which is what the rule protects.
-  Exception: `deploy` is interactive — it prints the diff to stdout (data)
-  and status/prompt lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout
-  stays data-only. This is intentional, not a violation.
+  Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`
+  print the diff (or, for `delete`, what is about to go) to stdout as data and their status/prompt
+  lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout stays data-only. This
+  is intentional, not a violation.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
