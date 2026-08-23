@@ -71,5 +71,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # アクションを SHA で固定しても、アクションが取ってくる lint 本体は固定されない。
+      # 指定が無いと latest が入るので、ローカル (README / CLAUDE.md の go run ...@v2.13.1)
+      # と CI が別のバージョンを走らせ、CI の結果が上流のリリースで勝手に変わる。
+      # ここを上げるときは README と CLAUDE.md の実行例も一緒に上げること。
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.1
