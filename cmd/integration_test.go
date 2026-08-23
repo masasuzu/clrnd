@@ -73,6 +73,19 @@ spec:
       - image: gcr.io/project/image:new
 `
 
+// echoDryRun は dry-run の書き込みに対して、送られてきた body をそのまま返す。
+// 「既定値を何も足さないサーバ」を模すので、--server-defaults を通しても desired は
+// 変わらず、差分はマニフェストのままになる。応答したら true を返す。
+func echoDryRun(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPut || !strings.Contains(r.URL.RawQuery, "dryRun=all") {
+		return false
+	}
+	body, _ := io.ReadAll(r.Body)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
+	return true
+}
+
 // startFakeAPI は Cloud Run Admin API の代わりに使う httptest サーバを立て、clientOptions を
 // そこへ向ける。テスト終了時に元へ戻す。
 func startFakeAPI(t *testing.T, handler http.HandlerFunc) {
@@ -163,6 +176,9 @@ func writeManifest(t *testing.T, content string) string {
 func TestDiffEndToEnd(t *testing.T) {
 	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if echoDryRun(w, r) {
+			return
+		}
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(liveServiceJSON))
@@ -194,6 +210,9 @@ func TestDiffEndToEnd(t *testing.T) {
 func TestDiffUsesConfigFile(t *testing.T) {
 	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if echoDryRun(w, r) {
+			return
+		}
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(liveServiceJSON))
@@ -233,7 +252,13 @@ func TestDeployDryRunEndToEnd(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
 			putQuery = r.URL.RawQuery
-			putBody, _ = io.ReadAll(r.Body)
+			body, _ := io.ReadAll(r.Body)
+			putBody = body
+			// 既定値を足さないサーバとして、送られた body をそのまま返す。
+			// --dry-run の適用も dry-run なので、ここを通る。
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(liveServiceJSON))
@@ -554,6 +579,10 @@ func rolloutAPI(t *testing.T, afterApply string) func() int {
 	gets := 0
 
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		// 既定値の解決は dry-run なので、適用ともポーリングとも数えない。
+		if echoDryRun(w, r) {
+			return
+		}
 		mu.Lock()
 		var body string
 		switch r.Method {
@@ -1148,6 +1177,54 @@ func TestRefreshRejectsAnInvalidRevisionName(t *testing.T) {
 	}
 	if len(sentBody()) != 0 {
 		t.Error("refresh applied something despite the invalid name")
+	}
+}
+
+// defaultedServiceJSON は Cloud Run が既定値を埋めたあとの定義。
+// localManifest (最小) には無いフィールドが入っている。
+const defaultedServiceJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 7},
+  "spec": {
+    "template": {"spec": {
+      "containerConcurrency": 80,
+      "timeoutSeconds": 300,
+      "containers": [{"image": "gcr.io/project/image:new"}]
+    }},
+    "traffic": [{"latestRevision": true, "percent": 100}]
+  },
+  "status": {"observedGeneration": 7, "conditions": [{"type": "Ready", "status": "True"}]}
+}`
+
+// TestDiffServerDefaults は --server-defaults がサーバ既定値ぶんの差分を消すことを
+// 確認する (issue #11)。
+func TestDiffServerDefaults(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(defaultedServiceJSON))
+	})
+
+	manifest := writeManifest(t, localManifest)
+	target := []string{"--project", "test-project", "--region", "asia-northeast1"}
+
+	// 既定ではサーバに既定値を解決させるので、最小マニフェストでも差分は空。
+	resolved, _, err := executeRoot(t, append([]string{"diff", "my-svc", manifest}, target...)...)
+	if err != nil {
+		t.Fatalf("diff error = %v", err)
+	}
+	if resolved != "" {
+		t.Errorf("diff = %q, want empty (server defaults are resolved by default)", resolved)
+	}
+
+	// --no-server-defaults ならマニフェストのまま比較するので、既定値が差分に出る。
+	plain, _, err := executeRoot(t,
+		append([]string{"diff", "my-svc", manifest, "--no-server-defaults"}, target...)...)
+	if err != nil {
+		t.Fatalf("diff --no-server-defaults error = %v", err)
+	}
+	if !strings.Contains(plain, "containerConcurrency") {
+		t.Errorf("diff --no-server-defaults = %q, want the defaults to show", plain)
 	}
 }
 

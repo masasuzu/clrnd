@@ -136,12 +136,29 @@ revision-name conflicts, asynchronous rollout failures).
   `ToManifest` applies it to a fetched service. YAML is produced with `sigs.k8s.io/yaml`
   (JSON tags → YAML), which sorts keys alphabetically.
 - `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
-  **`Compare` is the single comparison path**: it parses the local manifest, aligns it with the
+  **`compareServices` is the single comparison path**: it aligns the desired definition with the
   live service, normalizes both through `ToManifest`, and diffs them (a nil `current` means the
-  service does not exist yet, so everything is an addition). `cmd/diff.go` calls `Compare`;
-  `Client.Plan` calls the shared `compareServices`, so `diff` and `deploy` can never drift apart.
+  service does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
+  `diff`) and `Client.PlanService` (used by `deploy`, `rollback`, `refresh`) both go through it, so
+  the commands can never drift apart. Both also run the same pre-processing before anything is sent
+  — `setNamespace` puts the target project on the body — because with `--server-defaults` the diff
+  path performs a real (dry-run) write and gets the same validation as `deploy`.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
+- **Server defaults** (`--no-server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
+  of fields on create (`containerConcurrency`, container `ports`, `resources.limits`, `startupProbe`,
+  `serviceAccountName`, `timeoutSeconds`, `spec.traffic`, several annotations and labels), so a
+  hand-written minimal manifest never diffs clean (issue #11). A `dryRun=all` write returns the
+  service *with those defaults applied* — verified against the real API — so `resolveDefaults` sends
+  the desired definition through one and compares that instead. Two rules matter: it is **on by
+  default** (like `kubectl diff`), which means `diff` now needs permission to update the service —
+  `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
+  `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
+  clrnd never writes back values the server computed (which would pin today's defaults forever).
+  Because the dry run is a real request, `CompareManifest` runs `validate` first when the option is
+  on: a `metadata.name` that does not match the service argument would otherwise come back as an
+  opaque 400. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
+  one, but a rejected manifest or a service deleted mid-run look the same from here.
 - **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
   and a name Cloud Run generated is **never echoed back** — the field is only present on read when a
   client set it (`gcloud run deploy --revision-suffix`, a Terraform `template.metadata.name`, or a

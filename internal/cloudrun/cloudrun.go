@@ -55,8 +55,23 @@ type DeployPlan struct {
 	desired *run.Service
 }
 
+// PlanOptions は差分の取り方に関する任意設定。ゼロ値が既定の挙動。
+type PlanOptions struct {
+	// ResolveDefaults が true なら、差分を取る前にサーバ側の dry-run を通して
+	// 既定値まで埋めた desired を作る。Cloud Run は作成時に多くのフィールドへ
+	// 既定値を入れるため、手書きの最小マニフェストは何もしなくても差分が出続ける
+	// (issue #11)。これを有効にすると、その分が両側で揃って消える。
+	//
+	// dry-run は書き込み系の API なので、読むだけの権限では使えない。CLI は既定で
+	// これを有効にし、--no-server-defaults で外せるようにしている (この構造体の
+	// ゼロ値は「解決しない」のままで、live 由来の定義を扱う rollback / refresh は
+	// 既に既定値が入っているので解決を必要としない)。
+	// 適用に送るのは常に元の desired で、サーバが埋めた値を書き戻すことはしない。
+	ResolveDefaults bool
+}
+
 // Plan はマニフェストを検証し、live サービスとの差分を算出する (変更はしない)。
-func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*DeployPlan, error) {
+func (c *Client) Plan(ctx context.Context, service string, manifest []byte, opts PlanOptions) (*DeployPlan, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
 		return nil, err
@@ -64,20 +79,17 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte) (*De
 	if err := validate(svc, service); err != nil {
 		return nil, err
 	}
-	return c.PlanService(ctx, service, svc)
+	return c.PlanService(ctx, service, svc, opts)
 }
 
 // PlanService は desired のサービス定義をそのまま使って live との差分を算出する。
 // マニフェストを経由しない rollback や refresh のように、live を編集して適用する
 // 経路のための入口。desired の metadata.namespace は送信先に合わせて書き換える。
-func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service) (*DeployPlan, error) {
+func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service, opts PlanOptions) (*DeployPlan, error) {
 	if desired == nil {
 		return nil, errors.New("no desired service to plan")
 	}
-	// 送信先プロジェクトと body の namespace を一致させる。
-	if desired.Metadata != nil {
-		desired.Metadata.Namespace = c.project
-	}
+	c.setNamespace(desired)
 
 	plan := &DeployPlan{Service: service, client: c, desired: desired}
 
@@ -91,12 +103,89 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 		current = nil
 	}
 
-	diff, err := compareServices(current, desired, "live/"+service, service)
+	// 差分に使う desired だけを既定値まで解決する。plan.desired (適用に送るもの) は
+	// 元のままにしておき、サーバが埋めた値を書き戻さない。
+	compared := desired
+	if opts.ResolveDefaults {
+		resolved, err := c.resolveDefaults(ctx, service, desired, plan.Create)
+		if err != nil {
+			return nil, err
+		}
+		compared = resolved
+	}
+
+	diff, err := compareServices(current, compared, "live/"+service, service)
 	if err != nil {
 		return nil, err
 	}
 	plan.Diff = diff
 	return plan, nil
+}
+
+// CompareManifest は live サービスとローカルのマニフェストの差分を返す。diff 用の入口で、
+// サービスの取得と (必要なら) 既定値の解決をまとめて行う。
+func (c *Client) CompareManifest(ctx context.Context, service string, manifest []byte,
+	desiredLabel string, opts PlanOptions) (string, error) {
+	desired, err := parseManifest(manifest)
+	if err != nil {
+		return "", err
+	}
+	// 送信先に合わせる。--server-defaults の dry-run は本物の書き込みと同じ検証を
+	// 受けるので、deploy と同じ前処理を通しておかないと diff だけが弾かれる。
+	c.setNamespace(desired)
+
+	if opts.ResolveDefaults {
+		// dry-run は path のサービス名と body の metadata.name が一致していないと
+		// 400 になる。API に投げる前に、分かる言葉で落とす。
+		if err := validate(desired, service); err != nil {
+			return "", err
+		}
+	}
+
+	current, err := c.GetService(ctx, service)
+	if err != nil {
+		return "", err
+	}
+
+	if opts.ResolveDefaults {
+		if desired, err = c.resolveDefaults(ctx, service, desired, false); err != nil {
+			return "", err
+		}
+	}
+	return compareServices(current, desired, "live/"+service, desiredLabel)
+}
+
+// setNamespace は送信先プロジェクトと body の namespace を一致させる。
+// 適用も dry-run もこれを通した定義で行う。
+func (c *Client) setNamespace(svc *run.Service) {
+	if svc != nil && svc.Metadata != nil {
+		svc.Metadata.Namespace = c.project
+	}
+}
+
+// resolveDefaults はサーバ側の dry-run を通して、Cloud Run が埋める既定値まで入った
+// サービス定義を得る。何も変更しない (dryRun=all)。
+func (c *Client) resolveDefaults(ctx context.Context, service string, desired *run.Service, create bool) (*run.Service, error) {
+	var (
+		resolved *run.Service
+		err      error
+	)
+	if create {
+		resolved, err = c.api.Namespaces.Services.Create(c.parent(), desired).
+			DryRun(dryRunAll).Context(ctx).Do()
+	} else {
+		resolved, err = c.api.Namespaces.Services.ReplaceService(c.serviceName(service), desired).
+			DryRun(dryRunAll).Context(ctx).Do()
+	}
+	if err != nil {
+		// 原因は権限とは限らない (マニフェストの内容が拒否された、途中で削除された等)。
+		// 断定せず、この経路が何をしているかだけを添える。
+		return nil, fmt.Errorf(
+			"failed to resolve server defaults for service %q: %w "+
+				"(resolving them performs a dry-run update, which needs permission to update the "+
+				"service; pass --no-server-defaults to compare without one)", service, err)
+	}
+	return resolved, nil
 }
 
 // Apply は Plan の内容を Cloud Run に適用し、適用後のサービスを返す。dryRun が true の
@@ -180,19 +269,7 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 	return manifest, nil
 }
 
-// Compare は live サービス (current) とローカルのマニフェストを同じ正規化にそろえて
-// 統一 diff を返す。current は書き換えない。current が nil ならサービス未存在として、
-// desired 全体が追加された diff になる。`clrnd diff` と `clrnd deploy` が同一の差分を表示するための共通経路。
-// マニフェストは厳密にパースするので、未知フィールドはここでエラーになる。
-func Compare(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
-	desired, err := parseManifest(manifest)
-	if err != nil {
-		return "", err
-	}
-	return compareServices(current, desired, currentName, desiredName)
-}
-
-// compareServices は Compare と Plan が共有する比較の実装。引数は書き換えない。
+// compareServices は差分を取る各経路が共有する比較の実装。引数は書き換えない。
 func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
 	current = alignRevisionName(current, desired)
 

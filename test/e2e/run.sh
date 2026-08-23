@@ -387,13 +387,19 @@ else
   ng "revisions --format json did not produce the expected JSON"
 fi
 
-info "--- 1-2. diff against a hand-written minimal manifest ---"
-info "Cloud Run fills in defaults on create, so this diff is expected to be non-empty."
-run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml"
-assert_rc_zero "diff succeeds"
+info "--- 1-2. diff against a hand-written minimal manifest, as written ---"
+info "Cloud Run fills in defaults on create, so comparing the manifest as written is non-empty."
+run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml" --no-server-defaults
+assert_rc_zero "diff --no-server-defaults succeeds"
 assert_contains "server defaults show up in the diff (containerConcurrency)" "containerConcurrency"
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
+
+info "--- 1-2b. diff (default: server defaults resolved) ---"
+info "既定ではサーバに既定値を解決させるので、同じ最小マニフェストでも差分は消える。"
+run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml"
+assert_rc_zero "diff succeeds"
+assert_empty "diff converges on a minimal manifest by default"
 
 info "--- 1-3. make the live service pin a revision name ---"
 info "Cloud Run only reports spec.template.metadata.name when a client set it,"

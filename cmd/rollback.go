@@ -71,7 +71,8 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	plan, err := client.PlanService(ctx, service, desired)
+	// desired は live 由来なので既定値は既に入っている。解決は要らない。
+	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
 	if err != nil {
 		return err
 	}
