@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 無制限だと、ハングした 1 ジョブが既定の 6 時間まで runner を占有する。
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,6 +33,11 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      # go.mod/go.sum が tidy でない PR を落とす。手で依存を足したときや、
+      # 依存を消したのに require が残ったときに気づけるのはここだけ。
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
 
       - name: Build
         run: go build ./...
@@ -62,6 +69,7 @@ jobs:
   # 同じ設定でビルドさせる。--snapshot なのでリリースの作成も署名も provenance も無い。
   release-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,6 +99,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,3 +122,31 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.1
+
+      # runner にも shellcheck は入っているがバージョンが固定できない。落ちたり通ったり
+      # する検査にしないため、版とハッシュを指定して自前で入れる。actionlint も
+      # PATH のこれを使って run: ブロックを検査する。
+      - name: Install ShellCheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum --check --strict
+          tar -xJf shellcheck.tar.xz
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          shellcheck --version
+
+      # E2E は go test に含まれないので、壊れていても Go 側の検査では気づけない。
+      # 構文 (bash -n) と静的解析 (shellcheck) はタダで回せる。
+      - name: Check the end-to-end script
+        run: |
+          bash -n test/e2e/run.sh
+          shellcheck test/e2e/run.sh
+
+      # workflow 自体の式やアクションの入力ミスは、push するまで分からない。
+      # actionlint は run: ブロックを PATH の shellcheck にも通す。
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color

@@ -795,6 +795,19 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...
 CI pins the same golangci-lint version, so this is the check it runs — not a different one that
 happens to be the latest release that day.
 
+CI also checks the things that are not Go code. To reproduce those locally:
+
+```sh
+go mod tidy -diff                                                  # go.mod / go.sum are tidy
+bash -n test/e2e/run.sh && shellcheck test/e2e/run.sh              # the end-to-end script
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12          # .github/workflows/*.yml
+go run github.com/goreleaser/goreleaser/v2@v2.17.1 check           # .goreleaser.yaml
+go run github.com/goreleaser/goreleaser/v2@v2.17.1 build --snapshot --clean   # every release target
+```
+
+CI uses ShellCheck v0.11.0 (installed from a pinned, checksummed release); any recent version is
+close enough locally.
+
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
 [test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
 and needs a project you are happy to create Cloud Run services in — see

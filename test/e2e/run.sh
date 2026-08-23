@@ -107,7 +107,11 @@ cleanup_orphans() {
     [ -n "$name" ] || continue
     found=1
     info "deleting $name"
-    delete_service "$name" && info "  deleted" || c '31' "  failed to delete $name"
+    if delete_service "$name"; then
+      info "  deleted"
+    else
+      c '31' "  failed to delete $name"
+    fi
   done <<< "$names"
   [ "$found" -eq 1 ] || info "nothing to delete"
 }
@@ -124,8 +128,11 @@ cleanup() {
   step "Cleanup"
   if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
     info "deleting the test service"
-    delete_service "$SERVICE" && info "deleted" \
-      || c '31' "     failed to delete; run: $0 --cleanup-orphans"
+    if delete_service "$SERVICE"; then
+      info "deleted"
+    else
+      c '31' "     failed to delete; run: $0 --cleanup-orphans"
+    fi
   else
     info "nothing to delete"
   fi
@@ -366,7 +373,7 @@ export CLOUDSDK_RUN_REGION="$REGION"
 if [ "${ONLY:-}" != "old" ]; then
 step "Phase 1: current working tree"
 
-D1="$WORK/current"; mkdir -p "$D1"; cd "$D1"
+D1="$WORK/current"; mkdir -p "$D1"; cd "$D1" || die "cannot enter $D1"
 
 info "--- 1-1. create a new service ---"
 write_manifest "$D1/manifest.yaml"
@@ -438,7 +445,7 @@ else
 fi
 
 info "--- 1-4. the manifest that init scaffolds ---"
-D2="$WORK/current-init"; mkdir -p "$D2"; cd "$D2"
+D2="$WORK/current-init"; mkdir -p "$D2"; cd "$D2" || die "cannot enter $D2"
 run_cmd "$CLRND" init "$SERVICE"
 assert_rc_zero "init succeeds"
 assert_file_lacks "init drops the revision name the live service pins" "$D2/manifest.yaml" "$PINNED_REV"
@@ -508,7 +515,7 @@ info "--- 1-5c2. refresh refuses when it cannot do its job ---"
 #     差分ゼロで "No changes." になって何も起きないまま成功してしまう経路。
 CURRENT_TEMPLATE_REV="$(live_revision_name)"
 if [ -n "$CURRENT_TEMPLATE_REV" ]; then
-  SAME_SUFFIX="${CURRENT_TEMPLATE_REV#$SERVICE-}"
+  SAME_SUFFIX="${CURRENT_TEMPLATE_REV#"$SERVICE"-}"
   run_cmd "$CLRND" refresh "$SERVICE" --revision-suffix "$SAME_SUFFIX" --auto-approve
   if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "already the current template revision"; then
     ok "refresh refuses a suffix that would not create a revision"
@@ -692,7 +699,7 @@ fi
 if [ -n "$OLD_REF" ] && [ "${ONLY:-}" != "current" ]; then
 step "Phase 2: comparison against $OLD_REF"
 
-D3="$WORK/old-init"; mkdir -p "$D3"; cd "$D3"
+D3="$WORK/old-init"; mkdir -p "$D3"; cd "$D3" || die "cannot enter $D3"
 
 info "--- 2-0. make the live service pin a revision name again ---"
 info "Phase 1 left the service without a pinned name, so recreate the precondition."
