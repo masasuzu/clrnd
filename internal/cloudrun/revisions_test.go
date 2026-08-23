@@ -49,7 +49,7 @@ func TestNewRevisions(t *testing.T) {
 	if got[0].Name != "my-svc-00007-abc" || got[1].Name != "my-svc-00006-def" {
 		t.Errorf("order = %q, %q, want newest first", got[0].Name, got[1].Name)
 	}
-	if got[0].Image != "gcr.io/p/i:v2" || got[0].Percent != 90 || got[0].Ready != conditionTrue {
+	if strings.Join(got[0].Images, ",") != "gcr.io/p/i:v2" || got[0].Percent != 90 || got[0].Ready != conditionTrue {
 		t.Errorf("newRevisions()[0] = %+v", got[0])
 	}
 	if got[1].Percent != 10 {
@@ -75,6 +75,31 @@ func TestNewRevisionsMergesTrafficEntries(t *testing.T) {
 	}
 }
 
+// TestNewRevisionsKeepsEveryContainerImage は、サイドカーを持つリビジョンの
+// イメージが全部出ることを確認する。最初の 1 つだけを返していたころは、
+// 表示されていないイメージが動いている状態になっていた。
+func TestNewRevisionsKeepsEveryContainerImage(t *testing.T) {
+	item := revision("my-svc-00007-abc", "gcr.io/p/app:v2", "2026-08-22T10:00:00Z", conditionTrue, "")
+	item.Spec.Containers = append(item.Spec.Containers,
+		&run.Container{Image: ""}, // イメージの無いコンテナは飛ばす
+		&run.Container{Image: "gcr.io/p/proxy:v1"})
+
+	got := newRevisions([]*run.Revision{item}, nil)
+	want := []string{"gcr.io/p/app:v2", "gcr.io/p/proxy:v1"}
+	if strings.Join(got[0].Images, ",") != strings.Join(want, ",") {
+		t.Errorf("Images = %v, want %v in spec order", got[0].Images, want)
+	}
+	// 既存の JSON 利用 (jq '.[].image') を壊さないため、image は残して先頭を指す。
+	if got[0].Image != want[0] {
+		t.Errorf("Image = %q, want the first container %q", got[0].Image, want[0])
+	}
+	// 表の IMAGE 列にも両方出る。
+	text := Revisions{got[0]}.Text()
+	if !strings.Contains(text, "gcr.io/p/app:v2,gcr.io/p/proxy:v1") {
+		t.Errorf("Text() = %q, want both images in the IMAGE column", text)
+	}
+}
+
 func TestNewRevisionsIsNilSafe(t *testing.T) {
 	items := []*run.Revision{
 		nil,
@@ -86,7 +111,7 @@ func TestNewRevisionsIsNilSafe(t *testing.T) {
 		t.Fatalf("newRevisions() = %+v, want the nil entry skipped", got)
 	}
 	for _, r := range got {
-		if r.Image != "" || r.Ready != "" {
+		if r.Image != "" || len(r.Images) != 0 || r.Ready != "" {
 			t.Errorf("revision = %+v, want empty fields", r)
 		}
 	}

@@ -15,7 +15,8 @@ var revisionsCmd = &cobra.Command{
 	Short: "List the revisions of a service",
 	Long: "List the revisions of a service, newest first: the name, the Ready condition, the\n" +
 		"share of traffic each one currently receives, its traffic tags, when it was created,\n" +
-		"and its container image. This is read-only; nothing is modified.\n" +
+		"and its container images (every container, so a revision with a sidecar lists more than\n" +
+		"one). This is read-only; nothing is modified.\n" +
 		"service may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runRevisions,

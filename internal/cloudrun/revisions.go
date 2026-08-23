@@ -27,8 +27,13 @@ const listRevisionsMaxPages = 1000
 // Revision はサービスに属するリビジョン 1 件の要約。JSON 出力の構造でもある。
 type Revision struct {
 	Name string `json:"name"`
-	// Image は最初のコンテナのイメージ。
+	// Image は最初のコンテナのイメージ。Images[0] と同じ値で、JSON の後方互換の
+	// ために残している (jq '.[].image' を書いている利用者を黙って壊さない)。
+	// 新しく書くなら Images を見ること。
 	Image string `json:"image,omitempty"`
+	// Images はこのリビジョンの全コンテナのイメージ。マニフェストに書かれた順で、
+	// サイドカーがあれば複数入る。
+	Images []string `json:"images,omitempty"`
 	// Created は API が返す作成時刻の文字列 (RFC3339)。
 	Created string `json:"created,omitempty"`
 	// Ready は Ready 条件の Status (True/False/Unknown)。条件が無ければ空。
@@ -105,7 +110,10 @@ func newRevisions(items []*run.Revision, status *Status) Revisions {
 		if item == nil {
 			continue
 		}
-		r := Revision{Image: revisionImage(item)}
+		r := Revision{Images: revisionImages(item)}
+		if len(r.Images) > 0 {
+			r.Image = r.Images[0]
+		}
 		if item.Metadata != nil {
 			r.Name = item.Metadata.Name
 			r.Created = item.Metadata.CreationTimestamp
@@ -151,17 +159,20 @@ func trafficByRevision(s *Status) map[string]revisionTraffic {
 	return out
 }
 
-// revisionImage はリビジョンのコンテナイメージを nil セーフに取り出す。
-func revisionImage(r *run.Revision) string {
+// revisionImages はリビジョンのコンテナイメージを nil セーフに、spec の順で取り出す。
+// Cloud Run のサービスはサイドカーを持てるので、最初の 1 つだけを返すと
+// 「表示されていないイメージが動いている」状態になる。
+func revisionImages(r *run.Revision) []string {
 	if r == nil || r.Spec == nil {
-		return ""
+		return nil
 	}
+	var images []string
 	for _, container := range r.Spec.Containers {
 		if container != nil && container.Image != "" {
-			return container.Image
+			images = append(images, container.Image)
 		}
 	}
-	return ""
+	return images
 }
 
 // revisionReady はリビジョンの Ready 条件を nil セーフに取り出す。
@@ -207,7 +218,7 @@ func (rs Revisions) Text() string {
 	for _, r := range rs {
 		fmt.Fprintf(w, "%s\t%s\t%d%%\t%s\t%s\t%s\n",
 			dash(r.Name), dash(readyLabel(r)), r.Percent,
-			dash(strings.Join(r.Tags, ",")), dash(r.Created), dash(r.Image))
+			dash(strings.Join(r.Tags, ",")), dash(r.Created), dash(strings.Join(r.Images, ",")))
 	}
 	// tabwriter は Flush で初めて書き出す。失敗はビルダー相手では起きない。
 	_ = w.Flush()

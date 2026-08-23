@@ -292,7 +292,12 @@ revision-name conflicts, asynchronous rollout failures).
   and the one to return to out of it, so treating it as complete can roll back to the wrong
   version (or report that there is nothing to roll back to). `newRevisions` is the
   pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
-  the API. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
+  the API. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
+  have sidecars), joined with `,` for the `IMAGE` column; returning only the first one meant an
+  image that was actually running never appeared anywhere in the output. `Revision.Image` is kept
+  as `Images[0]` **only** for JSON compatibility — `--format json` is a published interface and
+  dropping the key would make an existing `jq '.[].image'` return `null` without an error. Keep
+  both in sync in `newRevisions`; new code reads `Images`. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
   (Cloud Run numbers them sequentially) when the timestamp will not parse.
 - `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
   the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
