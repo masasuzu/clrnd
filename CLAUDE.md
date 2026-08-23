@@ -21,7 +21,7 @@ go test ./...           # run tests
 go test -run TestName ./internal/cloudrun   # run a single test
 go vet ./...            # static checks
 gofmt -w .              # format
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2 run ./...   # lint (CI runs this)
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...   # lint (CI pins the same version in verify.yml; keep both in sync)
 
 # End-to-end test against a real Cloud Run project. NOT part of `go test ./...`
 # and it cannot run in CI (no credentials). See test/e2e/README.md.

@@ -777,8 +777,11 @@ Before opening a pull request:
 
 ```sh
 go build ./... && go vet ./... && gofmt -l . && go test -race ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...
 ```
+
+CI pins the same golangci-lint version, so this is the check it runs — not a different one that
+happens to be the latest release that day.
 
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
 [test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
