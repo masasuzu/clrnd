@@ -127,7 +127,9 @@ revision-name conflicts, asynchronous rollout failures).
 - The `-c`/`--config` persistent flag loads a YAML config via [internal/config](internal/config/config.go)
   in the root's `PersistentPreRunE` (`loadConfig`), into the package var `cfg`. When `--config` is
   omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
-  an explicit missing `--config` IS an error). Config holds `project`, `region`, `service`,
+  an explicit missing `--config` IS an error — except for `init`, which *writes* the config: it
+  carries `Annotations[annotationConfigOptional]`, so `loadConfig` reads an explicit `--config`
+  only when it already exists). Config holds `project`, `region`, `service`,
   `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
   replaces the config list, otherwise the config list is used. Relative paths from the config
   (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
@@ -264,8 +266,15 @@ revision-name conflicts, asynchronous rollout failures).
   finds the `Ready` condition and is meant to be reused by `wait`. The JSON form is the `Status`
   struct itself (`--format json`), so the two outputs cannot drift apart.
 - `init` (in [cmd/init.go](cmd/init.go), formerly `load`) fetches a service via `GetService`/
-  `ToManifest` and scaffolds `manifest.yaml` (the `--output` file) plus `clrnd.yml` (project/region/
-  service/manifest), refusing to overwrite existing files without `--force`.
+  `ToManifest` and scaffolds `manifest.yaml` (the `--output` file) plus the config file, refusing to
+  overwrite existing files without `--force`. The config goes to `--config` when given, otherwise
+  `clrnd.yml` (`initConfigFile`); the recorded `manifest:` is made relative to the config's directory
+  by `manifestPathFor`, because `resolveConfigPath` resolves it from there. Both files are written
+  `0600` (they can carry plaintext `env[].value`). If the config write fails after the manifest was
+  overwritten, `restoreManifest` puts the manifest back (best-effort) so `--force` cannot leave the
+  old manifest destroyed with no config to show for it.
+- `render -o` also writes `0600`, and refuses (`sameFile`, via `os.SameFile`) to write over the very
+  manifest it is rendering — otherwise the template source is replaced by its own output.
 
 ## Conventions
 

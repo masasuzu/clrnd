@@ -1,0 +1,207 @@
+package cmd
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"sigs.k8s.io/yaml"
+
+	"github.com/masasuzu/clrnd/internal/config"
+)
+
+// startInitAPI は init が読む live サービスを返すフェイク API を立てる。
+func startInitAPI(t *testing.T) {
+	t.Helper()
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceStatusJSON))
+	})
+}
+
+// TestInitWritesTheConfigWhereItWasAskedTo は、-c で指定した場所に config を書くことを
+// 確認する。読む場所と書く場所が食い違うと、-c infra/clrnd.yml を渡したのに
+// ./clrnd.yml が生まれる。
+func TestInitWritesTheConfigWhereItWasAskedTo(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Mkdir("infra", 0o755); err != nil {
+		t.Fatalf("failed to create the directory: %v", err)
+	}
+
+	if _, _, err := executeRoot(t, "init", "my-svc", "--config", "infra/clrnd.yml",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "infra", "clrnd.yml")); err != nil {
+		t.Errorf("infra/clrnd.yml was not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "clrnd.yml")); err == nil {
+		t.Error("./clrnd.yml was written even though --config pointed elsewhere")
+	}
+}
+
+// TestInitRecordsTheManifestPathRelativeToTheConfig は、記録するマニフェストのパスが
+// config ファイル基準になっていることを確認する。resolveConfigPath は config の
+// ディレクトリ基準で解決するので、cwd 基準のまま記録するとパスが壊れる。
+func TestInitRecordsTheManifestPathRelativeToTheConfig(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Mkdir("infra", 0o755); err != nil {
+		t.Fatalf("failed to create the directory: %v", err)
+	}
+
+	if _, _, err := executeRoot(t, "init", "my-svc", "--config", "infra/clrnd.yml",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "infra", "clrnd.yml"))
+	if err != nil {
+		t.Fatalf("failed to read the config: %v", err)
+	}
+	var cfg config.Config
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("failed to parse the config: %v", err)
+	}
+	// マニフェストは cwd に書かれるので、infra/ から見ると 1 つ上。
+	if cfg.Manifest != filepath.Join("..", "manifest.yaml") {
+		t.Errorf("manifest = %q, want it relative to the config directory", cfg.Manifest)
+	}
+}
+
+// TestInitRestoresTheManifestWhenTheConfigWriteFails は、config の書き込みに失敗した
+// ときに --force で潰したマニフェストが戻ることを確認する。戻さないと、手で編集した
+// マニフェストが live の内容で潰れたまま config も無い状態が残る。
+func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	const original = "# 手で編集したマニフェスト\n"
+	if err := os.WriteFile("manifest.yaml", []byte(original), 0o600); err != nil {
+		t.Fatalf("failed to seed the manifest: %v", err)
+	}
+	// config の書き込み先をディレクトリにして、確実に失敗させる。
+	if err := os.Mkdir("taken.yml", 0o755); err != nil {
+		t.Fatalf("failed to create the directory: %v", err)
+	}
+
+	_, _, err := executeRoot(t, "init", "my-svc", "--config", "taken.yml", "--force",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("init error = nil, want the config write to fail")
+	}
+
+	got, readErr := os.ReadFile("manifest.yaml")
+	if readErr != nil {
+		t.Fatalf("the manifest is gone: %v", readErr)
+	}
+	if string(got) != original {
+		t.Errorf("manifest = %q, want the original contents restored", got)
+	}
+}
+
+// TestInitWritesRestrictivePermissions は、生成物が他ユーザから読めないことを
+// 確認する。live の定義には平文の環境変数が入りうる。
+func TestInitWritesRestrictivePermissions(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if _, _, err := executeRoot(t, "init", "my-svc",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	for _, name := range []string{"manifest.yaml", "clrnd.yml"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, perm)
+		}
+	}
+}
+
+// TestRenderRefusesToOverwriteItsInput は、-o に入力と同じファイルを渡したときに
+// 断ることを確認する。通せばレンダリング元が結果で潰れる。
+func TestRenderRefusesToOverwriteItsInput(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+
+	_, _, err := executeRoot(t, "render", manifest, "-o", manifest)
+	if err == nil {
+		t.Fatal("render error = nil, want it to refuse writing over its input")
+	}
+	if !strings.Contains(err.Error(), "refusing to write over the manifest") {
+		t.Errorf("render error = %v", err)
+	}
+	got, readErr := os.ReadFile(manifest)
+	if readErr != nil {
+		t.Fatalf("failed to read the manifest: %v", readErr)
+	}
+	if string(got) != localManifest {
+		t.Errorf("the input manifest was modified:\n%s", got)
+	}
+}
+
+// TestRenderWritesRestrictivePermissions は、展開後の出力が他ユーザから読めない
+// ことを確認する。must_env などで秘密を含みうる。
+func TestRenderWritesRestrictivePermissions(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+	out := filepath.Join(t.TempDir(), "rendered.yaml")
+
+	if _, _, err := executeRoot(t, "render", manifest, "-o", out); err != nil {
+		t.Fatalf("render error = %v", err)
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatalf("failed to stat the output: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
+	}
+}
+
+// TestInitReadsTheConfigWhenItAlreadyExists は、-c の指す config が既にある場合は
+// init もそれを読むことを確認する。書き込み先として許すために読み飛ばしてしまうと、
+// config に書いた service/project が --force での再生成時に効かなくなる。
+func TestInitReadsTheConfigWhenItAlreadyExists(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	const existing = "project: test-project\nregion: asia-northeast1\nservice: my-svc\n"
+	if err := os.WriteFile("clrnd.yml", []byte(existing), 0o600); err != nil {
+		t.Fatalf("failed to seed the config: %v", err)
+	}
+
+	// service も --project/--region も渡さない。config から埋まらなければ失敗する。
+	if _, _, err := executeRoot(t, "init", "--config", "clrnd.yml", "--force"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "manifest.yaml")); err != nil {
+		t.Errorf("manifest.yaml was not written: %v", err)
+	}
+}
+
+// TestMissingConfigStillFailsForOtherCommands は、init 以外では明示した --config が
+// 無いことが従来どおりエラーであることを確認する。init のために入れた例外が全コマンドへ
+// 波及すると、パスの打ち間違いが黙って無視される。
+func TestMissingConfigStillFailsForOtherCommands(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	_, _, err := executeRoot(t, "render", "--config", "nope.yml")
+	if err == nil {
+		t.Fatal("render error = nil, want an error for a missing --config")
+	}
+	if !strings.Contains(err.Error(), "nope.yml") {
+		t.Errorf("render error = %v, want it to name the missing config", err)
+	}
+}

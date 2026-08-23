@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/config"
@@ -31,6 +32,8 @@ var initCmd = &cobra.Command{
 		"service may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
+	// 生成先を -c で指定できるようにする。生成するファイルなので、まだ無くてもよい。
+	Annotations: map[string]string{annotationConfigOptional: ""},
 }
 
 func init() {
@@ -45,10 +48,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// --config が指定されていればそこへ書く。読む場所と書く場所が食い違うと、
+	// -c infra/clrnd.yml を渡したのに ./clrnd.yml が生まれる。
+	configFile := initConfigFile
+	if configPath != "" {
+		configFile = configPath
+	}
+
 	// 上書き事故を防ぐため、書き込み前に既存ファイルをまとめて確認する。
 	manifestExisted := fileExists(initManifest)
 	if !initForce {
-		for _, path := range []string{initManifest, initConfigFile} {
+		for _, path := range []string{initManifest, configFile} {
 			if fileExists(path) {
 				return fmt.Errorf("%s already exists: pass --force to overwrite", path)
 			}
@@ -72,25 +82,54 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	configYAML, err := scaffoldConfig(client.Project(), client.Region(), service, initManifest)
+	// config に書くマニフェストのパスは config ファイルからの相対にする。
+	// resolveConfigPath が config のディレクトリ基準で解決するため、cwd 基準のまま
+	// 記録すると -c で別ディレクトリを指したときにパスが壊れる。
+	configYAML, err := scaffoldConfig(client.Project(), client.Region(), service,
+		manifestPathFor(configFile, initManifest))
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(initManifest, manifest, 0o644); err != nil {
+	// --force で既存のマニフェストを潰す場合は、巻き戻せるように中身を控えておく。
+	var previousManifest []byte
+	if manifestExisted {
+		previousManifest, _ = os.ReadFile(initManifest)
+	}
+
+	// 生成物には live の平文の環境変数が入りうるので、他ユーザから読めないようにする。
+	if err := os.WriteFile(initManifest, manifest, 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", initManifest, err)
 	}
-	if err := os.WriteFile(initConfigFile, configYAML, 0o644); err != nil {
-		// clrnd.yml の書き込みに失敗したら、今回新規作成した manifest を巻き戻して
-		// 中途半端な scaffold を残さない (元から在ったファイルには触れない)。
-		if !manifestExisted {
-			// 巻き戻しは best-effort。ここで失敗しても、返すのは本来の
-			// 書き込みエラーの方が利用者にとって有用。
-			_ = os.Remove(initManifest)
-		}
-		return fmt.Errorf("failed to write %s: %w", initConfigFile, err)
+	if err := os.WriteFile(configFile, configYAML, 0o600); err != nil {
+		// config の書き込みに失敗したら manifest を元に戻し、中途半端な scaffold を
+		// 残さない。巻き戻しは best-effort で、返すのは本来の書き込みエラー。
+		restoreManifest(initManifest, previousManifest, manifestExisted)
+		return fmt.Errorf("failed to write %s: %w", configFile, err)
 	}
 	return nil
+}
+
+// manifestPathFor は config ファイルから見たマニフェストの相対パスを返す。
+// 相対にできない場合 (別ボリューム等) は与えられたパスをそのまま使う。
+func manifestPathFor(configFile, manifest string) string {
+	rel, err := filepath.Rel(filepath.Dir(configFile), manifest)
+	if err != nil {
+		return manifest
+	}
+	return rel
+}
+
+// restoreManifest は init が書き換えたマニフェストを元の状態に戻す。
+// 元から無かった場合は削除し、在った場合は控えておいた中身を書き戻す。
+func restoreManifest(path string, previous []byte, existed bool) {
+	if !existed {
+		_ = os.Remove(path)
+		return
+	}
+	if previous != nil {
+		_ = os.WriteFile(path, previous, 0o600)
+	}
 }
 
 // fileExists は path にファイル (またはディレクトリ) が存在するかを返す。
