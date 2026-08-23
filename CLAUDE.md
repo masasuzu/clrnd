@@ -377,7 +377,11 @@ revision-name conflicts, asynchronous rollout failures).
   before this split a tag on an untested (or not-even-on-main) commit produced a fully signed
   release; signing and provenance attest *which commit was built*, never that it passed anything.
   The called workflow checks out the same ref as its caller, so the verified SHA is the SHA
-  GoReleaser builds. Note the consequence of gating on `govulncheck`: an advisory published after a
+  GoReleaser builds. Every checkout in the repository passes `persist-credentials: false`: these
+  jobs compile and run the code from a pull request, and there is no reason for that code to be
+  able to read the token `actions/checkout` would otherwise leave in `.git/config` (nothing here
+  does an authenticated git operation — GoReleaser authenticates through `GITHUB_TOKEN` in the
+  environment). Note the consequence of gating on `govulncheck`: an advisory published after a
   tag blocks re-running that release until the dependency (or the Go toolchain in `go.mod`) is
   bumped.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable

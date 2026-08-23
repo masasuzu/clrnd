@@ -12,6 +12,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # このワークフローは pull request のコードをビルド・実行する。認証用の
+          # extraheader を .git/config に残すと、そのコードから読める。ビルドに
+          # git の認証は要らないので置かない (release.yml も同じ設定)。
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -55,6 +60,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # このワークフローは pull request のコードをビルド・実行する。認証用の
+          # extraheader を .git/config に残すと、そのコードから読める。ビルドに
+          # git の認証は要らないので置かない (release.yml も同じ設定)。
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
