@@ -257,6 +257,9 @@ Fetch the live definition of the service from Cloud Run and show a unified diff 
 manifest file. Both sides are normalized (read-only fields removed) before comparison, so a
 manifest produced by `init` compares cleanly. Nothing is printed when there is no difference.
 
+`diff` also works before the service exists: everything shows up as an addition, the same way
+`deploy` would create it.
+
 A hand-written minimal manifest would otherwise be a different story: Cloud Run defaults a lot of
 fields, and those would show up as a difference forever. `diff` therefore asks Cloud Run to resolve
 them first (via a dry run) so the comparison converges.
