@@ -581,6 +581,27 @@ else
   ng "a retry with no changes reported success while the service is unhealthy"
 fi
 
+info "--- 1-8b2. verify checks the container image ---"
+# イメージの実在確認は Artifact Registry を実際に引く。$IMAGE は公開イメージなので
+# 通常の ADC で読める (この前提自体をここで確かめている)。
+D5="$WORK/current-image"; mkdir -p "$D5"
+write_manifest "$D5/manifest.yaml"
+run_cmd "$CLRND" verify "$SERVICE" "$D5/manifest.yaml"
+assert_rc_zero "verify accepts a real Artifact Registry image"
+assert_missing "no warning for an image it could check" "warning:"
+
+# 実在しないタグ。404 になるので verify は失敗しなければならない。
+sed "s#image: .*#image: ${IMAGE}:clrnd-e2e-no-such-tag#" "$D5/manifest.yaml" > "$D5/bad-tag.yaml"
+run_cmd "$CLRND" verify "$SERVICE" "$D5/bad-tag.yaml"
+if [ "$RC" -ne 0 ]; then ok "verify rejects an image tag that does not exist"; else ng "verify accepted a nonexistent image tag"; fi
+assert_contains "verify names the missing image" "does not exist"
+
+# 確認できないレジストリは黙って飛ばす (毎回 warning を出さない)。
+sed "s#image: .*#image: gcr.io/clrnd-e2e-no-such-project/no-such-image:v1#" "$D5/manifest.yaml" > "$D5/gcr.yaml"
+run_cmd "$CLRND" verify "$SERVICE" "$D5/gcr.yaml"
+assert_rc_zero "verify passes a gcr.io image it cannot check"
+assert_missing "verify says nothing about a registry it cannot check" "warning:"
+
 info "--- 1-8c. render ---"
 # render は API に触れないが、テンプレート展開 (tfstate / env / must_env) を実バイナリで
 # 通すのはここだけ。ユニットテストは render.Render を直接叩いており、フラグの解析から

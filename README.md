@@ -49,7 +49,7 @@ gcloud auth application-default login
 | Command | Permissions |
 | ------- | ----------- |
 | `render` | none — it never contacts the API |
-| `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get` and `secretmanager.secrets.get` |
+| `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get`, `secretmanager.secrets.get`, and `artifactregistry.tags.get` / `artifactregistry.dockerimages.get` |
 | `status`, `wait`, `init` | `run.services.get` |
 | `revisions` | `run.services.get`, `run.revisions.list` |
 | `diff` | `run.services.get` **and `run.services.update`** — see below |
@@ -68,7 +68,8 @@ and the only way to get those is a `dryRun=all` write, which is checked against
 against the manifest as written and stay within `roles/run.viewer` — at the cost of a diff that
 shows Cloud Run's defaults as differences on a hand-written manifest.
 
-A missing `iam.serviceAccounts.get` or `secretmanager.secrets.get` does **not** fail `verify`. It
+None of the permissions `verify` uses for its existence checks are required — a missing one does
+**not** fail the command. It
 cannot tell "the secret is absent" from "I am not allowed to look", so it prints a `warning:` on
 stderr and succeeds. Only a confirmed 404 fails the command.
 
@@ -303,9 +304,23 @@ are reported to stderr with a non-zero exit code. Advisory `warning:` lines (see
 
 When `--project` / `--region` are resolvable (flag, env, or config) and `--local-only` is not set,
 `verify` additionally checks via the API that the resources the manifest references actually exist:
-the service account (`spec.template.spec.serviceAccountName`) and the Secret Manager secrets used by
-`secretKeyRef` and secret volumes. Unlike ecspresso's `verify` this remote check is opt-in by
-availability — when no project/region is set it is skipped and `verify` stays a fully offline lint.
+
+| Resource | Checked with | Notes |
+| -------- | ------------ | ----- |
+| `spec.template.spec.serviceAccountName` | IAM `serviceAccounts.get` | looked up across projects, since Cloud Run allows a service account from another project |
+| `secretKeyRef` and secret volumes | Secret Manager `secrets.get` | cross-project aliases in `run.googleapis.com/secrets` are resolved |
+| `containers[].image` | Artifact Registry | **only `*-docker.pkg.dev` images**; the location and project come from the image reference, so a cross-project image works |
+
+Both a tag and a digest are handled (`repo/app:v1` and `repo/app@sha256:…`); with neither, `latest`
+is assumed, matching what Cloud Run would pull.
+
+**Images on other registries are not checked, and nothing is printed about them.** `gcr.io` has no
+equivalent API, and Docker Hub and the rest are out of reach entirely. Warning on every one of them
+would mean a `warning:` line on every run for anyone using Docker Hub, which is how warnings stop
+being read.
+
+Unlike ecspresso's `verify` this remote check is opt-in by availability — when no project/region is
+set it is skipped and `verify` stays a fully offline lint.
 
 The remote check only **fails** verify when a resource is confirmed missing (the API returns
 not-found). When it cannot reach the API to decide — no credentials, the API is disabled, or the
@@ -327,7 +342,7 @@ clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--l
 # Local schema check only (no credentials needed)
 clrnd verify my-service service.yaml --local-only
 
-# Also confirm the referenced service account and secrets exist
+# Also confirm the referenced service account, secrets, and image exist
 clrnd verify my-service service.yaml --project my-project --region asia-northeast1
 ```
 

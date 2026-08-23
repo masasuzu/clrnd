@@ -93,11 +93,24 @@ revision-name conflicts, asynchronous rollout failures).
   [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
   cover them against the fake API rather than leaving them untested.
   `VerifyRemote` ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) builds its own IAM /
-  Secret Manager clients but takes the same variadic `option.ClientOption`, so `cmd` passes
-  `clientOptions` through and one fake server can answer both APIs (they are routed by path).
+  Secret Manager / Artifact Registry clients but takes the same variadic `option.ClientOption`, so
+  `cmd` passes `clientOptions` through and one fake server can answer all three APIs (they are
+  routed by path). It takes **no region**: the Artifact Registry location is part of the image
+  reference, and neither IAM nor Secret Manager is regional.
   It looks the service account up as `projects/-/serviceAccounts/<email>`: Cloud Run allows a
   service account from **another** project, and pinning the project would turn a valid setup into a
   404, which `RemoteCheck.Missing` reports as a hard failure.
+  It also checks `containers[].image` against Artifact Registry
+  ([internal/cloudrun/image.go](internal/cloudrun/image.go) parses the reference; `checkImages` in
+  `verify.go` makes the call). Only `<location>-docker.pkg.dev` is checkable, and the location and
+  project come from the *image*, not from the target — a digest goes to `dockerImages.get` and a tag
+  to `packages/<path>/tags/<tag>`, with the image path's `/` written as `%2F` **exactly once** (the
+  API returns names in that form and rejects a double-escaped one with a 404). Images on other
+  registries are **skipped silently, not reported as `Unchecked`**: warning about every Docker Hub
+  image would put a `warning:` line on every run and train people to ignore them. Confirmed against
+  the real API: a missing repository/package/tag/digest is a `404`, a project that does not exist or
+  cannot be read is a `403` (so a typo in the project never becomes a false `Missing`), and a public
+  image such as `us-docker.pkg.dev/cloudrun/container/hello` is readable with ordinary ADC.
   Auth is **Application Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.
@@ -220,8 +233,10 @@ revision-name conflicts, asynchronous rollout failures).
   only when a target resolves and `--local-only` is off. When a target does not resolve it warns
   **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a half-set
   environment is skipped silently, so an ambient `CLOUDSDK_*` in CI does not produce noise on every
-  run. Image (Artifact Registry) checks are a deliberate future second stage (`region` is already
-  plumbed through for them); see the TODO in `verify.go` and issue #54.
+  run. `cmd/verify.go` still requires *both* project and region to resolve before running the
+  remote checks, even though `VerifyRemote` no longer takes the region: a half-configured target is
+  more likely a mistake than an intent, and quietly reaching for whatever project is ambient is the
+  worse failure.
 - `refresh` (in [internal/cloudrun/refresh.go](internal/cloudrun/refresh.go)) re-applies the **live**
   definition unchanged so a new revision is created — it never reads a local manifest.
   This is the **one deliberate exception** to "clrnd does not manage revision names": Cloud Run only

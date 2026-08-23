@@ -22,7 +22,9 @@ var verifyCmd = &cobra.Command{
 	Long: "Validate that the manifest file is a well-formed Cloud Run service definition and\n" +
 		"contains the fields required to deploy. This local check never needs the API.\n" +
 		"When --project/--region are resolvable (and --local-only is not set), it also checks\n" +
-		"via the API that referenced resources (service account, secrets) actually exist.\n" +
+		"via the API that referenced resources actually exist: the service account, the Secret\n" +
+		"Manager secrets, and container images hosted on Artifact Registry (*-docker.pkg.dev).\n" +
+		"Images on gcr.io, Docker Hub, or any other registry are not checked and not reported.\n" +
 		"A valid manifest produces no output on stdout; warnings (a pinned revision name, a check\n" +
 		"that could not be completed) go to stderr without failing the command.\n" +
 		"service and manifest may be omitted when set in the config file.",
@@ -73,7 +75,11 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 	// project/region が解決できる場合のみ API 実在チェックを行う (CI でのオフライン
 	// 検証を壊さないため、解決できなければローカル検証だけで成功とする)。
-	project, region, ok := resolveTargetOptional(verifyProject, verifyRegion)
+	// リージョン自体はリモートチェックに使わない (VerifyRemote が引く IAM / Secret Manager /
+	// Artifact Registry はどれもリージョンを取らない) が、「デプロイ先が決まっている」条件は
+	// 揃っている方を採る: 片方しか無い状態は設定ミスの可能性が高く、黙って本番の
+	// プロジェクトを引きに行くより何もしない方が安全なため。
+	project, _, ok := resolveTargetOptional(verifyProject, verifyRegion)
 	if !ok {
 		// 片方だけ明示的に指定された場合は、リモートチェックを黙ってスキップせず知らせる。
 		if cmd.Flags().Changed("project") || cmd.Flags().Changed("region") {
@@ -83,7 +89,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest, clientOptions...)
+	res, err := cloudrun.VerifyRemote(ctx, project, manifest, clientOptions...)
 	if err != nil {
 		return err
 	}

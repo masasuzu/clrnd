@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	artifactregistry "google.golang.org/api/artifactregistry/v1"
 	iam "google.golang.org/api/iam/v1"
 	"google.golang.org/api/option"
 	run "google.golang.org/api/run/v1"
@@ -21,14 +22,16 @@ type RemoteCheck struct {
 }
 
 // VerifyRemote はマニフェストが参照するリソースが実在するかを API で確認する。Validate
-// (ローカルなスキーマ検証) を補完するもので、サービスアカウントと Secret Manager の
-// シークレットの実在を ADC で確認する。404 (実在しない) のみを Missing として返し、それ
-// 以外のエラー (クライアント初期化失敗・権限不足・API 無効など) は Unchecked に振り分ける。
-// region は将来のイメージ (Artifact Registry) チェック用に受け取るが、現状は未使用。
+// (ローカルなスキーマ検証) を補完するもので、サービスアカウント・Secret Manager の
+// シークレット・コンテナイメージの実在を ADC で確認する。404 (実在しない) のみを Missing
+// として返し、それ以外のエラー (クライアント初期化失敗・権限不足・API 無効など) は
+// Unchecked に振り分ける。
+//
+// Cloud Run のリージョンは受け取らない。イメージのロケーションは参照 (ホスト名) 自体に
+// 入っており、IAM も Secret Manager もリージョンを取らないので、使い道が無い。
 //
 // opts は NewClient と同じくテストからフェイク API を差し込むための拡張点。
-// ここを塞いでいたせいで、この関数はこれまで一度もテストできていなかった。
-func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
+func VerifyRemote(ctx context.Context, project string, manifest []byte,
 	opts ...option.ClientOption) (*RemoteCheck, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
@@ -79,9 +82,60 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 		}
 	}
 
-	// TODO: containers[].image の Artifact Registry / GCR 到達性チェック (第二段)。
+	checkImages(ctx, res, containerImages(svc), opts...)
 
 	return res, nil
+}
+
+// checkImages は containers[].image の実在を Artifact Registry で確認し、結果を res に足す。
+//
+// 確認できるのは Artifact Registry のイメージだけ。gcr.io には相当する API が無く、
+// Docker Hub その他は端から範囲外なので、**黙って飛ばす**。ここを Unchecked に入れると
+// Docker Hub のイメージを使っているだけで毎回 warning が出て、警告そのものが読み飛ばされる
+// ようになる。Unchecked は「確認しに行って決められなかった」ときのために取っておく。
+// 何を確認できるかは README と verify の --help に書いてある。
+//
+// 「確認できない = 存在しない」に倒さないことがこの関数の要件 (#23 と同じ壊れ方をする)。
+// 実 API で確かめた挙動:
+//   - リポジトリ / パッケージ / タグ / ダイジェストのいずれが無くても 404
+//   - 存在しない (またはアクセスできない) プロジェクトは 403 なので Missing にならない
+//   - 公開イメージ (us-docker.pkg.dev/cloudrun/container/hello) は通常の ADC で引ける
+func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ...option.ClientOption) {
+	var refs []imageRef
+	for _, img := range images {
+		if ref := parseImageRef(img); ref.IsArtifactRegistry() {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		return
+	}
+
+	// クライアントの生成は確認対象があるときだけ。イメージが全部 gcr.io のマニフェストで
+	// Artifact Registry API の有効化を要求したくない。
+	arSvc, err := artifactregistry.NewService(ctx, opts...)
+	if err != nil {
+		for _, ref := range refs {
+			res.Unchecked = append(res.Unchecked, fmt.Sprintf("image %q: %v", ref.Raw, err))
+		}
+		return
+	}
+	for _, ref := range refs {
+		name := ref.resourceName()
+		var getErr error
+		if ref.Digest != "" {
+			_, getErr = arSvc.Projects.Locations.Repositories.DockerImages.Get(name).Context(ctx).Do()
+		} else {
+			_, getErr = arSvc.Projects.Locations.Repositories.Packages.Tags.Get(name).Context(ctx).Do()
+		}
+		switch {
+		case getErr == nil:
+		case isNotFound(getErr):
+			res.Missing = append(res.Missing, fmt.Sprintf("image %q does not exist", ref.Raw))
+		default:
+			res.Unchecked = append(res.Unchecked, fmt.Sprintf("image %q: %v", ref.Raw, getErr))
+		}
+	}
 }
 
 // serviceAccountName はマニフェストの実行サービスアカウントを nil セーフに取り出す。
