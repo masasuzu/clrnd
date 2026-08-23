@@ -77,12 +77,13 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 			// 待機中の cancel/期限切れは、API のエラーではなく待機の結果として返す。
 			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
 
-		case isNotFound(err):
-			// 実在しないサービスは待っても現れない。すぐ返す。
+		case !isRetryable(err):
+			// 待っても回復しない失敗。実在しないサービス (404) は現れないし、
+			// 不正な要求 (400) や認証・権限の不備 (401/403) も時間では変わらない。
 			return last, err
 
 		default:
-			// 一時的な失敗 (503/429/接続断など) の可能性がある。タイムアウトまで再試行する。
+			// 一時的な失敗 (503/429/接続断など)。タイムアウトまで再試行する。
 			lastErr = err
 			if opts.OnRetry != nil {
 				opts.OnRetry(err)
@@ -113,6 +114,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 		_, err := c.GetService(waitCtx, service)
 		switch {
 		case isNotFound(err):
+			// 消えた。これが待っていた結果。
 			return nil
 		case err == nil:
 			lastErr = nil
@@ -124,6 +126,9 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 			}
 		case waitCtx.Err() != nil:
 			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
+		case !isRetryable(err):
+			// Wait と同じ分類。待っても回復しない失敗は、その場で返す。
+			return err
 		default:
 			// 一時的な失敗の可能性がある。Wait と同じくタイムアウトまで再試行する。
 			lastErr = err

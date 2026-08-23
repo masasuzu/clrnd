@@ -301,7 +301,15 @@ revision-name conflicts, asynchronous rollout failures).
   transient 503 would otherwise make an already-applied `deploy` exit non-zero — the very CI
   false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
   errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
-  out. A 404 is the exception: a service that does not exist will not appear, so it returns at once.
+  out. Which errors those are is `isRetryable` (in
+  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), shared by `Wait` and
+  `WaitDeleted` so the two cannot drift: 408/429/5xx and any error with no HTTP status (a dropped
+  connection, DNS, EOF) are retried, every other 4xx returns at once. Waiting out a 400/401/403
+  ends in the same failure ten minutes later, having held a CI job the whole time; 404 falls out of
+  the same rule (a service that does not exist will not appear). The one 403 that *is* retried is a
+  rate limit — Google's APIs report quota exhaustion as 403 with a `rateLimitExceeded`-style
+  `reason`, and that does clear on its own, so `retryableForbiddenReasons` separates it from a
+  permission problem.
   `waitProgress` deliberately withholds the `Ready` value until `observedGeneration` reaches the
   awaited generation — the condition visible before then belongs to the *previous* generation and
   reads as "already finished".
