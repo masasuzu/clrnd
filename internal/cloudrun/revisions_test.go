@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	run "google.golang.org/api/run/v1"
 )
@@ -231,5 +232,47 @@ func TestClientListRevisionsPropagatesErrors(t *testing.T) {
 	_, err := c.ListRevisions(context.Background(), "my-svc")
 	if err == nil || !strings.Contains(err.Error(), `failed to list revisions of service "my-svc"`) {
 		t.Fatalf("ListRevisions() error = %v, want it to name the service", err)
+	}
+}
+
+// TestClientListRevisionsStopsOnARepeatedToken は、サーバが同じ Continue トークンを
+// 返し続けても止まることを確認する。進んでいない応答を追い続けると items が際限なく
+// 伸び、--timeout の無い ctx では止める手段が無くなる。
+func TestClientListRevisionsStopsOnARepeatedToken(t *testing.T) {
+	pages := 0
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if !strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, readyService()
+		}
+		pages++
+		// 常に同じトークンを返す (進まないページング)。
+		return http.StatusOK, &run.ListRevisionsResponse{
+			Items:    []*run.Revision{revision("my-svc-00007-abc", "img", "2026-08-22T10:00:00Z", conditionTrue, "")},
+			Metadata: &run.ListMeta{Continue: "stuck"},
+		}
+	})
+
+	done := make(chan struct{})
+	var got Revisions
+	var err error
+	go func() {
+		got, err = c.ListRevisions(context.Background(), "my-svc")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ListRevisions() did not return; the pagination loop does not terminate")
+	}
+	if err != nil {
+		t.Fatalf("ListRevisions() error = %v", err)
+	}
+	// 1 ページ目と、同じトークンを持ってきた 2 ページ目で打ち切る。
+	if pages != 2 {
+		t.Errorf("requested %d pages, want it to stop at 2", pages)
+	}
+	if len(got) != 2 {
+		// 打ち切りに失敗すると数千件になるので、中身ではなく件数だけを出す。
+		t.Errorf("ListRevisions() returned %d revisions, want the two pages it did read", len(got))
 	}
 }
