@@ -271,6 +271,15 @@ revision-name conflicts, asynchronous rollout failures).
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
+- `rootCmd.SilenceUsage` is on, so a runtime error prints only the error. Cobra applies that to
+  flag and argument errors too, so `SetFlagErrorFunc` adds a one-line `Run '<cmd> --help' for usage`
+  instead of the whole block. Note that cobra prints usage with `Println`, i.e. to `OutOrStderr()` —
+  in tests that redirect `SetOut` it lands on **stdout**, so assertions about it must look at both
+  streams.
+- Exit codes live in [cmd/exit.go](cmd/exit.go): `ExitCode` maps an error to a code and `main.go`
+  applies it. `diff --exit-code` returns the `errDiffFound` sentinel, which becomes **2**. The split
+  (0 clean / 1 error / 2 differences) is `terraform plan -detailed-exitcode`'s, chosen so that
+  errors keep 1 and existing scripts are unaffected.
 - Subcommands succeed **silently on stdout**: on success they emit only data (e.g. the manifest)
   there, never a confirmation message. Errors are returned from `RunE` so cobra prints them to
   stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in

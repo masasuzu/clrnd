@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1324,6 +1325,110 @@ func TestDeployWithNoChangesSkipsTheCheckWithNoWait(t *testing.T) {
 	}
 	if gets() != 1 {
 		t.Errorf("GET count = %d, want 1 (no health poll with --no-wait)", gets())
+	}
+}
+
+// TestExitCode は終了コードの割り当てを確認する。terraform plan の
+// -detailed-exitcode と同じで、0 = 差分なし / 1 = エラー / 2 = 差分あり。
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "success", err: nil, want: 0},
+		{name: "error", err: errors.New("boom"), want: 1},
+		{name: "differences", err: errDiffFound, want: ExitCodeDiff},
+		{name: "wrapped differences", err: fmt.Errorf("diff: %w", errDiffFound), want: ExitCodeDiff},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExitCode(tt.err); got != tt.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDiffExitCodeReportsDifferences は --exit-code で差分があると 2 で終わることを
+// 確認する。これが無いと、ドリフト検知に diff を使ったつもりの CI が黙って通る。
+func TestDiffExitCodeReportsDifferences(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if echoDryRun(w, r) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceJSON))
+	})
+
+	manifest := writeManifest(t, localManifest)
+	stdout, _, err := executeRoot(t, "diff", "my-svc", manifest, "--exit-code",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("diff --exit-code error = nil, want the difference to be reported")
+	}
+	if got := ExitCode(err); got != ExitCodeDiff {
+		t.Errorf("ExitCode() = %d, want %d", got, ExitCodeDiff)
+	}
+	// 差分そのものは今までどおり stdout に出る。
+	if !strings.Contains(stdout, "image:") {
+		t.Errorf("diff stdout = %q, want the diff to still be printed", stdout)
+	}
+}
+
+// TestDiffExitCodeIsQuietWithoutDifferences は差分が無ければ 0 で終わることを確認する。
+func TestDiffExitCodeIsQuietWithoutDifferences(t *testing.T) {
+	startUnchangedAPI(t, "True", "")
+
+	manifest := writeManifest(t, localManifest)
+	stdout, _, err := executeRoot(t, "diff", "my-svc", manifest, "--exit-code",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("diff --exit-code error = %v, want success when there is no difference", err)
+	}
+	if stdout != "" {
+		t.Errorf("diff stdout = %q, want empty", stdout)
+	}
+}
+
+// TestDiffWithoutExitCodeSucceedsDespiteDifferences は既定の挙動を変えていないことを
+// 確認する。
+func TestDiffWithoutExitCodeSucceedsDespiteDifferences(t *testing.T) {
+	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if echoDryRun(w, r) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(liveServiceJSON))
+	})
+
+	manifest := writeManifest(t, localManifest)
+	stdout, _, err := executeRoot(t, "diff", "my-svc", manifest,
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("diff error = %v, want success without --exit-code", err)
+	}
+	if !strings.Contains(stdout, "image:") {
+		t.Errorf("diff stdout = %q, want the diff", stdout)
+	}
+}
+
+// TestRuntimeErrorsDoNotPrintUsage は、実行時のエラーで usage 全文が出ないことを
+// 確認する。出ると、組み立てたエラー文がフラグ一覧に埋もれる。
+func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+	// project も region も解決できないので、クライアント生成の前に失敗する。
+	stdout, stderr, err := executeRoot(t, "diff", "my-svc", manifest)
+	if err == nil {
+		t.Fatal("diff error = nil, want the missing target to fail")
+	}
+	// cobra は usage を Println (= OutOrStderr) に出すので、SetOut を差し替えている
+	// テストでは stdout 側に入る。実バイナリでは stderr に出る。どちらに出ようと
+	// 出てはいけないので、両方を見る。
+	combined := stdout + stderr
+	if strings.Contains(combined, "Usage:") || strings.Contains(combined, "Flags:") {
+		t.Errorf("the usage block should not be printed for a runtime error:\nstdout=%q\nstderr=%q",
+			stdout, stderr)
 	}
 }
 

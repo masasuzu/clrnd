@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -44,6 +45,16 @@ func Execute() error {
 }
 
 func init() {
+	// 実行時エラーのたびに usage を丸ごと出さない。せっかく組み立てたエラー文が
+	// 30 行のフラグ一覧に埋もれてしまい、Ctrl-C やロールアウト失敗のときに特に困る。
+	//
+	// SilenceUsage はフラグや引数のパースエラーにも効いてしまうので、そちらには
+	// 代わりに 1 行の案内を添える。usage 全文よりは、どこを見ればよいかの一言の方が
+	// 役に立つ。
+	rootCmd.SilenceUsage = true
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nRun '%s --help' for usage", err, c.CommandPath())
+	})
 	rootCmd.Version = buildVersion()
 	rootCmd.SetVersionTemplate("{{ .Name }} version {{ .Version }}\n")
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", "",
