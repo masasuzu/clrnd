@@ -9,7 +9,19 @@ and `refresh`.
 
 Download a binary for your platform from the
 [releases page](https://github.com/masasuzu/clrnd/releases) — linux, macOS and Windows, on amd64
-and arm64. Each release ships a `checksums.txt` (signed with cosign, keyless) and an SBOM.
+and arm64. Each release ships a `checksums.txt`, a keyless cosign signature over it
+(`checksums.txt.bundle`), an SBOM per archive, and a build provenance attestation.
+
+```sh
+# Verify the checksums were signed by this repository's release workflow
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.bundle \
+  --certificate-identity-regexp '^https://github.com/masasuzu/clrnd/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Then check the archive against them
+shasum -a 256 -c checksums.txt --ignore-missing
+```
 
 ```sh
 # example: macOS arm64
