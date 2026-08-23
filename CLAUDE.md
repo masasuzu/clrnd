@@ -282,7 +282,12 @@ revision-name conflicts, asynchronous rollout failures).
   and the tags collected. The list is paged through with the `Continue` token, with two
   guards: it stops when the same token comes back (the next page would repeat the last one) and
   after `listRevisionsMaxPages` pages. Without them a server that keeps returning the same token
-  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. `newRevisions` is the
+  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. Both guards
+  **return an error rather than the partial list**: only an empty `Continue` ends the paging
+  normally. A truncated list is not just short — the repeated-token case has read the same page
+  twice, so it can hold duplicates as well as gaps, and `rollback` picks both the current revision
+  and the one to return to out of it, so treating it as complete can roll back to the wrong
+  version (or report that there is nothing to roll back to). `newRevisions` is the
   pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
   the API. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
   (Cloud Run numbers them sequentially) when the timestamp will not parse.

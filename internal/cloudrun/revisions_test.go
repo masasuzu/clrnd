@@ -2,6 +2,7 @@ package cloudrun
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -235,10 +236,12 @@ func TestClientListRevisionsPropagatesErrors(t *testing.T) {
 	}
 }
 
-// TestClientListRevisionsStopsOnARepeatedToken は、サーバが同じ Continue トークンを
-// 返し続けても止まることを確認する。進んでいない応答を追い続けると items が際限なく
-// 伸び、--timeout の無い ctx では止める手段が無くなる。
-func TestClientListRevisionsStopsOnARepeatedToken(t *testing.T) {
+// TestClientListRevisionsFailsOnARepeatedToken は、サーバが同じ Continue トークンを
+// 返し続けたときに、そこまでの一覧を成功として返さずエラーにすることを確認する。
+// 進んでいない応答を追い続けると items が際限なく伸びるので打ち切りは必要だが、
+// 打ち切った一覧は重複も欠落もありうる。rollback がそれを完全な一覧として扱うと
+// 誤った版へ戻しうるので、黙って切り詰めない。
+func TestClientListRevisionsFailsOnARepeatedToken(t *testing.T) {
 	pages := 0
 	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		if !strings.HasSuffix(r.URL.Path, "/revisions") {
@@ -264,15 +267,48 @@ func TestClientListRevisionsStopsOnARepeatedToken(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("ListRevisions() did not return; the pagination loop does not terminate")
 	}
-	if err != nil {
-		t.Fatalf("ListRevisions() error = %v", err)
+	if err == nil {
+		t.Fatalf("ListRevisions() = %+v, want an error instead of a truncated list", got)
+	}
+	if !strings.Contains(err.Error(), "pagination did not advance") {
+		t.Errorf("ListRevisions() error = %v, want it to name the stuck pagination", err)
+	}
+	if got != nil {
+		t.Errorf("ListRevisions() = %+v, want no partial list alongside the error", got)
 	}
 	// 1 ページ目と、同じトークンを持ってきた 2 ページ目で打ち切る。
 	if pages != 2 {
 		t.Errorf("requested %d pages, want it to stop at 2", pages)
 	}
-	if len(got) != 2 {
-		// 打ち切りに失敗すると数千件になるので、中身ではなく件数だけを出す。
-		t.Errorf("ListRevisions() returned %d revisions, want the two pages it did read", len(got))
+}
+
+// TestClientListRevisionsFailsAtThePageLimit は、上限ページ数に達してもトークンが
+// 残っている場合に、読めたところまでを成功として返さないことを確認する。
+func TestClientListRevisionsFailsAtThePageLimit(t *testing.T) {
+	pages := 0
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if !strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, readyService()
+		}
+		pages++
+		// 毎回違うトークンを返す (進んではいるが終わらないページング)。
+		return http.StatusOK, &run.ListRevisionsResponse{
+			Items:    []*run.Revision{revision(fmt.Sprintf("my-svc-%05d-abc", pages), "img", "2026-08-22T10:00:00Z", conditionTrue, "")},
+			Metadata: &run.ListMeta{Continue: fmt.Sprintf("page-%d", pages)},
+		}
+	})
+
+	got, err := c.ListRevisions(context.Background(), "my-svc")
+	if err == nil {
+		t.Fatalf("ListRevisions() returned %d revisions, want an error at the page limit", len(got))
+	}
+	if !strings.Contains(err.Error(), "gave up after") {
+		t.Errorf("ListRevisions() error = %v, want it to name the page limit", err)
+	}
+	if got != nil {
+		t.Errorf("ListRevisions() returned %d revisions, want no partial list alongside the error", len(got))
+	}
+	if pages != listRevisionsMaxPages {
+		t.Errorf("requested %d pages, want it to stop at the limit of %d", pages, listRevisionsMaxPages)
 	}
 }
