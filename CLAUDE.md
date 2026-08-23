@@ -158,9 +158,11 @@ revision-name conflicts, asynchronous rollout failures).
   `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
   `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
   clrnd never writes back values the server computed (which would pin today's defaults forever).
-  Because the dry run is a real request, `CompareManifest` runs `validate` first when the option is
-  on: a `metadata.name` that does not match the service argument would otherwise come back as an
-  opaque 400. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
+  `CompareManifest` runs the same `validate` as `deploy` **regardless of the option**, so the two
+  commands agree on what a valid input is; scoping it to the dry-run path let `diff` render a
+  "you can rename a service" diff that `deploy` would refuse. It also mirrors `PlanService`'s 404
+  handling (`current = nil`, everything is an addition), so `diff` works on a service that does not
+  exist yet — and passes `create` to `resolveDefaults`, since a *replace* dry run would 404 too. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
   one, but a rejected manifest or a service deleted mid-run look the same from here.
 - **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
   and a name Cloud Run generated is **never echoed back** — the field is only present on read when a

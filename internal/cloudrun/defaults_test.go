@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	run "google.golang.org/api/run/v1"
@@ -183,6 +184,72 @@ spec:
 	}
 	if !strings.Contains(sent, `"namespace":"`+testProject+`"`) {
 		t.Errorf("the dry-run body = %s, want the namespace replaced with the target project", sent)
+	}
+}
+
+// TestCompareManifestTreatsAMissingServiceAsAnAddition は、まだ作られていない
+// サービスに対して diff が動くことを確認する。PlanService (deploy) は 404 を
+// 新規作成として扱うのに、CompareManifest (diff) はそのまま返していたため、
+// README が勧める手順の初回だけ diff が落ちていた。
+func TestCompareManifestTreatsAMissingServiceAsAnAddition(t *testing.T) {
+	var mu sync.Mutex
+	var dryRuns int
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodPost {
+			// 未存在なので dry-run は Create でなければならない。
+			mu.Lock()
+			dryRuns++
+			mu.Unlock()
+			return http.StatusOK, defaultedService()
+		}
+		return http.StatusNotFound, googleAPIError(404, "not found")
+	})
+
+	got, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+		"manifest.yaml", PlanOptions{ResolveDefaults: true})
+	if err != nil {
+		t.Fatalf("CompareManifest() error = %v, want a missing service to be handled", err)
+	}
+	if !strings.Contains(got, "+kind: Service") {
+		t.Errorf("CompareManifest() = %q, want the whole manifest shown as an addition", got)
+	}
+	mu.Lock()
+	n := dryRuns
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("dry-run Create count = %d, want 1 (a replace dry-run would 404 too)", n)
+	}
+}
+
+func TestCompareManifestHandlesAMissingServiceWithoutResolvingDefaults(t *testing.T) {
+	c, _ := newTestClient(t, nil) // 既定の handler は 404
+
+	got, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+		"manifest.yaml", PlanOptions{})
+	if err != nil {
+		t.Fatalf("CompareManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "+kind: Service") {
+		t.Errorf("CompareManifest() = %q, want the whole manifest shown as an addition", got)
+	}
+}
+
+// TestCompareManifestValidatesWithoutResolvingDefaults は、--no-server-defaults でも
+// deploy と同じ入力検証を通すことを確認する。ここを飛ばすと、deploy が拒否する
+// マニフェストで diff だけが「名前を変更できるかのような差分」を出す。
+func TestCompareManifestValidatesWithoutResolvingDefaults(t *testing.T) {
+	c, recorded := defaultingAPI(t)
+
+	_, err := c.CompareManifest(context.Background(), "other-svc", []byte(validManifest),
+		"manifest.yaml", PlanOptions{})
+	if err == nil {
+		t.Fatal("CompareManifest() error = nil, want the name mismatch to be caught")
+	}
+	if !strings.Contains(err.Error(), "does not match service argument") {
+		t.Errorf("CompareManifest() error = %v", err)
+	}
+	if n := len(recorded()); n != 0 {
+		t.Errorf("requests = %d, want 0 (validation happens before any API call)", n)
 	}
 }
 

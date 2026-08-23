@@ -130,25 +130,30 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 	if err != nil {
 		return "", err
 	}
+	// deploy と同じ検証を通す。ここを --server-defaults のときだけにすると、
+	// deploy が拒否する入力 (metadata.name がサービス名と違う等) を diff だけが
+	// 受け入れ、「名前を変更できるかのような差分」を出してしまう。
+	if err := validate(desired, service); err != nil {
+		return "", err
+	}
 	// 送信先に合わせる。--server-defaults の dry-run は本物の書き込みと同じ検証を
 	// 受けるので、deploy と同じ前処理を通しておかないと diff だけが弾かれる。
 	c.setNamespace(desired)
 
-	if opts.ResolveDefaults {
-		// dry-run は path のサービス名と body の metadata.name が一致していないと
-		// 400 になる。API に投げる前に、分かる言葉で落とす。
-		if err := validate(desired, service); err != nil {
-			return "", err
-		}
-	}
-
 	current, err := c.GetService(ctx, service)
 	if err != nil {
-		return "", err
+		if !isNotFound(err) {
+			return "", err
+		}
+		// まだ作られていないサービス。PlanService と同じく「全部追加」として扱う。
+		// ここで 404 を返していたので、README が勧める init 前の
+		// 「マニフェストを書く → diff → deploy」が初回だけ通らなかった。
+		current = nil
 	}
 
 	if opts.ResolveDefaults {
-		if desired, err = c.resolveDefaults(ctx, service, desired, false); err != nil {
+		// 未存在なら dry-run も Create でなければ 404 になる。
+		if desired, err = c.resolveDefaults(ctx, service, desired, current == nil); err != nil {
 			return "", err
 		}
 	}
