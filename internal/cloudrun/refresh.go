@@ -30,7 +30,8 @@ func RefreshSuffix(now time.Time) string {
 // clrnd は原則としてリビジョン名を管理しない (init は落とし、diff は無視する) が、
 // refresh だけは例外。Cloud Run は spec.template が変わらないと新しいリビジョンを
 // 作らないため、「定義を変えずに流し直す」にはリビジョン名を明示するしかない。
-// ここで付けた名前は次の deploy (リビジョン名を持たないマニフェスト) で消える。
+// ここで付けた名前は、次に「変更を伴う」deploy (リビジョン名を持たないマニフェスト) で消える。
+// 定義が同一なら差分ゼロで何も適用されず、名前は残ったままになる。
 func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, error) {
 	if live == nil || live.Spec == nil || live.Spec.Template == nil {
 		return nil, errors.New("the live service has no spec.template to refresh")

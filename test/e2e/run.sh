@@ -49,10 +49,30 @@ OLD_REF="${OLD_REF:-}"
 PASS=0
 FAIL=0
 
+# ---------- redaction ----------
+# 実行ログをそのまま貼っても Google Cloud の識別子が出ないようにする。失敗したときに
+# ログを issue や PR に貼るのが自然な流れなので、伏せ字は既定で有効にしておく。
+# 判定に使う $OUT には手を入れない (表示だけを伏せる) ので、アサーションは実名で書ける。
+# 手元で調査するときは RAW=1 で素の出力に戻せる。
+#
+# 適用順が重要: URL とサービス名を先に潰してから、残った長い数値を潰す。逆順にすると
+# 数値の置換が URL やサービス名の形を壊し、後続のパターンにマッチしなくなる。
+redact() {
+  if [ "${RAW:-}" = "1" ]; then cat; return; fi
+  sed \
+    -e 's#https://[A-Za-z0-9._-]*\.run\.app#<service-url>#g' \
+    -e "s/${SERVICE:-__no_service__}/<service>/g" \
+    -e 's/clrnd-e2e-[0-9]\{8,\}/<service>/g' \
+    -e "s/${PROJECT:-__no_project__}/<project>/g" \
+    -e 's/[0-9]\{9,\}-compute@developer\.gserviceaccount\.com/<project-number>-compute@developer.gserviceaccount.com/g' \
+    -e 's/[0-9]\{9,\}/<number>/g'
+}
+
 # ---------- output helpers ----------
-c() { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }
+# すべての表示は c か info を通す。ここで伏せ字を掛ければ全体が覆える。
+c() { printf '\033[%sm%s\033[0m\n' "$1" "$2" | redact; }
 step() { echo; c '1;36' "==== $* ===="; }
-info() { echo "     $*"; }
+info() { echo "     $*" | redact; }
 ok()   { PASS=$((PASS + 1)); c '32' "  PASS  $*"; }
 ng()   { FAIL=$((FAIL + 1)); c '31' "  FAIL  $*"; }
 die()  { c '31' "error: $*"; exit 1; }
@@ -121,7 +141,7 @@ run_cmd() {
   info "\$ $(basename "$1") ${*:2}"
   OUT="$("$@" 2>&1)"
   RC=$?
-  [ -z "$OUT" ] || printf '%s\n' "$OUT" | sed 's/^/       | /'
+  [ -z "$OUT" ] || printf '%s\n' "$OUT" | redact | sed 's/^/       | /'
   return 0
 }
 
@@ -394,6 +414,10 @@ assert_rc_zero "diff --no-server-defaults succeeds"
 assert_contains "server defaults show up in the diff (containerConcurrency)" "containerConcurrency"
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
+# サーバが勝手に付ける metadata は、既定値の解決に頼らずに消えていなければならない
+# (issue #25)。ここは唯一その経路を実サービスで通す場所。
+assert_missing "the location label is not part of the diff" "cloud.googleapis.com/location"
+assert_missing "server-set metadata is not part of the diff" "serving.knative.dev/creator"
 
 info "--- 1-2b. diff (default: server defaults resolved) ---"
 info "既定ではサーバに既定値を解決させるので、同じ最小マニフェストでも差分は消える。"
@@ -556,6 +580,68 @@ if [ "$RC" -ne 0 ]; then
 else
   ng "a retry with no changes reported success while the service is unhealthy"
 fi
+
+info "--- 1-8c. render ---"
+# render は API に触れないが、テンプレート展開 (tfstate / env / must_env) を実バイナリで
+# 通すのはここだけ。ユニットテストは render.Render を直接叩いており、フラグの解析から
+# ファイル出力までの経路は覆えていない。
+D4="$WORK/current-render"; mkdir -p "$D4"
+cat > "$D4/e2e.tfstate" <<JSON
+{
+  "version": 4,
+  "terraform_version": "1.9.0",
+  "serial": 1,
+  "lineage": "clrnd-e2e",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "image",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        { "schema_version": 0, "attributes": { "id": "$IMAGE" } }
+      ]
+    }
+  ]
+}
+JSON
+cat > "$D4/template.yaml" <<'YAML'
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: {{ must_env "CLRND_E2E_SERVICE" }}
+spec:
+  template:
+    spec:
+      containers:
+      - image: {{ tfstate "null_resource.image.id" }}
+        env:
+        - name: FROM_ENV
+          value: "{{ env "CLRND_E2E_UNSET" "fallback" }}"
+YAML
+
+export CLRND_E2E_SERVICE="$SERVICE"
+run_cmd "$CLRND" render "$D4/template.yaml" --tfstate "$D4/e2e.tfstate"
+assert_rc_zero "render succeeds"
+assert_contains "render resolves {{ tfstate }} from the state file" "image: $IMAGE"
+assert_contains "render resolves {{ must_env }}" "name: $SERVICE"
+assert_contains "render falls back to the {{ env }} default" "fallback"
+assert_missing "render leaves no unexpanded template" "{{"
+
+run_cmd "$CLRND" render "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" -o "$D4/rendered.yaml"
+assert_rc_zero "render -o succeeds"
+assert_empty "render -o prints nothing on stdout"
+assert_file_has "render -o writes the expanded manifest" "$D4/rendered.yaml" "image: $IMAGE"
+
+run_cmd "$CLRND" render "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" -o "$D4/template.yaml"
+if [ "$RC" -ne 0 ]; then ok "render refuses to write over its own input"; else ng "render overwrote its own input"; fi
+assert_file_has "the template source is untouched" "$D4/template.yaml" "must_env"
+
+# 展開結果が本当にデプロイできる形かは、verify を同じテンプレートに通せば分かる。
+run_cmd "$CLRND" verify "$SERVICE" "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" --local-only
+assert_rc_zero "verify accepts the rendered template"
+unset CLRND_E2E_SERVICE
 
 info "--- 1-9. delete ---"
 if [ -n "$OLD_REF" ]; then

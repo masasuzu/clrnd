@@ -374,3 +374,93 @@ func lastRequest(t *testing.T, api *fakeAPI, method string) recordedRequest {
 	t.Fatalf("no %s request was recorded, got %+v", method, got)
 	return recordedRequest{}
 }
+
+// TestApplySendsTheResourceVersionItComparedAgainst は、更新の書き込みが「差分を取った
+// 相手」の resourceVersion を載せることを確認する。載せずに送ると Cloud Run は無条件の
+// 上書きとして受け付ける (実 API で確認済み) ので、並走した deploy が互いの変更を
+// 黙って消す。
+func TestApplySendsTheResourceVersionItComparedAgainst(t *testing.T) {
+	const liveRV = "AAZZrzudm44"
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		live := liveService("gcr.io/project/image:old")
+		live.Metadata.ResourceVersion = liveRV
+		return http.StatusOK, live
+	})
+
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	put := lastRequest(t, api, http.MethodPut)
+	var sent run.Service
+	if err := json.Unmarshal(put.Body, &sent); err != nil {
+		t.Fatalf("failed to parse the request body: %v", err)
+	}
+	if sent.Metadata == nil {
+		t.Fatal("ReplaceService sent no metadata")
+	}
+	if sent.Metadata.ResourceVersion != liveRV {
+		t.Errorf("ReplaceService sent resourceVersion = %q, want %q", sent.Metadata.ResourceVersion, liveRV)
+	}
+}
+
+// TestApplyExplainsAConcurrentChange は、409 を「差分を取ってから他の変更が入った」と
+// 説明することを確認する。API の文面 (version 'X' was specified but current version is
+// 'Y') だけでは、利用者が何をすべきか分からない。
+func TestApplyExplainsAConcurrentChange(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodPut {
+			return http.StatusConflict, googleAPIError(409,
+				"Conflict for resource 'my-svc': version '1' was specified but current version is '2'.")
+		}
+		return http.StatusOK, liveService("gcr.io/project/image:old")
+	})
+
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	_, err = plan.Apply(context.Background(), false)
+	if err == nil {
+		t.Fatal("Apply() error = nil, want a conflict")
+	}
+	if !strings.Contains(err.Error(), "changed after the diff was computed") {
+		t.Errorf("Apply() error = %v, want it to explain the concurrent change", err)
+	}
+	// 元の API エラーも残す (どのバージョンで衝突したかは調査に要る)。
+	if !strings.Contains(err.Error(), "current version is '2'") {
+		t.Errorf("Apply() error = %v, want it to keep the API message", err)
+	}
+}
+
+// TestPlanCreateSendsNoResourceVersion は、新規作成に resourceVersion を載せないことを
+// 確認する。Cloud Run は形式の合わない resourceVersion に 400 を返すので、無い相手に
+// 何かを載せると作成そのものが壊れる。
+func TestPlanCreateSendsNoResourceVersion(t *testing.T) {
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodGet {
+			return http.StatusNotFound, googleAPIError(404, "not found")
+		}
+		return http.StatusOK, liveService("gcr.io/project/image:new")
+	})
+
+	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if !plan.Create {
+		t.Fatalf("Plan() Create = false, want a create")
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	post := lastRequest(t, api, http.MethodPost)
+	if strings.Contains(string(post.Body), "resourceVersion") {
+		t.Errorf("Create body should not carry a resourceVersion:\n%s", post.Body)
+	}
+}
