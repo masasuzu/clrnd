@@ -18,3 +18,13 @@ go.work.sum
 *.swp
 .idea/
 .vscode/
+
+# Files that `clrnd init` writes into the current directory. clrnd.yml embeds the
+# project ID, and manifest.yaml mirrors the live service (which can hold plaintext
+# env values), so neither belongs in a commit. See CLAUDE.local.md.
+/clrnd.yml
+/clrnd.yaml
+/manifest.yaml
+
+# Local-only instructions. Not versioned, and it discusses the project ID.
+/CLAUDE.local.md
