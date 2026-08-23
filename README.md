@@ -808,6 +808,11 @@ go run github.com/goreleaser/goreleaser/v2@v2.17.1 build --snapshot --clean   # 
 CI uses ShellCheck v0.11.0 (installed from a pinned, checksummed release); any recent version is
 close enough locally.
 
+Those tool versions are pinned by hand: Dependabot updates the action SHAs and `go.mod`, but not a
+version passed to an action, a `go run tool@version`, or the ShellCheck release CI downloads. When
+you bump one, bump it everywhere it is written — `.github/scripts/check-tool-pins.sh` (run in CI)
+fails when the copies disagree, which is what kept CI on `latest` while this file said `v2.6.2`.
+
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
 [test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
 and needs a project you are happy to create Cloud Run services in — see

@@ -422,6 +422,14 @@ revision-name conflicts, asynchronous rollout failures).
   binary for the `run:` blocks. Every job carries a `timeout-minutes`, and `ci.yml` uses a per-ref
   `concurrency` group with `cancel-in-progress: true` so a new push stops the previous PR run —
   `release.yml` deliberately does the opposite (see the release bullet above).
+- **Pinned tool versions are maintained by hand, and CI checks they agree.** Dependabot covers
+  action SHAs and `go.mod`; it does not see a `version:` input handed to an action, a
+  `go run tool@vX`, or the ShellCheck release the lint job downloads. Those live in more than one
+  place each (workflow + README, or `verify.yml` + `release.yml` for GoReleaser), so
+  [.github/scripts/check-tool-pins.sh](.github/scripts/check-tool-pins.sh) compares every copy and
+  fails when they diverge — that divergence is exactly what #73 was. Bump a tool in **all** the
+  places at once; the script also fails when it cannot read a version at all, so changing the
+  spelling of a pin does not quietly disable the check.
 - CI checks live in [.github/workflows/verify.yml](.github/workflows/verify.yml), which is
   `workflow_call`-only: [ci.yml](.github/workflows/ci.yml) calls it on `pull_request`/`push` to
   main, and [release.yml](.github/workflows/release.yml) calls it as `needs:` of the GoReleaser job.

@@ -141,10 +141,16 @@ jobs:
 
       # E2E は go test に含まれないので、壊れていても Go 側の検査では気づけない。
       # 構文 (bash -n) と静的解析 (shellcheck) はタダで回せる。
-      - name: Check the end-to-end script
+      - name: Check the shell scripts
         run: |
           bash -n test/e2e/run.sh
-          shellcheck test/e2e/run.sh
+          shellcheck test/e2e/run.sh .github/scripts/*.sh
+
+      # Dependabot はアクションの SHA と go.mod しか追わない。version 入力や
+      # go run ...@vX、自前で入れる ShellCheck の版は手で上げるしかないので、
+      # 上げ忘れ (書いてある場所どうしのずれ) をここで落とす。
+      - name: Check the pinned tool versions agree
+        run: ./.github/scripts/check-tool-pins.sh
 
       # workflow 自体の式やアクションの入力ミスは、push するまで分からない。
       # actionlint は run: ブロックを PATH の shellcheck にも通す。
