@@ -17,6 +17,12 @@ const serviceLabel = "serving.knative.dev/service"
 // listRevisionsPageLimit は 1 回の List で取る件数。Continue トークンで全件たどる。
 const listRevisionsPageLimit = 100
 
+// listRevisionsMaxPages はページ送りの上限。1 サービスあたり 100 * 1000 件を超える
+// リビジョンは現実には存在しないので、ここに当たるのはサーバが同じトークンを返し続けた
+// ような異常時に限る。上限が無いと items が際限なく伸び、--timeout の無い ctx では
+// 止める手段が無くなる。
+const listRevisionsMaxPages = 1000
+
 // Revision はサービスに属するリビジョン 1 件の要約。JSON 出力の構造でもある。
 type Revision struct {
 	Name string `json:"name"`
@@ -50,7 +56,8 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 
 	selector := fmt.Sprintf("%s=%s", serviceLabel, service)
 	var items []*run.Revision
-	for token := ""; ; {
+	token := ""
+	for page := 0; page < listRevisionsMaxPages; page++ {
 		call := c.api.Namespaces.Revisions.List(c.parent()).
 			LabelSelector(selector).
 			Limit(listRevisionsPageLimit)
@@ -63,6 +70,10 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 		}
 		items = append(items, resp.Items...)
 		if resp.Metadata == nil || resp.Metadata.Continue == "" {
+			break
+		}
+		// 同じトークンが返ってきたら、次のページも同じ応答になる。進んでいないので打ち切る。
+		if resp.Metadata.Continue == token {
 			break
 		}
 		token = resp.Metadata.Continue
