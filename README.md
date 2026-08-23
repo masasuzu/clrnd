@@ -378,6 +378,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` is set. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--no-server-defaults` | Compare against the manifest as written, without resolving Cloud Run's defaults (read-only credentials are enough). |
+| `--exit-code` | Exit with 2 when there is a difference. Use this for drift checks in CI — see [Exit codes](#exit-codes). |
 
 ```sh
 clrnd diff my-service service.yaml --project my-project --region asia-northeast1
@@ -425,7 +426,6 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
-| `--exit-code` | Exit with 2 when there is a difference. Use this for drift checks in CI. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
 
