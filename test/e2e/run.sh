@@ -394,6 +394,10 @@ assert_rc_zero "diff --no-server-defaults succeeds"
 assert_contains "server defaults show up in the diff (containerConcurrency)" "containerConcurrency"
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
+# サーバが勝手に付ける metadata は、既定値の解決に頼らずに消えていなければならない
+# (issue #25)。ここは唯一その経路を実サービスで通す場所。
+assert_missing "the location label is not part of the diff" "cloud.googleapis.com/location"
+assert_missing "server-set metadata is not part of the diff" "serving.knative.dev/creator"
 
 info "--- 1-2b. diff (default: server defaults resolved) ---"
 info "既定ではサーバに既定値を解決させるので、同じ最小マニフェストでも差分は消える。"

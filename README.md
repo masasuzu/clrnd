@@ -369,7 +369,8 @@ as the request is accepted, or `--timeout` to change how long it waits (default 
 
 Initialize a project from an existing Cloud Run service. `init` fetches the service and scaffolds
 two files: the manifest (Knative-style YAML, with server-managed read-only fields such as `status`,
-`metadata.uid`, and `resourceVersion` stripped so it is deployable) and a `clrnd.yml` holding the
+`metadata.uid`, `resourceVersion`, the `cloud.googleapis.com/location` label, and the
+`run.googleapis.com/client-name` / `client-version` annotations stripped so it is deployable) and a `clrnd.yml` holding the
 `project`, `region`, `service`, and `manifest` path. After `init` the other commands run with no
 positional arguments. Existing files are not overwritten unless `--force` is given.
 

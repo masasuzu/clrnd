@@ -579,3 +579,62 @@ func TestDeleteMapKeys(t *testing.T) {
 		}
 	})
 }
+
+// TestCompareIgnoresServerManagedMetadata は、Cloud Run が勝手に付ける metadata が
+// 手書きの最小マニフェストとの差分に出ないことを確認する。実際のサービス (gcloud で
+// 作成したもの) から採った項目をそのまま並べている。--server-defaults を切ると
+// この経路しか無いので、取りこぼすと「何をしても消えない差分」になる。
+func TestCompareIgnoresServerManagedMetadata(t *testing.T) {
+	current := &run.Service{
+		ApiVersion: "serving.knative.dev/v1",
+		Kind:       "Service",
+		Metadata: &run.ObjectMeta{
+			Name:      "my-svc",
+			Namespace: "123456789",
+			Labels: map[string]string{
+				"cloud.googleapis.com/location": "asia-northeast1",
+			},
+			Annotations: map[string]string{
+				"run.googleapis.com/client-name":    "gcloud",
+				"run.googleapis.com/client-version": "1.2.3",
+			},
+			// 他のコントローラが管理しているサービスに付きうる read-only フィールド。
+			Finalizers:      []string{"controller.example/finalizer"},
+			OwnerReferences: []*run.OwnerReference{{Kind: "Thing", Name: "owner"}},
+			GenerateName:    "my-svc-",
+			ClusterName:     "cluster-1",
+		},
+		Spec: &run.ServiceSpec{
+			Template: &run.RevisionTemplate{
+				Metadata: &run.ObjectMeta{
+					Labels: map[string]string{"client.knative.dev/nonce": "n-1"},
+					Annotations: map[string]string{
+						"run.googleapis.com/client-name": "gcloud",
+					},
+				},
+				Spec: &run.RevisionSpec{
+					Containers: []*run.Container{{Image: "gcr.io/p/img"}},
+				},
+			},
+		},
+	}
+
+	manifest := `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/p/img
+`
+
+	diff, err := compareManifest(current, []byte(manifest), "live/my-svc", "manifest.yaml")
+	if err != nil {
+		t.Fatalf("compareManifest() error = %v", err)
+	}
+	if diff != "" {
+		t.Errorf("compareManifest() = %q, want no diff for server-managed metadata", diff)
+	}
+}

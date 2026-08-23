@@ -21,21 +21,35 @@ const (
 )
 
 // サーバ側が付与する read-only なアノテーション。デプロイ用マニフェストには不要。
+// metadata 直下と spec.template.metadata の両方に対して使う。
+//
+// client-name / client-version は「最後に書き込んだツール」を記録するもので、設定では
+// ない。gcloud で作られたサービスを init で取り込むとマニフェストに "gcloud" が焼き付き、
+// 以後の clrnd deploy がそれを送り返し続ける。手書きマニフェストでは逆に、消えない削除
+// 差分として出る。clrnd はこれを管理しない。
 var serverManagedAnnotations = []string{
 	"run.googleapis.com/operation-id",
 	"run.googleapis.com/ingress-status",
 	"run.googleapis.com/urls",
+	"run.googleapis.com/client-name",
+	"run.googleapis.com/client-version",
 	"serving.knative.dev/creator",
 	"serving.knative.dev/lastModifier",
 }
 
-// サーバ側が付与する read-only なラベル。
+// サーバ側が付与する read-only なラベル。metadata 直下と spec.template.metadata の
+// 両方に対して使う (cloud.googleapis.com/location は実際には metadata 直下にだけ付くが、
+// テンプレート側から消えて困るものではないので一覧を分けていない)。
 var serverManagedLabels = []string{
 	"client.knative.dev/nonce",
 	"run.googleapis.com/startupProbeType",
+	"cloud.googleapis.com/location",
 }
 
-// metadata 直下の read-only フィールド。
+// metadata 直下の read-only フィールド。run.ObjectMeta のうち、クライアントが書かない
+// (書いても意味が無い) ものを列挙する。削除中のサービスや、他のコントローラ (Terraform,
+// Config Connector など) が管理しているサービスを init で取り込んだときに、これらが
+// scaffold されたマニフェストに残って次の deploy でそのまま送り返されるのを防ぐ。
 var serverManagedMetaFields = []string{
 	"creationTimestamp",
 	"generation",
@@ -43,6 +57,12 @@ var serverManagedMetaFields = []string{
 	"selfLink",
 	"uid",
 	"namespace",
+	"deletionTimestamp",
+	"deletionGracePeriodSeconds",
+	"finalizers",
+	"ownerReferences",
+	"generateName",
+	"clusterName",
 }
 
 // DeployPlan は適用予定の内容。Plan で算出し、Apply で適用する。
@@ -460,6 +480,9 @@ func sanitizeMap(m map[string]interface{}) {
 			delete(meta, k)
 		}
 		deleteMapKeys(meta, "annotations", serverManagedAnnotations)
+		// Cloud Run は全サービスに cloud.googleapis.com/location を付ける。これを消さないと、
+		// 書いていない手書きマニフェストでは永久に削除差分として出続ける。
+		deleteMapKeys(meta, "labels", serverManagedLabels)
 	}
 
 	// spec.template.metadata のサーバ管理ラベル/アノテーションを削除する。

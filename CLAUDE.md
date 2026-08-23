@@ -134,10 +134,17 @@ revision-name conflicts, asynchronous rollout failures).
   replaces the config list, otherwise the config list is used. Relative paths from the config
   (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
   `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
-- `sanitizeMap` strips server-managed read-only fields (`status`, `metadata.uid`,
-  `resourceVersion`, server-set annotations/labels — see the `serverManaged*` slices), and drops
+- `sanitizeMap` strips server-managed read-only fields (`status`, the `serverManagedMetaFields` of
+  `metadata` — `uid`, `resourceVersion`, `ownerReferences`, … — and the `serverManagedAnnotations` /
+  `serverManagedLabels` of **both** `metadata` and `spec.template.metadata`), and drops
   `spec.template.metadata` entirely when nothing is left in it (local manifests normally have no
   template metadata, so an empty `metadata: {}` would be a diff line that never goes away).
+  Anything missing from those slices becomes a diff that never goes away under
+  `--no-server-defaults` (with server defaults on, the dry-run response fills it back in on both
+  sides and hides the omission — which is why the `--no-server-defaults` path is the one the E2E
+  asserts against). `run.googleapis.com/client-name` / `client-version` are treated as
+  server-managed on purpose: they record which tool last wrote, not configuration, so keeping them
+  would bake "gcloud" into a manifest `init` produced.
   `ToManifest` applies it to a fetched service. YAML is produced with `sigs.k8s.io/yaml`
   (JSON tags → YAML), which sorts keys alphabetically.
 - `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
