@@ -443,7 +443,12 @@ revision-name conflicts, asynchronous rollout failures).
   does an authenticated git operation — GoReleaser authenticates through `GITHUB_TOKEN` in the
   environment). Note the consequence of gating on `govulncheck`: an advisory published after a
   tag blocks re-running that release until the dependency (or the Go toolchain in `go.mod`) is
-  bumped.
+  bumped. Two more properties of `release.yml` are deliberate. Its `concurrency` group is the
+  **fixed** string `release`, not one derived from `github.ref`: a per-tag group is a different
+  group for every tag, so two tags pushed back to back would run GoReleaser concurrently against
+  the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
+  it) requires the tag's commit to be an ancestor of `main` — passing checks alone would otherwise
+  let a branch that never reached main produce a signed, attested release.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in

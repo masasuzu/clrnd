@@ -818,6 +818,9 @@ version passed to an action, a `go run tool@version`, or the ShellCheck release 
 you bump one, bump it everywhere it is written — `.github/scripts/check-tool-pins.sh` (run in CI)
 fails when the copies disagree, which is what kept CI on `latest` while this file said `v2.6.2`.
 
+Releases are cut from `main` only: the release workflow refuses a tag whose commit is not an
+ancestor of `main`, and runs the same checks as CI before it builds anything.
+
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
 [test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
 and needs a project you are happy to create Cloud Run services in — see

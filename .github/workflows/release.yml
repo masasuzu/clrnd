@@ -5,14 +5,48 @@ on:
     tags:
       - "v*"
 
-# タグを続けて push してもリリースジョブが競合しないようにする。
+# リリースは常に 1 本ずつ流す。group にタグ (github.ref) を含めるとタグごとに別 group に
+# なり、v1.2.3 と v1.2.4 を続けて push したときに GoReleaser が同時に走ってしまう
+# (同じリポジトリのリリース一覧と dist/ を二重に触ることになる)。固定値にして直列化する。
+# 先行のリリースは中断しない: 途中で止めると、成果物の一部だけが公開された状態になる。
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
+  # 正式なリリースは main の履歴上のコミットからだけ作る。検査に通るコミットであっても、
+  # main に入っていないブランチのタグから署名・SBOM・provenance 付きのリリースが公開
+  # できてしまうのを防ぐ。検査 (verify) より前に置いてあるのは、条件を満たさないタグに
+  # 数分のビルドを回さないため。
+  guard:
+    runs-on: ubuntu-latest
+    # 無制限だと、ハングした 1 ジョブが既定の 6 時間まで runner を占有する。
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the tag is on main
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          # checkout はタグの ref しか持ってこないので、比較先の main を明示的に取る。
+          # 公開リポジトリなので認証情報は要らない (persist-credentials: false のまま)。
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::tag $TAG ($SHA) is not an ancestor of main; releases are cut from main only"
+            exit 1
+          fi
+          echo "$TAG ($SHA) is on main"
+
   # タグ push では通常 CI (ci.yml の push.branches: [main]) が起動しないので、
   # ここで同じ検査を呼ぶ。これが無いと、テストが落ちるコミットや main に入って
   # いないコミットに付けたタグからでも、署名と provenance の付いた正式なリリースが
@@ -20,6 +54,7 @@ jobs:
   # 呼び出し先の checkout はこのワークフローと同じ ref (タグ) を見るので、
   # 検査した SHA と GoReleaser がビルドする SHA は一致する。
   verify:
+    needs: guard
     permissions:
       contents: read
     uses: ./.github/workflows/verify.yml
@@ -27,6 +62,7 @@ jobs:
   goreleaser:
     needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write      # リリースの作成と成果物のアップロード
       id-token: write      # cosign の keyless 署名と provenance
