@@ -88,10 +88,12 @@ revision-name conflicts, asynchronous rollout failures).
   [internal/cloudrun/client_test.go](internal/cloudrun/client_test.go) and `startFakeAPI` in
   [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
   cover them against the fake API rather than leaving them untested.
-  **`VerifyRemote` is the one exception**: it builds its own IAM / Secret Manager clients
-  ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) and takes no `option.ClientOption`,
-  so `clientOptions` does not reach it and its remote path is still untested. Give it the same
-  treatment when that path needs coverage.
+  `VerifyRemote` ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) builds its own IAM /
+  Secret Manager clients but takes the same variadic `option.ClientOption`, so `cmd` passes
+  `clientOptions` through and one fake server can answer both APIs (they are routed by path).
+  It looks the service account up as `projects/-/serviceAccounts/<email>`: Cloud Run allows a
+  service account from **another** project, and pinning the project would turn a valid setup into a
+  404, which `RemoteCheck.Missing` reports as a hard failure.
   Auth is **Application Default Credentials**, picked up automatically by `run.NewService`
   (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
   no credentials are passed explicitly.
