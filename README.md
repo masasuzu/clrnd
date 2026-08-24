@@ -765,8 +765,10 @@ clrnd traffic <service> --to-latest
 ```
 
 `--percent` below 100 leaves the remainder on the revision **currently serving the most** traffic,
-which is the canary shape (stable 90% / new 10%). If nothing else is serving, there is no sensible
-place for the remainder and the command says so rather than guessing.
+which is the canary shape (stable 90% / new 10%). If that revision *is* the one you are sending
+traffic to — it already carries production — there is nothing to split it against, and clrnd says
+so rather than promoting the runner-up: doing that mid-canary would drop the stable revision to
+your `--percent` and hand the rest to an old one.
 
 `--to-latest` stops pinning the split to a revision name: traffic follows whatever revision is
 newest, now and after the next deploy. This is how you undo a `rollback` — while traffic is pinned,

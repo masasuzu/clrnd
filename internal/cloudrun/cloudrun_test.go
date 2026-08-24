@@ -1,9 +1,12 @@
 package cloudrun
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/api/googleapi"
@@ -636,5 +639,66 @@ spec:
 	}
 	if diff != "" {
 		t.Errorf("compareManifest() = %q, want no diff for server-managed metadata", diff)
+	}
+}
+
+// TestPlanServiceKeepsTheResourceVersionItWasGiven は、live を読んでから編集する経路
+// (rollback / refresh / traffic) が、自分が読んだ版に対して compare-and-swap すること
+// を確認する。PlanService の GET は 2 回目なので、そちらの版に差し替えてしまうと、
+// 2 つの GET の間に入った他人の変更を黙って巻き戻す。
+func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
+	var mu sync.Mutex
+	gets := 0
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method != http.MethodGet {
+			return http.StatusOK, readyService()
+		}
+		mu.Lock()
+		gets++
+		version := fmt.Sprintf("v%d", gets)
+		mu.Unlock()
+		svc := readyService()
+		svc.Metadata.ResourceVersion = version
+		return http.StatusOK, svc
+	})
+
+	// 1 回目の GET (呼び出し側が live を読む) の版を desired に載せる。
+	live, err := c.GetService(context.Background(), "my-svc")
+	if err != nil {
+		t.Fatalf("GetService() error = %v", err)
+	}
+	if live.Metadata.ResourceVersion != "v1" {
+		t.Fatalf("resourceVersion = %q, want the first read", live.Metadata.ResourceVersion)
+	}
+
+	plan, err := c.PlanService(context.Background(), "my-svc", live, PlanOptions{})
+	if err != nil {
+		t.Fatalf("PlanService() error = %v", err)
+	}
+	if got := plan.desired.Metadata.ResourceVersion; got != "v1" {
+		t.Errorf("resourceVersion = %q, want the version the caller read (%q)", got, "v1")
+	}
+}
+
+// TestPlanServiceStampsTheResourceVersionWhenThereIsNone は、マニフェスト由来の
+// desired (版を持たない) には GET した版を載せることを確認する。載せないと Cloud Run は
+// 無条件の上書きとして受け付け、並走した deploy が互いの変更を消す。
+func TestPlanServiceStampsTheResourceVersionWhenThereIsNone(t *testing.T) {
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		svc := readyService()
+		svc.Metadata.ResourceVersion = "from-server"
+		return http.StatusOK, svc
+	})
+
+	desired, err := parseManifest([]byte(validManifest))
+	if err != nil {
+		t.Fatalf("parseManifest() error = %v", err)
+	}
+	plan, err := c.PlanService(context.Background(), "my-svc", desired, PlanOptions{})
+	if err != nil {
+		t.Fatalf("PlanService() error = %v", err)
+	}
+	if got := plan.desired.Metadata.ResourceVersion; got != "from-server" {
+		t.Errorf("resourceVersion = %q, want the one read from the API", got)
 	}
 }

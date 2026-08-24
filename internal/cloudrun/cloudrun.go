@@ -313,6 +313,14 @@ func setResourceVersion(desired, current *run.Service) {
 	if desired == nil || desired.Metadata == nil || current == nil || current.Metadata == nil {
 		return
 	}
+	// desired が既に版を持っているなら上書きしない。rollback / refresh / traffic は
+	// live を読んでから編集するので、desired には *その読み取りの* 版が載っている。
+	// ここで新しい版に差し替えると、2 回の GET の間に入った他人の変更を CAS が
+	// 素通りさせ、黙って巻き戻すことになる (traffic だけを触ったつもりが、直前の
+	// deploy のイメージまで元に戻る)。載っている版のまま送れば、その場合は 409 になる。
+	if desired.Metadata.ResourceVersion != "" {
+		return
+	}
 	desired.Metadata.ResourceVersion = current.Metadata.ResourceVersion
 }
 

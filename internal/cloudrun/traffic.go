@@ -69,11 +69,9 @@ func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, er
 
 	traffic := []*run.TrafficTarget{target}
 	if req.Percent < 100 {
-		rest := largestShareExcept(status, self)
-		if rest == "" {
-			return nil, fmt.Errorf(
-				"no other revision is serving traffic to keep the remaining %d%%; pass --percent 100",
-				100-req.Percent)
+		rest, err := remainderRevision(status, self, req.Percent)
+		if err != nil {
+			return nil, err
 		}
 		traffic = append(traffic, &run.TrafficTarget{RevisionName: rest, Percent: 100 - req.Percent})
 	}
@@ -96,14 +94,37 @@ func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, er
 	return &out, nil
 }
 
-// largestShareExcept は except 以外でいま最も多くトラフィックを受けているリビジョンを返す。
+// remainderRevision は残りの割合を預けるリビジョンを選ぶ。いま最も多く受けている
+// リビジョンで、それが送り先自身なら分割する相手がいないのでエラーにする。
+//
+// 「送り先を *除いた* 中で最大」を選んではいけない。カナリア中 (安定版 90% / 旧版 10%)
+// に安定版を送り先として --percent 10 を撃つと、安定版が 10% へ落ちて旧版が 90% を
+// 持つ、という誰も望まない配分になる。送り先が既に本番を持っているなら、それは
+// 「分割の相手がいない」状況であって、二番手を繰り上げる状況ではない。
+func remainderRevision(s *Status, target string, percent int64) (string, error) {
+	name, share := largestShare(s)
+	switch name {
+	case "":
+		return "", fmt.Errorf(
+			"no revision is serving traffic to keep the remaining %d%%; pass --percent 100",
+			100-percent)
+	case target:
+		return "", fmt.Errorf(
+			"revision %q is already serving %d%% of the traffic, so there is nothing to split it "+
+				"against; pass --percent 100, or send the share to the other revision with --to",
+			target, share)
+	}
+	return name, nil
+}
+
+// largestShare はいま最も多くトラフィックを受けているリビジョンと、その割合を返す。
 // 同率のときは名前の昇順で決める (実行のたびに結果が変わらないようにするため)。
-// 該当が無ければ空文字列。
-func largestShareExcept(s *Status, except string) string {
+// どのリビジョンも受けていなければ空文字列。
+func largestShare(s *Status) (string, int64) {
 	shares := make(map[string]int64)
 	if s != nil {
 		for _, t := range s.Traffic {
-			if t.RevisionName == "" || t.RevisionName == except {
+			if t.RevisionName == "" {
 				continue
 			}
 			shares[t.RevisionName] += t.Percent
@@ -119,7 +140,7 @@ func largestShareExcept(s *Status, except string) string {
 			best, bestShare = name, share
 		}
 	}
-	return best
+	return best, bestShare
 }
 
 // pinnedTraffic は live サービスの *いまの* 配分を、リビジョン名で固定した spec.traffic

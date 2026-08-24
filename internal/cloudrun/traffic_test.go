@@ -169,18 +169,69 @@ func TestValidateTrafficRequest(t *testing.T) {
 	}
 }
 
-// TestLargestShareExceptIsDeterministic は、同率のときに結果が実行のたびに変わらない
+// TestLargestShareIsDeterministic は、同率のときに結果が実行のたびに変わらない
 // ことを確認する (map の反復順に引きずられると、同じ入力で別のリビジョンが選ばれる)。
-func TestLargestShareExceptIsDeterministic(t *testing.T) {
+func TestLargestShareIsDeterministic(t *testing.T) {
 	status := statusWithTraffic(
 		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 50},
 		TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 50},
 	)
 	for i := 0; i < 20; i++ {
-		if got := largestShareExcept(status, "my-svc-00008-ghi"); got != "my-svc-00006-def" {
-			t.Fatalf("largestShareExcept() = %q, want the name-ordered winner on every run", got)
+		got, share := largestShare(status)
+		if got != "my-svc-00006-def" || share != 50 {
+			t.Fatalf("largestShare() = %q, %d; want the name-ordered winner on every run", got, share)
 		}
 	}
+}
+
+// TestShiftTrafficTargetRefusesToDemoteTheServingRevision は、既に本番を持っている
+// リビジョンを送り先にした部分指定を断ることを確認する。
+//
+// 「送り先を除いた中で最大」に残りを預ける実装だと、カナリア中 (安定版 90% / 旧版 10%)
+// に --to-latest --percent 10 を撃ったときに、安定版が 10% に落ちて旧版が 90% を持つ。
+// 誰も望まない配分なので、繰り上げずに断る。
+func TestShiftTrafficTargetRefusesToDemoteTheServingRevision(t *testing.T) {
+	live := serviceWithTraffic(
+		nil,
+		[]*run.TrafficTarget{
+			{RevisionName: "my-svc-00007-abc", Percent: 90},
+			{RevisionName: "my-svc-00006-def", Percent: 10},
+		},
+		"my-svc-00007-abc")
+
+	for _, req := range []TrafficRequest{
+		{Latest: true, Percent: 10},                 // latestRevision は安定版に解決する
+		{Revision: "my-svc-00007-abc", Percent: 10}, // 名前で同じものを指した場合
+	} {
+		_, err := ShiftTrafficTarget(live, req)
+		if err == nil {
+			t.Fatalf("ShiftTrafficTarget(%+v) error = nil, want it to refuse", req)
+		}
+		if !strings.Contains(err.Error(), "already serving") {
+			t.Errorf("ShiftTrafficTarget(%+v) error = %v, want it to say the target already serves", req, err)
+		}
+	}
+}
+
+// TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary は、カナリア中でも
+// 別のリビジョンを送り先にすれば、残りが安定版に載ることを確認する。
+func TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary(t *testing.T) {
+	live := serviceWithTraffic(
+		nil,
+		[]*run.TrafficTarget{
+			{RevisionName: "my-svc-00007-abc", Percent: 90},
+			{RevisionName: "my-svc-00006-def", Percent: 10},
+		},
+		"my-svc-00007-abc")
+
+	got, err := ShiftTrafficTarget(live, TrafficRequest{Revision: "my-svc-00006-def", Percent: 30})
+	if err != nil {
+		t.Fatalf("ShiftTrafficTarget() error = %v", err)
+	}
+	assertTraffic(t, got.Spec.Traffic, []*run.TrafficTarget{
+		{RevisionName: "my-svc-00006-def", Percent: 30},
+		{RevisionName: "my-svc-00007-abc", Percent: 70},
+	})
 }
 
 // TestPinnedTrafficFixesTheLatestPointer は、deploy --no-traffic が使う固定処理が

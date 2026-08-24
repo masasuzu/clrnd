@@ -76,18 +76,18 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err := warnPinnedRevision(cmd, manifest); err != nil {
 		return err
 	}
-
-	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
-	if err != nil {
-		return err
-	}
-
 	// --no-traffic はマニフェストの spec.traffic を無視して現在の配分で置き換える。
 	// 黙って上書きすると「書いたのに効かない」になるので、書いてある場合は言う。
+	// これもローカルな検査なので、クライアント生成 (= ADC 探索) より前に出す。
 	if deployNoTraffic {
 		if err := warnManifestTraffic(cmd, manifest); err != nil {
 			return err
 		}
+	}
+
+	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
+	if err != nil {
+		return err
 	}
 
 	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{
