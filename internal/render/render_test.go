@@ -257,3 +257,33 @@ func TestRenderJSONEscapeAcceptsNonStrings(t *testing.T) {
 		t.Errorf("Render() = %q, want the value rendered as a JSON string body", got)
 	}
 }
+
+// TestRenderJSONEscapeKeepsHTMLCharactersLiteral は、& < > を & のような形に
+// しないことを確認する。JSON としては同じだが、値をそのまま読む相手 (JSON として
+// 再パースされないアノテーションや env[].value) には化けて見える。
+func TestRenderJSONEscapeKeepsHTMLCharactersLiteral(t *testing.T) {
+	t.Setenv("QUERY", "a=1&b<2>3")
+
+	got, err := Render(context.Background(), []byte(`v: '{{ must_env "QUERY" | json_escape }}'`), nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if want := `v: 'a=1&b<2>3'`; string(got) != want {
+		t.Errorf("Render() = %q, want %q", got, want)
+	}
+}
+
+// TestRenderJSONEscapeRejectsInvalidUTF8 は、不正な UTF-8 を黙って置き換えないことを
+// 確認する。json.Marshal はエラーにせず U+FFFD に潰すので、そのままだと化けた値が
+// デプロイされる。
+func TestRenderJSONEscapeRejectsInvalidUTF8(t *testing.T) {
+	t.Setenv("BROKEN", string([]byte{0xff, 0xfe}))
+
+	_, err := Render(context.Background(), []byte(`v: '{{ must_env "BROKEN" | json_escape }}'`), nil)
+	if err == nil {
+		t.Fatal("Render() error = nil, want the invalid UTF-8 rejected")
+	}
+	if !strings.Contains(err.Error(), "UTF-8") {
+		t.Errorf("Render() error = %v, want it to name the encoding problem", err)
+	}
+}

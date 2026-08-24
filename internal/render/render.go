@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"unicode/utf8"
 
 	"github.com/fujiwara/tfstate-lookup/tfstate"
 )
@@ -111,12 +112,24 @@ func mustEnvFunc(name string) (string, error) {
 // 埋める場面がある。tfstate や環境変数から来た値に " や改行が入っていると、
 // エスケープ無しでは壊れた JSON/YAML になる。
 func jsonEscapeFunc(v interface{}) (string, error) {
-	encoded, err := json.Marshal(fmt.Sprint(v))
-	if err != nil {
+	text := fmt.Sprint(v)
+	// json.Marshal は不正な UTF-8 をエラーにせず U+FFFD に置き換える。黙って化けた値を
+	// デプロイするより、ここで断る (シークレット由来のバイト列で起きうる)。
+	if !utf8.ValidString(text) {
+		return "", fmt.Errorf("json_escape: the value is not valid UTF-8")
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// & < > を \u0026 のような形にしない。JSON としては同じだが、値をそのまま読む相手
+	// (JSON として再パースされない env[].value やアノテーション) には化けて見える。
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(text); err != nil {
 		return "", fmt.Errorf("failed to escape %v as JSON: %w", v, err)
 	}
-	// json.Marshal は前後に " を付けるので落とす。
-	return string(encoded[1 : len(encoded)-1]), nil
+	// Encode は末尾に改行を足し、前後に " を付ける。どちらも落とす。
+	encoded := strings.TrimRight(buf.String(), "\n")
+	return encoded[1 : len(encoded)-1], nil
 }
 
 // stateLoader は state を遅延・一度きりで読み込み、属性を引く。

@@ -69,7 +69,12 @@ revision-name conflicts, asynchronous rollout failures).
   `{{ tfstate "addr" }}`, `{{ tfstatef "fmt" args }}`, `{{ env "VAR" ["default"] }}`,
   `{{ must_env "VAR" }}`, `{{ value | json_escape }}` (escapes the *body* of a JSON string — the
   surrounding quotes belong to the manifest, which is what makes it usable inside an annotation
-  holding JSON). The `tfstate`/`tfstatef` funcs resolve Terraform state via
+  holding JSON). It escapes for JSON, **not** for YAML, so the documented form wraps the line in a
+  block scalar: inside `'...'` an apostrophe in the value would still break the document, and
+  inside `"..."` YAML would eat the backslashes it just added. HTML escaping is turned off
+  (`SetEscapeHTML(false)`) because `&`/`<`/`>` reaching a reader that does not re-parse the JSON
+  would show up as `\u0026`; invalid UTF-8 is an error rather than `json.Marshal`'s silent
+  replacement with U+FFFD, which would deploy a mangled secret without a word. The `tfstate`/`tfstatef` funcs resolve Terraform state via
   `fujiwara/tfstate-lookup`; states are declared with the repeatable
   `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read when a
   placeholder references it, so manifests without placeholders need no `--tfstate`). A *named* state

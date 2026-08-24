@@ -191,11 +191,17 @@ Template functions:
 ```yaml
     metadata:
       annotations:
-        example.com/config: '{"token": "{{ must_env "TOKEN" | json_escape }}"}'
+        example.com/config: >-
+          {"token": "{{ must_env "TOKEN" | json_escape }}"}
 ```
 
 Without it, a value containing `"` or a newline produces broken JSON that Cloud Run accepts as an
 opaque string and the application then fails to parse.
+
+The block scalar (`>-`) is deliberate. `json_escape` escapes the value for **JSON**, which is not
+the same set of characters YAML needs: inside `'...'` a value containing `'` would still break the
+document, and inside `"..."` YAML would consume the very backslashes `json_escape` just added. A
+block scalar takes the line as written, so both quoting styles stay out of the way.
 
 The address may be quoted with `"..."` or backticks `` `...` `` — both are Go template string
 literals. Use backticks (or `'`, which is rewritten to `"`) when the address itself contains double
