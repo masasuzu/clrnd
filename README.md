@@ -384,6 +384,7 @@ clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--l
 | `--project`    | GCP project ID. Enables the API existence checks (env/config fallback). |
 | `--region`     | Cloud Run region. Enables the API existence checks (env/config fallback). |
 | `--local-only` | Skip the API existence checks; validate the manifest locally only.      |
+| `--image`      | Override a container image, the same way `deploy` does (the existence check then looks at the overridden image). |
 | `--format`     | Output format: `text` (default) or `json`.                              |
 | `--tfstate`    | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
 
@@ -442,6 +443,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--image`   | Override a container image, the same way `deploy` does, so the diff matches what would be applied. |
 | `--no-server-defaults` | Compare against the manifest as written, without resolving Cloud Run's defaults (read-only credentials are enough). |
 | `--exit-code` | Exit with 2 when there is a difference. Use this for drift checks in CI — see [Exit codes](#exit-codes). |
 
@@ -488,6 +490,7 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
 | `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--image`        | Override a container image: `<image>`, or `<container>=<image>` when the manifest has more than one container (repeatable). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
@@ -495,6 +498,22 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+
+**`--image` covers the usual CI case**: a manifest committed to the repository, deployed with the
+tag that was just built.
+
+```sh
+clrnd deploy --image "$REGISTRY/app:$GITHUB_SHA"
+clrnd deploy --image app=$REGISTRY/app:$SHA --image proxy=$REGISTRY/proxy:$SHA   # with a sidecar
+```
+
+The container name may be omitted only when the manifest defines exactly one container; with more,
+clrnd refuses rather than guessing which one you meant. `verify` and `diff` take the same flag, so
+the whole `verify` → `diff` → `deploy` sequence looks at the same image. The manifest stays the
+source of truth for everything else — `--image` exists because the image tag is the one field that
+legitimately changes on every deploy. `{{ must_env "IMAGE" }}` in the manifest remains an
+alternative, and `render` deliberately has no `--image`: it prints the template expansion as-is,
+without parsing it.
 
 **`--no-traffic` is how you deploy before deciding to serve it.** Without it, a service whose
 manifest says nothing about `spec.traffic` sends everything to the new revision the moment it is

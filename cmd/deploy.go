@@ -12,6 +12,7 @@ var (
 	deployProject    string
 	deployRegion     string
 	deployTfstate    []string
+	deployImages     []string
 	deployNoDefaults bool
 	deployNoTraffic  bool
 	deployApply      applyOptions
@@ -28,6 +29,8 @@ var deployCmd = &cobra.Command{
 		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
 		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
 		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
+		"--image replaces a container image without editing the manifest, for the common CI case\n" +
+		"of deploying a fixed manifest with a new tag.\n" +
 		"With --no-traffic the new revision is created without receiving any traffic: the current\n" +
 		"split is pinned to the revisions serving it now, so you can move traffic over afterwards\n" +
 		"with 'clrnd traffic'.\n" +
@@ -39,6 +42,7 @@ var deployCmd = &cobra.Command{
 func init() {
 	addTargetFlags(deployCmd, &deployProject, &deployRegion)
 	addManifestFlags(deployCmd, &deployTfstate)
+	addImageFlag(deployCmd, &deployImages)
 	addApplyFlags(deployCmd, &deployApply)
 	addServerDefaultsFlag(deployCmd, &deployNoDefaults)
 	deployCmd.Flags().BoolVar(&deployNoTraffic, "no-traffic", false,
@@ -62,6 +66,10 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
 	manifest, err = renderManifest(ctx, manifest, deployTfstate)
+	if err != nil {
+		return err
+	}
+	manifest, err = cloudrun.ApplyImageOverrides(manifest, deployImages)
 	if err != nil {
 		return err
 	}

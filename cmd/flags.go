@@ -257,6 +257,16 @@ func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 			"local path or s3://, gs://, ... URL)")
 }
 
+// addImageFlag は --image を登録する。マニフェストを読むコマンドのうち、
+// **適用に関わるもの** (verify / diff / deploy) だけに付ける。render に付けないのは、
+// render が「テンプレートを展開した文字列をそのまま出す」コマンドで、差し替えのために
+// パースし直すとその性質が崩れるため。
+func addImageFlag(cmd *cobra.Command, images *[]string) {
+	cmd.Flags().StringArrayVar(images, "image", nil,
+		"override a container image: <image>, or <container>=<image> when the manifest "+
+			"defines more than one container (repeatable)")
+}
+
 // renderManifest は tfstate 指定 (フラグ優先、無ければ config) を解釈し、マニフェストの
 // プレースホルダーを埋める。
 func renderManifest(ctx context.Context, manifest []byte, tfstateSpecs []string) ([]byte, error) {

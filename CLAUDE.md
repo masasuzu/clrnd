@@ -493,6 +493,17 @@ revision-name conflicts, asynchronous rollout failures).
   the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
   it) requires the tag's commit to be an ancestor of `main` — passing checks alone would otherwise
   let a branch that never reached main produce a signed, attested release.
+- `--image` (`ApplyImageOverrides` in
+  [internal/cloudrun/imageoverride.go](internal/cloudrun/imageoverride.go)) is the **one** field a
+  flag may override, because the image tag is the one part of a manifest that legitimately changes
+  on every deploy. It is registered by `addImageFlag` on `verify` / `diff` / `deploy` — the three
+  commands whose answer must describe the same thing — but **not** on `render`, which prints the
+  template expansion without parsing it and would have to round-trip the YAML to apply an override.
+  With no `--image` the manifest bytes are returned untouched, so nothing is reformatted when the
+  flag is unused. The container name may be omitted only when there is exactly one container: with
+  a sidecar, silently rewriting the first one is how you deploy a new proxy build to the app
+  container. `=` is a safe separator because it appears in neither container names nor image
+  references.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in

@@ -14,6 +14,7 @@ var (
 	verifyProject   string
 	verifyRegion    string
 	verifyTfstate   []string
+	verifyImages    []string
 	verifyLocalOnly bool
 	verifyFormat    string
 )
@@ -57,6 +58,7 @@ var verifyCmd = &cobra.Command{
 func init() {
 	addTargetFlags(verifyCmd, &verifyProject, &verifyRegion)
 	addManifestFlags(verifyCmd, &verifyTfstate)
+	addImageFlag(verifyCmd, &verifyImages)
 	verifyCmd.Flags().BoolVar(&verifyLocalOnly, "local-only", false,
 		"skip the API existence checks and validate the manifest locally only")
 	addFormatFlag(verifyCmd, &verifyFormat)
@@ -82,6 +84,12 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
 	manifest, err = renderManifest(ctx, manifest, verifyTfstate)
+	if err != nil {
+		return err
+	}
+	// deploy が適用するものを検証するため、同じ差し替えを通す (イメージの実在チェックも
+	// 差し替え後のイメージに対して行われる)。
+	manifest, err = cloudrun.ApplyImageOverrides(manifest, verifyImages)
 	if err != nil {
 		return err
 	}
