@@ -48,8 +48,11 @@ var verifyCmd = &cobra.Command{
 		"instances named in the annotations, and container images hosted on Artifact Registry\n" +
 		"(*-docker.pkg.dev).\n" +
 		"Images on gcr.io, Docker Hub, or any other registry are not checked and not reported.\n" +
+		"--image checks the image you would deploy with, not the one written in the manifest.\n" +
 		"A valid manifest produces no output on stdout; warnings (a pinned revision name, a check\n" +
 		"that could not be completed) go to stderr without failing the command.\n" +
+		"--format json prints the result instead — missing, unchecked and warnings as one object\n" +
+		"on stdout — while the exit code stays the same.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runVerify,
@@ -87,14 +90,18 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// deploy が適用するものを検証するため、同じ差し替えを通す (イメージの実在チェックも
-	// 差し替え後のイメージに対して行われる)。
-	manifest, err = cloudrun.ApplyImageOverrides(manifest, verifyImages)
-	if err != nil {
-		return err
-	}
 
 	result := verifyResult{Service: service, Manifest: manifestPath}
+
+	// deploy が適用するものを検証するため、同じ差し替えを通す (イメージの実在チェックも
+	// 差し替え後のイメージに対して行われる)。ここから先の失敗は finishVerify を通す:
+	// --format json の利用者にとって、stdout が空のまま終わる経路があると
+	// `clrnd verify --format json | jq ...` が読めない出力で落ちる。
+	manifest, err = cloudrun.ApplyImageOverrides(manifest, verifyImages)
+	if err != nil {
+		result.Errors = strings.Split(err.Error(), "\n")
+		return finishVerify(cmd, result, err)
+	}
 
 	// ローカルなスキーマ検証は常に行う。Validate は errors.Join なので、1 行 1 件に
 	// ばらして構造化する (text 出力は従来どおりエラーとしてまとめて出る)。
@@ -115,7 +122,8 @@ func runVerify(cmd *cobra.Command, args []string) error {
 
 	if !verifyLocalOnly {
 		if err := verifyRemote(ctx, cmd, manifest, &result); err != nil {
-			return err
+			result.Errors = append(result.Errors, err.Error())
+			return finishVerify(cmd, result, err)
 		}
 	}
 

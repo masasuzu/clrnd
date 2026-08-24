@@ -833,6 +833,7 @@ something would move it.
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`). |
 
 ### wait

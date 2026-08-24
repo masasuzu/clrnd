@@ -134,3 +134,27 @@ func TestApplyImageOverridesWithoutSpecsIsAPassthrough(t *testing.T) {
 		t.Errorf("ApplyImageOverrides() = %q, want the manifest untouched", got)
 	}
 }
+
+// TestApplyImageOverridesRejectsANullContainer は、null のコンテナを含むマニフェストで
+// 落ちない (panic しない) ことを確認する。Validate はこれを弾くが、差し替えはその前に
+// 走るので、ここで見ないと nil に代入して panic する。
+func TestApplyImageOverridesRejectsANullContainer(t *testing.T) {
+	const manifest = `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    spec:
+      containers:
+      -
+`
+	_, err := ApplyImageOverrides([]byte(manifest), []string{"gcr.io/p/app:v2"})
+	if err == nil {
+		t.Fatal("ApplyImageOverrides() error = nil, want the null container rejected")
+	}
+	// Validate と同じ言い方にする (--image の有無で説明が変わらないように)。
+	if !strings.Contains(err.Error(), "containers[0] must not be null") {
+		t.Errorf("error = %v, want the same message Validate gives", err)
+	}
+}

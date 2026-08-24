@@ -130,3 +130,23 @@ func TestVerifyRejectsAnInvalidFormat(t *testing.T) {
 		t.Errorf("verify error = %v, want the format to be rejected", err)
 	}
 }
+
+// TestVerifyJSONReportsAnImageOverrideFailure は、--image の失敗でも JSON が出ることを
+// 確認する。stdout が空のまま終わる経路があると、README が勧める
+// `clrnd verify --format json | jq ...` が読めない出力で落ちる。
+func TestVerifyJSONReportsAnImageOverrideFailure(t *testing.T) {
+	manifest := writeManifest(t, localManifest)
+
+	stdout, _, err := executeRoot(t, "verify", "my-svc", manifest, "--local-only", "--format", "json",
+		"--image", "sidecar=gcr.io/project/image:v2")
+	if err == nil {
+		t.Fatal("verify error = nil, want the unknown container to fail")
+	}
+	got := decodeVerifyJSON(t, stdout)
+	if got["ok"] != false {
+		t.Errorf("ok = %v, want false", got["ok"])
+	}
+	if errs, _ := got["errors"].([]any); len(errs) == 0 {
+		t.Errorf("errors = %v, want the failure reported in the JSON", got["errors"])
+	}
+}

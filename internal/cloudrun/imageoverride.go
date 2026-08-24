@@ -65,6 +65,14 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	if len(containers) == 0 {
 		return nil, fmt.Errorf("--image needs a container to apply to, but the manifest defines none")
 	}
+	// null のコンテナ (containers: の下に裸の "-" があるマニフェスト) は Validate が
+	// 弾くが、差し替えはその前に走る。ここで見ないと nil に代入して panic する。
+	// メッセージは Validate と揃える: --image の有無で違う説明が出ないようにする。
+	for i, c := range containers {
+		if c == nil {
+			return nil, fmt.Errorf("spec.template.spec.containers[%d] must not be null", i)
+		}
+	}
 
 	for _, o := range overrides {
 		target, err := findContainer(containers, o.Container)
