@@ -20,12 +20,7 @@ import (
 // 誤認してその 1 つ前まで戻してしまい、既知の良い版を飛び越すことになる。
 func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, error) {
 	if requested != "" {
-		for i := range revisions {
-			if revisions[i].Name == requested {
-				return &revisions[i], nil
-			}
-		}
-		return nil, fmt.Errorf("revision %q does not belong to this service", requested)
+		return FindRevision(revisions, requested)
 	}
 
 	// revisions は新しい順なので、最初に見つかった「割合を持つもの」が最新の配信版。
@@ -47,6 +42,18 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 	}
 	return nil, fmt.Errorf("no ready revision older than %q to roll back to; pass --revision to choose one",
 		revisions[current].Name)
+}
+
+// FindRevision は一覧から名前の一致するリビジョンを返す。見つからなければエラー。
+// 「このサービスのリビジョンか」の確認でもある: 打ち間違えた名前へトラフィックを
+// 振り向けると、どのリビジョンにも届かない配分ができてしまう。
+func FindRevision(revisions Revisions, name string) (*Revision, error) {
+	for i := range revisions {
+		if revisions[i].Name == name {
+			return &revisions[i], nil
+		}
+	}
+	return nil, fmt.Errorf("revision %q does not belong to this service", name)
 }
 
 // RollbackTarget は live サービスのトラフィックを revision へ 100% 振り向けた新しい

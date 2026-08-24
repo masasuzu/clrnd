@@ -6,8 +6,10 @@ This file provides shared guidance to Claude Code and OpenAI Codex when working 
 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, `wait`, `revisions`, `rollback`, `delete`, and `refresh` subcommands. All eleven
-are implemented, which is the whole ecspresso-shaped set Cloud Run's model allows. (`init` was formerly `load`; `load`
+`init`, `status`, `wait`, `revisions`, `rollback`, `traffic`, `delete`, and `refresh` subcommands.
+All twelve are implemented: the ecspresso-shaped set Cloud Run's model allows, plus `traffic`,
+which has no ecspresso counterpart because splitting traffic between revisions is Cloud Run's own
+model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
 
@@ -53,7 +55,7 @@ revision-name conflicts, asynchronous rollout failures).
   config); args fill service first, then manifest. Only the three commands that take **both** a
   service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy`.
   Every other command uses `MaximumNArgs(1)`: `init`, `status`,
-  `revisions`, `rollback`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
+  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
   only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
   `render` does not match the service name, so it calls `resolveManifestAt(args, 0)` rather than
   `resolveManifest`.
@@ -278,6 +280,27 @@ revision-name conflicts, asynchronous rollout failures).
   version. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
   its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
   `False`, so "the previous working version" is still findable.
+- `traffic` (in [internal/cloudrun/traffic.go](internal/cloudrun/traffic.go)) is the general form of
+  what `rollback` does: it rewrites **only** `spec.traffic`, so no revision is created.
+  `ShiftTrafficTarget` shallow-copies the Spec rather than mutating its argument, and
+  `ValidateTrafficRequest` is split out so `cmd` can reject a bad flag combination **before**
+  building the client — the same "local checks first" rule the rest of `cmd` follows.
+  A `--percent` below 100 puts the remainder on `largestShare`, the revision currently serving the
+  most, because that is the canary shape (stable 90% / new 10%) and it makes the result
+  predictable: always a two-way split. Ties break by name so the same input cannot pick a different
+  revision on the next run. When that revision **is** the target, `remainderRevision` refuses
+  instead of falling through to the runner-up: mid-canary (stable 90% / old 10%), promoting the
+  runner-up would drop the stable revision to `--percent` and hand 90% to a retired one. When
+  nothing is serving at all there is no honest answer either, so that errors too. `--to-latest` writes `latestRevision: true`
+  rather than a name, which is also the way out of a `rollback`: while traffic is pinned, `refresh`
+  refuses to run and only a `deploy` with a real change would move it.
+- **`deploy --no-traffic`** (`PlanOptions.KeepTraffic` → `keepTraffic`) replaces the desired
+  `spec.traffic` with `pinnedTraffic(current)` — the live split with `latestRevision` resolved to
+  concrete revision names. It cannot be expressed in a manifest: the new revision's name is not
+  known until after the write, and `latestRevision` would hand it all the traffic. The pinning
+  happens **before** `setResourceVersion` and the diff, so what is applied and what is shown are
+  the same definition. It refuses on a service that does not exist yet (the first revision has to
+  serve).
 - `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.
   Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
   `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
