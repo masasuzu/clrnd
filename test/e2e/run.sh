@@ -278,6 +278,14 @@ current_revision() {
     --format='value(status.latestReadyRevisionName)' 2>/dev/null
 }
 
+# created_revision は最後に *作られた* リビジョンを返す。トラフィックを受けない
+# リビジョン (deploy --no-traffic) は ready になるまで latestReadyRevisionName に
+# 現れないので、「今の deploy が作った版」を見るときはこちらを使う。
+created_revision() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format='value(status.latestCreatedRevisionName)' 2>/dev/null
+}
+
 # write_manifest <path> [env-value]
 write_manifest() {
   local path="$1" extra="${2:-}"
@@ -636,7 +644,9 @@ SERVING_BEFORE="$(serving_revision)"
 set_env_value "$D2/manifest.yaml" "no-traffic"
 run_cmd "$CLRND" deploy --no-traffic --auto-approve --timeout 120s
 assert_rc_zero "deploy --no-traffic succeeds"
-NEW_REV="$(current_revision)"
+# トラフィックを受けない版は ready 扱いになるまで latestReadyRevisionName に載らない。
+# ここで見たいのは「作られたか」なので latestCreatedRevisionName を使う。
+NEW_REV="$(created_revision)"
 if [ -n "$NEW_REV" ] && [ "$NEW_REV" != "$SERVING_BEFORE" ]; then
   ok "deploy --no-traffic creates a new revision"
 else
