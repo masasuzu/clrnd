@@ -488,3 +488,64 @@ func TestListRevisionsMarksPinnedRevisions(t *testing.T) {
 		}
 	}
 }
+
+// TestListRevisionsProtectsTheLatestWhileRollingOut は、spec.traffic が
+// latestRevision: true のときに、status にまだ割合が出ていない新しいリビジョンを
+// 保護することを確認する。
+//
+// latestRevision は名前を書かないので、spec の名指しだけを見ていると
+// 「これから配信する版」が Percent 0 / Pinned false のまま削除候補に入る。
+// ロールアウト中に --prune --keep 0 を撃つと消える経路。
+func TestListRevisionsProtectsTheLatestWhileRollingOut(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, &run.ListRevisionsResponse{Items: []*run.Revision{
+				revision("my-svc-00008-ghi", "img", "2026-08-23T11:00:00Z", "Unknown", "Deploying"),
+				revision("my-svc-00007-abc", "img", "2026-08-22T10:00:00Z", conditionTrue, ""),
+			}}
+		}
+		svc := readyService()
+		svc.Spec = &run.ServiceSpec{Traffic: []*run.TrafficTarget{{LatestRevision: true, Percent: 100}}}
+		// ロールアウト中: 新しい版は作られているが、配分はまだ反映されていない。
+		svc.Status = &run.ServiceStatus{
+			LatestCreatedRevisionName: "my-svc-00008-ghi",
+			LatestReadyRevisionName:   "my-svc-00007-abc",
+		}
+		return http.StatusOK, svc
+	})
+
+	got, err := c.ListRevisions(context.Background(), "my-svc")
+	if err != nil {
+		t.Fatalf("ListRevisions() error = %v", err)
+	}
+	for _, r := range got {
+		if !r.Pinned {
+			t.Errorf("%s: Pinned = false, want the latest revisions protected while latestRevision is in spec", r.Name)
+		}
+	}
+	if prunable := SelectPrunableRevisions(got, 0); len(prunable) != 0 {
+		t.Errorf("SelectPrunableRevisions(keep=0) = %+v, want nothing prunable mid-rollout", prunable)
+	}
+}
+
+// TestPinnedRevisionNamesIgnoresTheLatestWhenTrafficIsPinned は、トラフィックが名前で
+// 固定されている (rollback 後の) 状態では、最新の版を余計に保護しないことを確認する。
+// そこまで保護すると、rollback で置き去りになった版がいつまでも掃除できない。
+func TestPinnedRevisionNamesIgnoresTheLatestWhenTrafficIsPinned(t *testing.T) {
+	svc := &run.Service{
+		Spec: &run.ServiceSpec{
+			Traffic: []*run.TrafficTarget{{RevisionName: "my-svc-00006-def", Percent: 100}},
+		},
+		Status: &run.ServiceStatus{
+			LatestCreatedRevisionName: "my-svc-00008-ghi",
+			LatestReadyRevisionName:   "my-svc-00008-ghi",
+		},
+	}
+	got := pinnedRevisionNames(svc)
+	if !got["my-svc-00006-def"] {
+		t.Error("the revision named in spec.traffic is not protected")
+	}
+	if got["my-svc-00008-ghi"] {
+		t.Error("the latest revision is protected even though spec.traffic pins a name")
+	}
+}

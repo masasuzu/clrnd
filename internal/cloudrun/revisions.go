@@ -112,9 +112,29 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 	if svc == nil || svc.Spec == nil {
 		return out
 	}
+	followsLatest := false
 	for _, t := range svc.Spec.Traffic {
-		if t != nil && t.RevisionName != "" {
+		if t == nil {
+			continue
+		}
+		if t.RevisionName != "" {
 			out[t.RevisionName] = true
+		}
+		followsLatest = followsLatest || t.LatestRevision
+	}
+
+	// latestRevision: true は名前を書かないので、上のループでは何も保護されない。
+	// ロールアウト中は新しいリビジョンが一覧に現れていても status.traffic にはまだ
+	// 割合が出ないため、そのままだと --keep 0 で「これから配信する版」を消せてしまう。
+	// 宣言がどのリビジョンに解決されうるかを status から補う。
+	if followsLatest && svc.Status != nil {
+		for _, name := range []string{
+			svc.Status.LatestReadyRevisionName,   // いま latestRevision が指している版
+			svc.Status.LatestCreatedRevisionName, // 収束後に指すことになる版
+		} {
+			if name != "" {
+				out[name] = true
+			}
 		}
 	}
 	return out

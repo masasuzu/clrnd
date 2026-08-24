@@ -296,7 +296,12 @@ revision-name conflicts, asynchronous rollout failures).
   newest `keep` entries and then skips anything with traffic, a tag, or a name in `spec.traffic`
   (`Revision.Pinned`), and `Client.DeleteRevision` removes what is left. The spec side matters
   because `status.traffic` carries no share until a rollout settles — protecting only by the live
-  split would, mid-rollout, make every revision look idle. `keep` counts from the newest down
+  split would, mid-rollout, make every revision look idle. `latestRevision: true` needs its own
+  handling there: it names no revision, so `pinnedRevisionNames` falls back to
+  `status.latestCreatedRevisionName` and `latestReadyRevisionName` when it sees one. Without that,
+  a `--prune --keep 0` during a rollout deletes the revision that is about to take the traffic.
+  The fallback is deliberately conditional: once traffic is pinned by name (after a `rollback`),
+  the newest revision is genuinely idle and should stay prunable. `keep` counts from the newest down
   regardless of protection, so it is a "how far back do I look" number, not a promise about how
   many survive; the docs say so rather than claiming a fixed count. A negative `keep` is a CLI
   error rather than a silent clamp to 0 (a miscomputed `--keep "$N"` would otherwise delete

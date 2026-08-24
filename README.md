@@ -676,7 +676,9 @@ clrnd revisions --prune --keep 20
 **A revision is never deleted while it is serving traffic, named in `spec.traffic`, or carrying a
 tag**, however old it is — deleting the first would take the service down, and the last would
 remove a tag URL. `spec.traffic` is consulted as well as the live split because the status side
-does not show a share until a rollout settles.
+does not show a share until a rollout settles; when it says `latestRevision: true` — which names no
+revision at all — the newest created and newest ready revisions are protected too, so a prune that
+runs mid-rollout cannot delete the revision that is about to serve.
 
 `--keep` counts from the newest revision down, protected or not, so `--keep 20` means "everything
 older than the 20 newest is a candidate". Anything protected in that older range stays, which is
