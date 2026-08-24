@@ -525,3 +525,76 @@ func TestVerifyRemoteSkipsUnreferencedAPIs(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyRemoteReportsADestroyedSecretVersion は、破棄・無効化された版を実在しない
+// 版と同じ扱いにすることを確認する。Secret Manager は get ではこれらも 200 で返す
+// (読めなくなるのは access の方) ので、状態を見ないと素通りする。
+func TestVerifyRemoteReportsADestroyedSecretVersion(t *testing.T) {
+	for _, state := range []string{"DESTROYED", "DISABLED"} {
+		t.Run(state, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.Contains(r.URL.Path, "/versions/") {
+					_, _ = fmt.Fprintf(w, `{"name": %q, "state": %q}`, r.URL.Path, state)
+					return
+				}
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			t.Cleanup(srv.Close)
+			opts := []option.ClientOption{
+				option.WithEndpoint(srv.URL + "/"),
+				option.WithHTTPClient(srv.Client()),
+			}
+
+			res, err := VerifyRemote(context.Background(), testProject, testRegion,
+				[]byte(verifyManifest), opts...)
+			if err != nil {
+				t.Fatalf("VerifyRemote() error = %v", err)
+			}
+			if len(res.Missing) != 1 || !strings.Contains(res.Missing[0], state) {
+				t.Errorf("Missing = %v, want the %s version reported", res.Missing, state)
+			}
+		})
+	}
+}
+
+// TestVerifyRemoteReadsTheVersionFromTheSecretPath は、版が name に埋まっている形
+// (projects/<p>/secrets/<s>/versions/<v>) でもその版を引くことを確認する。
+// secretResourceName はこの形を明示的に扱うので、版の取り出しだけ食い違うと
+// 「常に latest を見ている」状態になる。
+func TestVerifyRemoteReadsTheVersionFromTheSecretPath(t *testing.T) {
+	manifest := strings.Replace(verifyManifest,
+		"              name: api-token\n              key: latest",
+		"              name: projects/other-project/secrets/api-token/versions/7", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	if _, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...); err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	got := pathsMatching(recorded(), "/versions/")
+	if len(got) != 1 || !strings.Contains(got[0], "/secrets/api-token/versions/7") {
+		t.Errorf("version lookups = %v, want the version from the secret path", got)
+	}
+}
+
+// TestVerifyRemoteHandlesADomainScopedCloudSQLProject は、ドメインスコープの
+// プロジェクト (example.com:my-project) を含む接続名を扱えることを確認する。
+// 左から 3 つに切ると、正当な値が毎回「形が違う」警告になる。
+func TestVerifyRemoteHandlesADomainScopedCloudSQLProject(t *testing.T) {
+	manifest := strings.Replace(verifyRefsManifest,
+		"cloudsql-instances: other-project:asia-northeast1:main-db",
+		"cloudsql-instances: example.com:other-project:asia-northeast1:main-db", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Unchecked) != 0 {
+		t.Errorf("Unchecked = %v, want the domain-scoped project accepted", res.Unchecked)
+	}
+	got := pathsMatching(recorded(), "/instances/")
+	if len(got) != 1 || !strings.Contains(got[0], "example.com:other-project") {
+		t.Errorf("Cloud SQL lookups = %v, want the domain-scoped project kept whole", got)
+	}
+}

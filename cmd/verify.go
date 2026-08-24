@@ -23,7 +23,9 @@ var verifyCmd = &cobra.Command{
 		"contains the fields required to deploy. This local check never needs the API.\n" +
 		"When --project/--region are resolvable (and --local-only is not set), it also checks\n" +
 		"via the API that referenced resources actually exist: the service account, the Secret\n" +
-		"Manager secrets, and container images hosted on Artifact Registry (*-docker.pkg.dev).\n" +
+		"Manager secrets and the versions they reference, the VPC connector and Cloud SQL\n" +
+		"instances named in the annotations, and container images hosted on Artifact Registry\n" +
+		"(*-docker.pkg.dev).\n" +
 		"Images on gcr.io, Docker Hub, or any other registry are not checked and not reported.\n" +
 		"A valid manifest produces no output on stdout; warnings (a pinned revision name, a check\n" +
 		"that could not be completed) go to stderr without failing the command.\n" +

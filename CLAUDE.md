@@ -108,8 +108,11 @@ revision-name conflicts, asynchronous rollout failures).
   It looks the service account up as `projects/-/serviceAccounts/<email>`: Cloud Run allows a
   service account from **another** project, and pinning the project would turn a valid setup into a
   404, which `RemoteCheck.Missing` reports as a hard failure.
-  Secret **versions** are checked separately from the secret (`secrets.versions.get`, with no
-  version meaning `latest`, as Cloud Run assumes) because a live secret whose referenced version was
+  Secret **versions** are checked separately from the secret (`secrets.versions.get`, with the
+  version coming from `key`, then from a `/versions/<v>` suffix on the name, then `latest`, as
+  Cloud Run assumes) — and the returned `state` is what decides, not just the 200: Secret Manager
+  hands back `DISABLED` and `DESTROYED` versions successfully (only *accessing* them fails), so a
+  check that stopped at the 404 would pass exactly the case it was added for because a live secret whose referenced version was
   destroyed fails only at deploy time — but the version lookup is skipped once the secret itself
   came back 404, since "no such secret" and "no such version of it" say the same thing twice and
   bury the real cause.
@@ -250,7 +253,8 @@ revision-name conflicts, asynchronous rollout failures).
   **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a half-set
   environment is skipped silently, so an ambient `CLOUDSDK_*` in CI does not produce noise on every
   run. `cmd/verify.go` still requires *both* project and region to resolve before running the
-  remote checks, even though `VerifyRemote` no longer takes the region: a half-configured target is
+  remote checks, even though the region only matters to one of them (resolving a short VPC
+  connector name): a half-configured target is
   more likely a mistake than an intent, and quietly reaching for whatever project is ambient is the
   worse failure.
 - `refresh` (in [internal/cloudrun/refresh.go](internal/cloudrun/refresh.go)) re-applies the **live**

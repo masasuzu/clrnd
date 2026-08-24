@@ -25,12 +25,14 @@ type RemoteCheck struct {
 
 // VerifyRemote はマニフェストが参照するリソースが実在するかを API で確認する。Validate
 // (ローカルなスキーマ検証) を補完するもので、サービスアカウント・Secret Manager の
-// シークレット・コンテナイメージの実在を ADC で確認する。404 (実在しない) のみを Missing
-// として返し、それ以外のエラー (クライアント初期化失敗・権限不足・API 無効など) は
-// Unchecked に振り分ける。
+// シークレットとその版・VPC コネクタ・Cloud SQL インスタンス・コンテナイメージの実在を
+// ADC で確認する。404 (実在しない) のみを Missing として返し、それ以外のエラー
+// (クライアント初期化失敗・権限不足・API 無効など) は Unchecked に振り分ける。
 //
-// Cloud Run のリージョンは受け取らない。イメージのロケーションは参照 (ホスト名) 自体に
-// 入っており、IAM も Secret Manager もリージョンを取らないので、使い道が無い。
+// region を使うのは VPC コネクタの短縮名を完全なリソース名に補うときだけ。コネクタは
+// リージョナルなリソースで、名前だけでは引けない。イメージのロケーションは参照 (ホスト名)
+// 自体に入っており、Cloud SQL のプロジェクトは接続名に入っており、IAM も Secret Manager も
+// リージョンを取らないので、それ以外に使い道は無い。
 //
 // opts は NewClient と同じくテストからフェイク API を差し込むための拡張点。
 func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
@@ -131,8 +133,12 @@ func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts
 		}
 		// 形が違うものは「無い」ではなく「確かめられない」。Cloud Run 側が受け取る
 		// 形式は決まっているが、誤判定して verify を落とすより黙らないほうを選ぶ。
-		parts := strings.Split(conn, ":")
-		if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+		//
+		// 右から切るのは、ドメインスコープのプロジェクト (example.com:my-project) が
+		// それ自体に ":" を含むため。左から 3 分割すると、正当な接続名が毎回
+		// 「形が違う」警告になる。
+		project, instance, ok := splitConnectionName(conn)
+		if !ok {
 			res.Unchecked = append(res.Unchecked,
 				fmt.Sprintf("Cloud SQL instance %q: not in <project>:<region>:<instance> form", conn))
 			continue
@@ -145,7 +151,7 @@ func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts
 			}
 			sqlSvc = created
 		}
-		if _, err := sqlSvc.Instances.Get(parts[0], parts[2]).Context(ctx).Do(); err != nil {
+		if _, err := sqlSvc.Instances.Get(project, instance).Context(ctx).Do(); err != nil {
 			if isNotFound(err) {
 				res.Missing = append(res.Missing, fmt.Sprintf("Cloud SQL instance %q does not exist", conn))
 				continue
@@ -153,6 +159,23 @@ func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts
 			res.Unchecked = append(res.Unchecked, fmt.Sprintf("Cloud SQL instance %q: %v", conn, err))
 		}
 	}
+}
+
+// splitConnectionName は <project>:<region>:<instance> をプロジェクトとインスタンスに
+// 分ける。ドメインスコープのプロジェクト (example.com:my-project:<region>:<instance>) も
+// 扱えるよう、右の 2 つを region / instance として切り、残りをプロジェクトとする。
+func splitConnectionName(conn string) (project, instance string, ok bool) {
+	parts := strings.Split(conn, ":")
+	if len(parts) < 3 {
+		return "", "", false
+	}
+	instance = parts[len(parts)-1]
+	region := parts[len(parts)-2]
+	project = strings.Join(parts[:len(parts)-2], ":")
+	if project == "" || region == "" || instance == "" {
+		return "", "", false
+	}
+	return project, instance, true
 }
 
 // checkSecrets はシークレットの実在と、参照している *バージョン* の実在を確認する。
@@ -191,7 +214,8 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secre
 		}
 		for _, version := range versions[s] {
 			versionName := fmt.Sprintf("%s/versions/%s", name, version)
-			if _, err := smSvc.Projects.Secrets.Versions.Get(versionName).Context(ctx).Do(); err != nil {
+			got, err := smSvc.Projects.Secrets.Versions.Get(versionName).Context(ctx).Do()
+			if err != nil {
 				if isNotFound(err) {
 					res.Missing = append(res.Missing,
 						fmt.Sprintf("secret %q has no version %q", s, version))
@@ -199,6 +223,14 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secre
 				}
 				res.Unchecked = append(res.Unchecked,
 					fmt.Sprintf("secret %q version %q: %v", s, version, err))
+				continue
+			}
+			// 破棄・無効化された版も get は 200 で返す (読めなくなるのは access の方)。
+			// 状態を見ないと「消えた版を指したまま素通り」になり、この検査を足した
+			// 意味がなくなる。
+			if state := got.State; state != "" && state != secretVersionEnabled {
+				res.Missing = append(res.Missing,
+					fmt.Sprintf("secret %q version %q is %s, so it cannot be read", s, version, state))
 			}
 		}
 	}
@@ -217,6 +249,10 @@ func versionsBySecret(svc *run.Service) map[string][]string {
 	}
 	return out
 }
+
+// secretVersionEnabled は読み出せるバージョンの状態。これ以外 (DISABLED / DESTROYED) は
+// 参照できないので、実在しない版と同じ扱いにする。
+const secretVersionEnabled = "ENABLED"
 
 // secretVersionRef はシークレットとそのバージョンの組。
 type secretVersionRef struct {
@@ -238,6 +274,12 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 	add := func(secret, version string) {
 		if secret == "" {
 			return
+		}
+		// 版は key に入るのが普通だが、name が
+		// projects/<p>/secrets/<s>/versions/<v> の形なら中に埋まっている
+		// (secretResourceName はこの形を明示的に扱う)。key が無ければそちらを使う。
+		if version == "" {
+			version = versionFromSecretPath(secret)
 		}
 		if version == "" {
 			version = "latest"
@@ -274,6 +316,16 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 		}
 	}
 	return out
+}
+
+// versionFromSecretPath は projects/<p>/secrets/<s>/versions/<v> 形式の名前から版を返す。
+// その形でなければ空文字列。
+func versionFromSecretPath(name string) string {
+	const marker = "/versions/"
+	if i := strings.Index(name, marker); i >= 0 {
+		return name[i+len(marker):]
+	}
+	return ""
 }
 
 // templateAnnotation は spec.template.metadata のアノテーションを nil セーフに読む。
