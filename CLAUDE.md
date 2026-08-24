@@ -418,6 +418,11 @@ revision-name conflicts, asynchronous rollout failures).
   stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
   `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
   not fail the command — stdout stays data-only, which is what the rule protects.
+  `verify --format json` does not break that rule: the result object is the data, so it goes to
+  stdout, while a failure is still returned as an error (cobra prints it to stderr) so the exit
+  code is unchanged. `finishVerify` is the single place that decides text-vs-JSON, which is why the
+  pinned-revision text lives in `pinnedRevisionWarning` (a value) rather than being printed where
+  it is discovered.
   Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`
   print the diff (or, for `delete`, what is about to go) to stdout as data and their status/prompt
   lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout stays data-only. This
@@ -425,7 +430,8 @@ revision-name conflicts, asynchronous rollout failures).
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
-  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout`, and `applyPlan` runs the one flow
+  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout` / `--interval`, and `applyPlan` runs
+  the one flow
   (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
   text differs per command. Do not re-implement that sequence.
   An **empty diff still waits** (for readiness only, with no generation to reach): a deploy that

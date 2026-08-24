@@ -163,17 +163,11 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 // テンプレートを変えた deploy が必ず失敗する。verify と deploy で同じ警告を出す
 // (deploy だけを回す CI でも、不透明な API エラーの前に理由が分かるように)。
 func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
-	revision, err := cloudrun.RevisionName(manifest)
-	if err != nil {
+	warning, err := pinnedRevisionWarning(manifest)
+	if err != nil || warning == "" {
 		return err
 	}
-	if revision == "" {
-		return nil
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"warning: spec.template.metadata.name pins the revision name to %q; "+
-			"Cloud Run rejects a revision name that already exists with a different "+
-			"configuration, so a later deploy that changes the template will fail\n", revision)
+	fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning)
 	return nil
 }
 
@@ -191,6 +185,22 @@ func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
 		"warning: --no-traffic replaces the spec.traffic written in the manifest with the "+
 			"split the service is serving now")
 	return nil
+}
+
+// pinnedRevisionWarning は警告の文言そのものを返す (固定していなければ空文字列)。
+// verify の --format json は警告も構造化して返すので、出力先を決め打ちにしない。
+func pinnedRevisionWarning(manifest []byte) (string, error) {
+	revision, err := cloudrun.RevisionName(manifest)
+	if err != nil {
+		return "", err
+	}
+	if revision == "" {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"spec.template.metadata.name pins the revision name to %q; "+
+			"Cloud Run rejects a revision name that already exists with a different "+
+			"configuration, so a later deploy that changes the template will fail", revision), nil
 }
 
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
