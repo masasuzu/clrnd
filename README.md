@@ -264,7 +264,8 @@ express. These live next to it and are deliberately out of scope:
   unsupported, so this is the place that says it.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
-  and `rollback` preserves existing tags at 0%, but there is no command to add or move one.
+  and `rollback` / `traffic` preserve existing tags at 0%, but there is no command to add or move
+  one. Traffic *percentages* are managed — see [`traffic`](#traffic).
 
 Two smaller edges worth knowing: a mistyped `--region` becomes a DNS failure rather than "unknown
 region", because the region goes straight into the API endpoint; and the diff is a plain unified
@@ -289,6 +290,7 @@ clrnd [command]
 | `wait`   | Wait until a service is ready.                            |
 | `revisions` | List the revisions of a service.                       |
 | `rollback` | Send traffic back to an earlier revision.                |
+| `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
 
@@ -464,8 +466,23 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
+| `--no-traffic`   | Create the revision without sending traffic to it; the current split is kept. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+
+**`--no-traffic` is how you deploy before deciding to serve it.** Without it, a service whose
+manifest says nothing about `spec.traffic` sends everything to the new revision the moment it is
+ready. With it, the split you are serving now is pinned to those revisions by name, so the new
+revision starts at 0% and you move traffic over afterwards:
+
+```sh
+clrnd deploy --no-traffic
+clrnd traffic --to-latest --percent 10    # canary
+clrnd traffic --to-latest                 # all of it
+```
+
+It needs an existing service (there is nothing to keep traffic on otherwise), and it replaces any
+`spec.traffic` written in the manifest — clrnd says so on stderr when the manifest has one.
 
 Cloud Run fills in many fields on its own, so a hand-written minimal manifest would otherwise keep
 showing them as a difference. The diff therefore asks Cloud Run to resolve those first (via a dry
@@ -732,6 +749,41 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 A `--revision` that is not `Ready` is a warning on stderr, not an error: the rollback goes ahead.
 Sending traffic to a revision that failed is sometimes what you want (to reproduce a failure), and
 Cloud Run is the authority on whether it can serve.
+
+### traffic
+
+Change how traffic is split between revisions. Only `spec.traffic` changes: no new revision is
+created, and traffic tags are kept (pinned at 0%), the same way `rollback` treats them.
+
+```sh
+# canary: 10% to a revision, the rest stays where it is
+clrnd traffic <service> --to <revision> --percent 10
+
+# all of it, then back to following the newest revision
+clrnd traffic <service> --to <revision>
+clrnd traffic <service> --to-latest
+```
+
+`--percent` below 100 leaves the remainder on the revision **currently serving the most** traffic,
+which is the canary shape (stable 90% / new 10%). If nothing else is serving, there is no sensible
+place for the remainder and the command says so rather than guessing.
+
+`--to-latest` stops pinning the split to a revision name: traffic follows whatever revision is
+newest, now and after the next deploy. This is how you undo a `rollback` — while traffic is pinned,
+`refresh` refuses to run (a new revision would serve nothing) and only a `deploy` that changes
+something would move it.
+
+| Flag             | Description                                          |
+| ---------------- | ---------------------------------------------------- |
+| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
+| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--to`           | Revision to send traffic to.                         |
+| `--to-latest`    | Send traffic to the latest revision, and keep following it. |
+| `--percent`      | Share of the traffic to send (1-100, default `100`). |
+| `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
+| `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
+| `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`). |
 
 ### wait
 

@@ -13,6 +13,7 @@ var (
 	deployRegion     string
 	deployTfstate    []string
 	deployNoDefaults bool
+	deployNoTraffic  bool
 	deployApply      applyOptions
 )
 
@@ -27,6 +28,9 @@ var deployCmd = &cobra.Command{
 		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
 		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
 		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
+		"With --no-traffic the new revision is created without receiving any traffic: the current\n" +
+		"split is pinned to the revisions serving it now, so you can move traffic over afterwards\n" +
+		"with 'clrnd traffic'.\n" +
 		"service and manifest may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(2),
 	RunE: runDeploy,
@@ -37,6 +41,8 @@ func init() {
 	addManifestFlags(deployCmd, &deployTfstate)
 	addApplyFlags(deployCmd, &deployApply)
 	addServerDefaultsFlag(deployCmd, &deployNoDefaults)
+	deployCmd.Flags().BoolVar(&deployNoTraffic, "no-traffic", false,
+		"create the revision without sending traffic to it (keep the current split)")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -76,7 +82,18 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{ResolveDefaults: !deployNoDefaults})
+	// --no-traffic はマニフェストの spec.traffic を無視して現在の配分で置き換える。
+	// 黙って上書きすると「書いたのに効かない」になるので、書いてある場合は言う。
+	if deployNoTraffic {
+		if err := warnManifestTraffic(cmd, manifest); err != nil {
+			return err
+		}
+	}
+
+	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{
+		ResolveDefaults: !deployNoDefaults,
+		KeepTraffic:     deployNoTraffic,
+	})
 	if err != nil {
 		return err
 	}

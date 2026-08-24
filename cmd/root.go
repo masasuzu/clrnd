@@ -63,6 +63,7 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(revisionsCmd)
 	rootCmd.AddCommand(rollbackCmd)
+	rootCmd.AddCommand(trafficCmd)
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(refreshCmd)
 	rootCmd.AddCommand(waitCmd)

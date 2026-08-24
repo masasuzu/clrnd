@@ -89,6 +89,12 @@ type PlanOptions struct {
 	// 既に既定値が入っているので解決を必要としない)。
 	// 適用に送るのは常に元の desired で、サーバが埋めた値を書き戻すことはしない。
 	ResolveDefaults bool
+
+	// KeepTraffic が true なら、いまの配分をリビジョン名で固定してから適用する
+	// (deploy --no-traffic)。マニフェストに spec.traffic が無いと Cloud Run は
+	// latestRevision へ全量を送るため、そのままではデプロイした瞬間に新しい
+	// リビジョンが本番を受け取ってしまう。段階的に移す前提のときはこれを立てる。
+	KeepTraffic bool
 }
 
 // Plan はマニフェストを検証し、live サービスとの差分を算出する (変更はしない)。
@@ -112,17 +118,28 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 	}
 	c.setNamespace(desired)
 
-	plan := &DeployPlan{Service: service, client: c, desired: desired}
-
+	create := false
 	current, getErr := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
 	if getErr != nil {
 		if !isNotFound(getErr) {
 			return nil, fmt.Errorf("failed to check service %q: %w", service, getErr)
 		}
 		// 未存在: 新規作成。current 側は空として diff を取る。
-		plan.Create = true
+		create = true
 		current = nil
 	}
+
+	// トラフィックの固定は resourceVersion を載せる前・差分を取る前に済ませる。
+	// 適用するのも差分に出るのも、固定した後の定義でなければならない。
+	if opts.KeepTraffic {
+		fixed, err := keepTraffic(desired, current, service)
+		if err != nil {
+			return nil, err
+		}
+		desired = fixed
+	}
+
+	plan := &DeployPlan{Service: service, client: c, desired: desired, Create: create}
 
 	// 更新の場合は、いま読んだ状態の resourceVersion を desired に載せて
 	// compare-and-swap にする。載せずに送ると Cloud Run は無条件の上書きとして
@@ -136,7 +153,7 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 	// 元のままにしておき、サーバが埋めた値を書き戻さない。
 	compared := desired
 	if opts.ResolveDefaults {
-		resolved, err := c.resolveDefaults(ctx, service, desired, plan.Create)
+		resolved, err := c.resolveDefaults(ctx, service, desired, create)
 		if err != nil {
 			return nil, err
 		}
@@ -187,6 +204,31 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 		}
 	}
 	return compareServices(current, desired, "live/"+service, desiredLabel)
+}
+
+// keepTraffic は desired のトラフィック配分を、live サービスのいまの配分で置き換える。
+// 引数は書き換えず、Spec だけを浅くコピーした新しい定義を返す。
+//
+// 「新しいリビジョンにトラフィックを向けない」は現在の配分を名前で固定することでしか
+// 表現できない。マニフェスト側には書けない: リビジョン名は適用してみるまで分からず、
+// latestRevision のままでは新しい版が全量を受け取ってしまう。
+func keepTraffic(desired, current *run.Service, service string) (*run.Service, error) {
+	if current == nil {
+		return nil, fmt.Errorf("cannot keep traffic: service %q does not exist yet, so the "+
+			"first revision has to receive it", service)
+	}
+	pinned := pinnedTraffic(current)
+	if len(pinned) == 0 {
+		return nil, fmt.Errorf("cannot keep traffic: service %q is not serving any revision yet", service)
+	}
+	if desired.Spec == nil {
+		return nil, errors.New("the manifest has no spec to update")
+	}
+	spec := *desired.Spec
+	spec.Traffic = pinned
+	out := *desired
+	out.Spec = &spec
+	return &out, nil
 }
 
 // setNamespace は送信先プロジェクトと body の namespace を一致させる。

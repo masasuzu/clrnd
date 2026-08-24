@@ -177,6 +177,22 @@ func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
 	return nil
 }
 
+// warnManifestTraffic は --no-traffic がマニフェストの spec.traffic を上書きすることを
+// stderr へ警告する。書いていない場合は何もしない。
+func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
+	pinned, err := cloudrun.HasTraffic(manifest)
+	if err != nil {
+		return err
+	}
+	if !pinned {
+		return nil
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(),
+		"warning: --no-traffic replaces the spec.traffic written in the manifest with the "+
+			"split the service is serving now")
+	return nil
+}
+
 // confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
 // stdin の読み取りは中断できないため goroutine に逃がし、ctx が cancel されたら
 // (Ctrl-C など) 待たずに戻る。そうしないとプロンプト表示中は Ctrl-C が効かない。

@@ -278,6 +278,25 @@ revision-name conflicts, asynchronous rollout failures).
   version. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
   its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
   `False`, so "the previous working version" is still findable.
+- `traffic` (in [internal/cloudrun/traffic.go](internal/cloudrun/traffic.go)) is the general form of
+  what `rollback` does: it rewrites **only** `spec.traffic`, so no revision is created.
+  `ShiftTrafficTarget` shallow-copies the Spec rather than mutating its argument, and
+  `ValidateTrafficRequest` is split out so `cmd` can reject a bad flag combination **before**
+  building the client — the same "local checks first" rule the rest of `cmd` follows.
+  A `--percent` below 100 puts the remainder on `largestShareExcept`, the revision currently
+  serving the most **other than the target**, because that is the canary shape (stable 90% / new
+  10%) and it makes the result predictable: always a two-way split. Ties break by name so the same
+  input cannot pick a different revision on the next run. When nothing else is serving there is no
+  honest answer, so it errors instead of guessing. `--to-latest` writes `latestRevision: true`
+  rather than a name, which is also the way out of a `rollback`: while traffic is pinned, `refresh`
+  refuses to run and only a `deploy` with a real change would move it.
+- **`deploy --no-traffic`** (`PlanOptions.KeepTraffic` → `keepTraffic`) replaces the desired
+  `spec.traffic` with `pinnedTraffic(current)` — the live split with `latestRevision` resolved to
+  concrete revision names. It cannot be expressed in a manifest: the new revision's name is not
+  known until after the write, and `latestRevision` would hand it all the traffic. The pinning
+  happens **before** `setResourceVersion` and the diff, so what is applied and what is shown are
+  the same definition. It refuses on a service that does not exist yet (the first revision has to
+  serve).
 - `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.
   Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
   `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
