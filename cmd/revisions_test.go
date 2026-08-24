@@ -125,3 +125,56 @@ func TestRevisionsWithoutPruneStaysReadOnly(t *testing.T) {
 		t.Errorf("deleted = %v, want listing to delete nothing", got)
 	}
 }
+
+// TestRevisionsPruneFlagsNeedPrune は、--prune 無しで掃除用のフラグを受け取ったときに
+// 黙って無視しないことを確認する。無視すると「掃除したつもりで一覧を見ただけ」の実行が
+// 成功して終わる。
+func TestRevisionsPruneFlagsNeedPrune(t *testing.T) {
+	deleted := startPruneAPI(t)
+
+	for _, flag := range [][]string{{"--keep", "5"}, {"--auto-approve"}, {"--dry-run"}} {
+		args := append([]string{"revisions", "my-svc"}, flag...)
+		args = append(args, "--project", "test-project", "--region", "asia-northeast1")
+		_, _, err := executeRoot(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "only applies with --prune") {
+			t.Errorf("revisions %v error = %v, want it to reject the flag without --prune", flag, err)
+		}
+	}
+	if got := deleted(); len(got) != 0 {
+		t.Errorf("deleted = %v, want nothing deleted", got)
+	}
+}
+
+// TestRevisionsPruneRejectsANegativeKeep は、負の保持数を 0 に丸めないことを確認する。
+// 丸めると、計算を誤った CI が保護対象以外を全部消してしまう。
+func TestRevisionsPruneRejectsANegativeKeep(t *testing.T) {
+	deleted := startPruneAPI(t)
+
+	_, _, err := executeRoot(t, "revisions", "my-svc", "--prune", "--keep", "-1", "--auto-approve",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil || !strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("revisions --keep -1 error = %v, want it rejected", err)
+	}
+	if got := deleted(); len(got) != 0 {
+		t.Errorf("deleted = %v, want nothing deleted", got)
+	}
+}
+
+// TestRevisionsPruneJSONWithNothingToDo は、対象が無い日でも JSON が空にならないことを
+// 確認する。`| jq 'length'` のような使い方が、その日だけ壊れないように。
+func TestRevisionsPruneJSONWithNothingToDo(t *testing.T) {
+	startPruneAPI(t)
+
+	stdout, stderr, err := executeRoot(t, "revisions", "my-svc", "--prune", "--keep", "100",
+		"--dry-run", "--format", "json",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("revisions --prune error = %v", err)
+	}
+	if strings.TrimSpace(stdout) != "[]" {
+		t.Errorf("stdout = %q, want an empty JSON array", stdout)
+	}
+	if !strings.Contains(stderr, "Nothing to prune") {
+		t.Errorf("stderr = %q, want the status line", stderr)
+	}
+}

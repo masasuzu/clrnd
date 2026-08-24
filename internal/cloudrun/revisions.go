@@ -43,6 +43,10 @@ type Revision struct {
 	Percent int64 `json:"percent"`
 	// Tags はこのリビジョンに付いたトラフィックタグ。
 	Tags []string `json:"tags,omitempty"`
+	// Pinned は spec.traffic がこのリビジョンを名指ししているか。status.traffic に
+	// 割合が現れる前 (ロールアウト中や、まだ解決されていないエントリがある間) でも
+	// 保護できるようにするための印。表示用の情報ではないので JSON には出さない。
+	Pinned bool `json:"-"`
 }
 
 // IsReady はリビジョンが Ready かを返す。トラフィックを失った古いリビジョンも
@@ -97,12 +101,28 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 		token = resp.Metadata.Continue
 	}
 
-	return newRevisions(items, newStatus(svc)), nil
+	return newRevisions(items, newStatus(svc), pinnedRevisionNames(svc)), nil
+}
+
+// pinnedRevisionNames は spec.traffic が名指ししているリビジョンを集める。
+// status 側は配信が落ち着くまで名前が入らないことがあるので、削除の保護は宣言 (spec)
+// も見て決める。
+func pinnedRevisionNames(svc *run.Service) map[string]bool {
+	out := make(map[string]bool)
+	if svc == nil || svc.Spec == nil {
+		return out
+	}
+	for _, t := range svc.Spec.Traffic {
+		if t != nil && t.RevisionName != "" {
+			out[t.RevisionName] = true
+		}
+	}
+	return out
 }
 
 // newRevisions は API のレスポンスを Revisions に変換する。API アクセスを伴わない
 // 純粋な処理なので、整形や並び順の検証はこの関数だけで完結できる。
-func newRevisions(items []*run.Revision, status *Status) Revisions {
+func newRevisions(items []*run.Revision, status *Status, pinned map[string]bool) Revisions {
 	traffic := trafficByRevision(status)
 
 	out := make(Revisions, 0, len(items))
@@ -126,6 +146,7 @@ func newRevisions(items []*run.Revision, status *Status) Revisions {
 			r.Percent = t.percent
 			r.Tags = t.tags
 		}
+		r.Pinned = pinned[r.Name]
 		out = append(out, r)
 	}
 
@@ -265,8 +286,13 @@ func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
 //   - 新しい方から keep 件はそのまま残す (保護されているかどうかに関わらず数える。
 //     数え方を変えると、--keep 3 と指定したのに 4 件残ったり、保護されたリビジョンの
 //     数だけ古い版が余計に消えたりして、指定した数と結果が一致しなくなる)
-//   - それより古くても、トラフィックが向いているものとタグが付いているものは残す。
-//     配信中の版を消せばサービスが落ちるし、タグは URL の入口なので消せば経路が消える
+//   - それより古くても、トラフィックが向いているもの、spec.traffic が名指ししているもの、
+//     タグが付いているものは残す。配信中の版を消せばサービスが落ちるし、タグは URL の
+//     入口なので消せば経路が消える。spec も見るのは、status 側の割合はロールアウトが
+//     落ち着くまで現れないことがあり、その隙に「どれも 0%」に見えてしまうため
+//
+// keep が負の場合は呼び出し側で弾くこと (ここで 0 に丸めると、計算を誤った CI が
+// 保護対象以外を全部消してしまう)。
 func SelectPrunableRevisions(revisions Revisions, keep int) Revisions {
 	if keep < 0 {
 		keep = 0
@@ -276,7 +302,7 @@ func SelectPrunableRevisions(revisions Revisions, keep int) Revisions {
 		if i < keep {
 			continue
 		}
-		if r.Percent > 0 || len(r.Tags) > 0 {
+		if r.Percent > 0 || r.Pinned || len(r.Tags) > 0 {
 			continue
 		}
 		out = append(out, r)

@@ -57,6 +57,10 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 	if err := validateFormat(revisionsFormat); err != nil {
 		return err
 	}
+	// 掃除に関わるフラグの整合はクライアント生成 (= ADC 探索) より先に見る。
+	if err := validatePruneFlags(cmd); err != nil {
+		return err
+	}
 
 	client, err := newCloudRunClient(cmd, revisionsProject, revisionsRegion)
 	if err != nil {
@@ -73,19 +77,45 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 	return writeFormatted(cmd, revisionsFormat, revisions, revisions.Text())
 }
 
+// validatePruneFlags は掃除に関わるフラグの組み合わせを検証する。
+//
+// --prune 無しで --keep や --auto-approve を受け取って黙って無視すると、
+// 「掃除したつもりで一覧を見ただけ」の実行が成功として終わる。負の --keep を
+// 0 に丸めるのも同じ種類の事故 (保護対象以外を全部消す) なので、ここで断る。
+func validatePruneFlags(cmd *cobra.Command) error {
+	if !revisionsPrune {
+		for _, name := range []string{"keep", "auto-approve", "dry-run"} {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--%s only applies with --prune", name)
+			}
+		}
+		return nil
+	}
+	if revisionsKeep < 0 {
+		return fmt.Errorf("--keep must not be negative, got %d", revisionsKeep)
+	}
+	return nil
+}
+
 // pruneRevisions は古いリビジョンを削除する。消す対象は stdout にデータとして出し
 // (--format json でも読める)、確認と結果は stderr に出す。
 func pruneRevisions(cmd *cobra.Command, client *cloudrun.Client, revisions cloudrun.Revisions) error {
 	targets := cloudrun.SelectPrunableRevisions(revisions, revisionsKeep)
-	if len(targets) == 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Nothing to prune.")
-		return nil
+	if targets == nil {
+		// JSON で null ではなく [] を出す (一覧の経路と同じ形にする)。
+		targets = cloudrun.Revisions{}
 	}
 
 	// 何を消すのかを先に見せる。件数だけでなく中身を出すのは、配信中やタグ付きの
 	// リビジョンが混ざっていないことを目で確かめられるようにするため。
+	// 対象が無い場合も出力は書く: --format json の利用者にとって、対象ゼロの日だけ
+	// stdout が空になると `| jq 'length'` のような使い方が壊れる。
 	if err := writeFormatted(cmd, revisionsFormat, targets, targets.Text()); err != nil {
 		return err
+	}
+	if len(targets) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Nothing to prune.")
+		return nil
 	}
 	// --dry-run は何も消さないので確認を求めない (delete と同じ方針)。
 	if revisionsDryRun {

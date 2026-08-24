@@ -63,14 +63,15 @@ gcloud auth application-default login
 | `render` | none — it never contacts the API |
 | `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get`, `secretmanager.secrets.get`, and `artifactregistry.tags.get` / `artifactregistry.dockerimages.get` |
 | `status`, `wait`, `init` | `run.services.get` |
-| `revisions` | `run.services.get`, `run.revisions.list` |
+| `revisions` | `run.services.get`, `run.revisions.list`, plus `run.revisions.delete` for `--prune` |
 | `diff` | `run.services.get` **and `run.services.update`** — plus `run.services.create` for a service that does not exist yet. See below |
 | `deploy` | `run.services.get`, `run.services.update`, and `run.services.create` for a service that does not exist yet |
 | `rollback` | `run.services.get`, `run.revisions.list`, `run.services.update` |
 | `refresh` | `run.services.get`, `run.services.update` |
 | `delete` | `run.services.get`, `run.services.delete` |
 
-`roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest. Deploying a
+`roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
+`revisions --prune`, which is the one part of `revisions` that writes. Deploying a
 service that runs as a service account also needs `iam.serviceAccounts.actAs` on that service
 account (`roles/iam.serviceAccountUser`) — a Cloud Run requirement, not a clrnd one.
 
@@ -672,12 +673,19 @@ clrnd revisions --prune --keep 20 --dry-run   # see what would go
 clrnd revisions --prune --keep 20
 ```
 
-**A revision serving traffic or carrying a tag is never deleted**, however old it is — deleting the
-first would take the service down, and the second would remove a tag URL. The `--keep` count
-includes those protected revisions, so `--keep 20` always leaves 20 behind rather than 20 plus
-however many happened to be protected. What is about to go is printed first (as data on stdout, so
-`--format json` works here too), and the confirmation follows the same rule as `delete`: without a
-terminal, clrnd refuses unless `--auto-approve` is given.
+**A revision is never deleted while it is serving traffic, named in `spec.traffic`, or carrying a
+tag**, however old it is — deleting the first would take the service down, and the last would
+remove a tag URL. `spec.traffic` is consulted as well as the live split because the status side
+does not show a share until a rollout settles.
+
+`--keep` counts from the newest revision down, protected or not, so `--keep 20` means "everything
+older than the 20 newest is a candidate". Anything protected in that older range stays, which is
+why the number left behind can be larger than `--keep`.
+
+What is about to go is printed first (as data on stdout, so `--format json` works here too — an
+empty array when there is nothing to do), and the confirmation follows the same rule as `delete`:
+without a terminal, clrnd refuses unless `--auto-approve` is given. `--keep`, `--dry-run` and
+`--auto-approve` are rejected without `--prune` rather than quietly ignored.
 
 Revisions are ordered newest-first by `creationTimestamp`, falling back to the revision name when a
 timestamp cannot be parsed. That fallback is a plain descending string comparison: Cloud Run's own

@@ -41,7 +41,7 @@ func TestNewRevisions(t *testing.T) {
 		TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 10},
 	)
 
-	got := newRevisions(items, status)
+	got := newRevisions(items, status, nil)
 	if len(got) != 2 {
 		t.Fatalf("newRevisions() = %+v, want 2 entries", got)
 	}
@@ -66,7 +66,7 @@ func TestNewRevisionsMergesTrafficEntries(t *testing.T) {
 		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 0, Tag: "previous"},
 	)
 
-	got := newRevisions(items, status)
+	got := newRevisions(items, status, nil)
 	if got[0].Percent != 100 {
 		t.Errorf("Percent = %d, want 100 (entries must be summed)", got[0].Percent)
 	}
@@ -84,7 +84,7 @@ func TestNewRevisionsKeepsEveryContainerImage(t *testing.T) {
 		&run.Container{Image: ""}, // イメージの無いコンテナは飛ばす
 		&run.Container{Image: "gcr.io/p/proxy:v1"})
 
-	got := newRevisions([]*run.Revision{item}, nil)
+	got := newRevisions([]*run.Revision{item}, nil, nil)
 	want := []string{"gcr.io/p/app:v2", "gcr.io/p/proxy:v1"}
 	if strings.Join(got[0].Images, ",") != strings.Join(want, ",") {
 		t.Errorf("Images = %v, want %v in spec order", got[0].Images, want)
@@ -106,7 +106,7 @@ func TestNewRevisionsIsNilSafe(t *testing.T) {
 		{},                                     // metadata も spec も無い
 		{Metadata: &run.ObjectMeta{Name: "x"}}, // spec が無い
 	}
-	got := newRevisions(items, nil)
+	got := newRevisions(items, nil, nil)
 	if len(got) != 2 {
 		t.Fatalf("newRevisions() = %+v, want the nil entry skipped", got)
 	}
@@ -124,7 +124,7 @@ func TestSortRevisionsFallsBackToTheName(t *testing.T) {
 		revision("my-svc-00008-ghi", "img", "", conditionTrue, ""),
 		revision("my-svc-00007-abc", "img", "", conditionTrue, ""),
 	}
-	got := newRevisions(items, nil)
+	got := newRevisions(items, nil, nil)
 	want := []string{"my-svc-00008-ghi", "my-svc-00007-abc", "my-svc-00006-def"}
 	for i, name := range want {
 		if got[i].Name != name {
@@ -141,7 +141,7 @@ func TestSortRevisionsHandlesFractionalSeconds(t *testing.T) {
 		revision("older", "img", "2026-08-22T17:51:38.143198Z", conditionTrue, ""),
 		revision("newer", "img", "2026-08-22T17:51:38.999999Z", conditionTrue, ""),
 	}
-	got := newRevisions(items, nil)
+	got := newRevisions(items, nil, nil)
 	if got[0].Name != "newer" || got[1].Name != "older" {
 		t.Errorf("order = %q, %q, want newest first", got[0].Name, got[1].Name)
 	}
@@ -152,7 +152,7 @@ func TestSortRevisionsPutsParsableTimestampsFirst(t *testing.T) {
 		revision("no-timestamp", "img", "", conditionTrue, ""),
 		revision("with-timestamp", "img", "2026-08-22T10:00:00Z", conditionTrue, ""),
 	}
-	got := newRevisions(items, nil)
+	got := newRevisions(items, nil, nil)
 	if got[0].Name != "with-timestamp" {
 		t.Errorf("order = %q first, want the revision with a timestamp", got[0].Name)
 	}
@@ -171,7 +171,7 @@ func TestRevisionsText(t *testing.T) {
 my-svc-00007-abc  True                    100%     live  2026-08-22T10:00:00Z  gcr.io/p/i:v2
 my-svc-00006-def  False (RevisionFailed)  0%       -     2026-08-21T09:00:00Z  gcr.io/p/i:v1
 `
-	if got := newRevisions(items, status).Text(); got != want {
+	if got := newRevisions(items, status, nil).Text(); got != want {
 		t.Errorf("Text() mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
@@ -438,5 +438,53 @@ func TestClientDeleteRevisionReportsTheFailure(t *testing.T) {
 	err := c.DeleteRevision(context.Background(), "my-svc-00002-pqr")
 	if err == nil || !strings.Contains(err.Error(), "my-svc-00002-pqr") {
 		t.Errorf("DeleteRevision() error = %v, want it to name the revision", err)
+	}
+}
+
+// TestSelectPrunableRevisionsKeepsPinnedRevisions は、spec.traffic が名指ししている
+// リビジョンを (status に割合が出ていなくても) 残すことを確認する。ロールアウト中は
+// status 側の割合が現れないことがあり、そこだけを見ると「どれも 0%」に見えてしまう。
+func TestSelectPrunableRevisionsKeepsPinnedRevisions(t *testing.T) {
+	all := Revisions{
+		{Name: "my-svc-00004-abc"},
+		{Name: "my-svc-00003-def", Pinned: true}, // spec.traffic が名指し、status はまだ 0%
+		{Name: "my-svc-00002-ghi"},
+	}
+	var got []string
+	for _, r := range SelectPrunableRevisions(all, 1) {
+		got = append(got, r.Name)
+	}
+	if strings.Join(got, ",") != "my-svc-00002-ghi" {
+		t.Errorf("SelectPrunableRevisions() = %v, want the pinned revision kept", got)
+	}
+}
+
+// TestListRevisionsMarksPinnedRevisions は、spec.traffic の名指しが Pinned として
+// 拾われることを確認する。
+func TestListRevisionsMarksPinnedRevisions(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if strings.HasSuffix(r.URL.Path, "/revisions") {
+			return http.StatusOK, &run.ListRevisionsResponse{Items: []*run.Revision{
+				revision("my-svc-00007-abc", "img", "2026-08-22T10:00:00Z", conditionTrue, ""),
+				revision("my-svc-00006-def", "img", "2026-08-21T09:00:00Z", conditionTrue, ""),
+			}}
+		}
+		svc := readyService()
+		svc.Spec = &run.ServiceSpec{
+			Traffic: []*run.TrafficTarget{{RevisionName: "my-svc-00006-def", Percent: 100}},
+		}
+		svc.Status = &run.ServiceStatus{} // まだ配分が反映されていない状態
+		return http.StatusOK, svc
+	})
+
+	got, err := c.ListRevisions(context.Background(), "my-svc")
+	if err != nil {
+		t.Fatalf("ListRevisions() error = %v", err)
+	}
+	for _, r := range got {
+		want := r.Name == "my-svc-00006-def"
+		if r.Pinned != want {
+			t.Errorf("%s: Pinned = %v, want %v", r.Name, r.Pinned, want)
+		}
 	}
 }
