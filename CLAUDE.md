@@ -418,6 +418,11 @@ revision-name conflicts, asynchronous rollout failures).
   stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
   `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
   not fail the command — stdout stays data-only, which is what the rule protects.
+  `verify --format json` does not break that rule: the result object is the data, so it goes to
+  stdout, while a failure is still returned as an error (cobra prints it to stderr) so the exit
+  code is unchanged. `finishVerify` is the single place that decides text-vs-JSON, which is why the
+  pinned-revision text lives in `pinnedRevisionWarning` (a value) rather than being printed where
+  it is discovered.
   Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`
   print the diff (or, for `delete`, what is about to go) to stdout as data and their status/prompt
   lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout stays data-only. This
@@ -425,7 +430,8 @@ revision-name conflicts, asynchronous rollout failures).
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
-  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout`, and `applyPlan` runs the one flow
+  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout` / `--interval`, and `applyPlan` runs
+  the one flow
   (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
   text differs per command. Do not re-implement that sequence.
   An **empty diff still waits** (for readiness only, with no generation to reach): a deploy that
@@ -487,6 +493,17 @@ revision-name conflicts, asynchronous rollout failures).
   the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
   it) requires the tag's commit to be an ancestor of `main` — passing checks alone would otherwise
   let a branch that never reached main produce a signed, attested release.
+- `--image` (`ApplyImageOverrides` in
+  [internal/cloudrun/imageoverride.go](internal/cloudrun/imageoverride.go)) is the **one** field a
+  flag may override, because the image tag is the one part of a manifest that legitimately changes
+  on every deploy. It is registered by `addImageFlag` on `verify` / `diff` / `deploy` — the three
+  commands whose answer must describe the same thing — but **not** on `render`, which prints the
+  template expansion without parsing it and would have to round-trip the YAML to apply an override.
+  With no `--image` the manifest bytes are returned untouched, so nothing is reformatted when the
+  flag is unused. The container name may be omitted only when there is exactly one container: with
+  a sidecar, silently rewriting the first one is how you deploy a new proxy build to the app
+  container. `=` is a safe separator because it appears in neither container names nor image
+  references.
 - Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
   output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
   name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in

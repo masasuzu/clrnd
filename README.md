@@ -83,6 +83,27 @@ instead — the same permission `deploy` would need to create it for real. Pass
 `roles/run.viewer`, at the cost of a diff that shows Cloud Run's defaults as differences on a
 hand-written manifest.
 
+`--format json` prints one object instead of the human-readable stream, so a CI job can decide for
+itself what to treat as fatal:
+
+```sh
+clrnd verify --format json | jq -e '.unchecked | length == 0'
+```
+
+```json
+{
+  "service": "my-service",
+  "manifest": "service.yaml",
+  "ok": true,
+  "unchecked": ["secret \"api-token\": googleapi: Error 403: permission denied"]
+}
+```
+
+`ok` is `false` only for things clrnd is sure about — a failed local check (`errors`) or a
+confirmed 404 (`missing`) — and the command's exit code matches it. Checks that could not be
+decided land in `unchecked` and leave `ok` true, which is the same split the text output makes
+between a `warning:` and a failure.
+
 None of the permissions `verify` uses for its existence checks are required — a missing one does
 **not** fail the command. It
 cannot tell "the secret is absent" from "I am not allowed to look", so it prints a `warning:` on
@@ -363,6 +384,8 @@ clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--l
 | `--project`    | GCP project ID. Enables the API existence checks (env/config fallback). |
 | `--region`     | Cloud Run region. Enables the API existence checks (env/config fallback). |
 | `--local-only` | Skip the API existence checks; validate the manifest locally only.      |
+| `--image`      | Override a container image, the same way `deploy` does (the existence check then looks at the overridden image). |
+| `--format`     | Output format: `text` (default) or `json`.                              |
 | `--tfstate`    | Terraform state for `{{ tfstate }}` placeholders (see [Templating](#templating-with-terraform-state)). |
 
 ```sh
@@ -420,6 +443,7 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 | `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
 | `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--image`   | Override a container image, the same way `deploy` does, so the diff matches what would be applied. |
 | `--no-server-defaults` | Compare against the manifest as written, without resolving Cloud Run's defaults (read-only credentials are enough). |
 | `--exit-code` | Exit with 2 when there is a difference. Use this for drift checks in CI — see [Exit codes](#exit-codes). |
 
@@ -466,12 +490,30 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
 | `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
+| `--image`        | Override a container image: `<image>`, or `<container>=<image>` when the manifest has more than one container (repeatable). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
 | `--no-traffic`   | Create the revision without sending traffic to it; the current split is kept. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+
+**`--image` covers the usual CI case**: a manifest committed to the repository, deployed with the
+tag that was just built.
+
+```sh
+clrnd deploy --image "$REGISTRY/app:$GITHUB_SHA"
+clrnd deploy --image app=$REGISTRY/app:$SHA --image proxy=$REGISTRY/proxy:$SHA   # with a sidecar
+```
+
+The container name may be omitted only when the manifest defines exactly one container; with more,
+clrnd refuses rather than guessing which one you meant. `verify` and `diff` take the same flag, so
+the whole `verify` → `diff` → `deploy` sequence looks at the same image. The manifest stays the
+source of truth for everything else — `--image` exists because the image tag is the one field that
+legitimately changes on every deploy. `{{ must_env "IMAGE" }}` in the manifest remains an
+alternative, and `render` deliberately has no `--image`: it prints the template expansion as-is,
+without parsing it.
 
 **`--no-traffic` is how you deploy before deciding to serve it.** Without it, a service whose
 manifest says nothing about `spec.traffic` sends everything to the new revision the moment it is
@@ -548,6 +590,7 @@ as the request is accepted, or `--timeout` to change how long it waits (default 
 | `--auto-approve` | Delete without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without deleting anything (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the service to disappear. |
+| `--interval`     | How long to wait between polls while the deletion completes (default `2s`). |
 | `--timeout`      | How long to wait for the service to disappear (default `10m`). |
 
 ### init
@@ -720,6 +763,7 @@ leaves behind, where a new revision would be created but would serve nothing.
 | `--auto-approve`    | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`         | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`         | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`         | How long to wait for the rollout to finish (default `10m`).    |
 
 ### rollback
@@ -747,6 +791,7 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
 
 A `--revision` that is not `Ready` is a warning on stderr, not an error: the rollback goes ahead.
@@ -788,6 +833,7 @@ something would move it.
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
+| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
 | `--timeout`      | How long to wait for the rollout to finish (default `10m`). |
 
 ### wait

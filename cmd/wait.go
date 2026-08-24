@@ -57,10 +57,12 @@ func runWait(cmd *cobra.Command, args []string) error {
 
 // waitForDeletion はサービスが実際に消えるまで待つ。Cloud Run の削除は非同期なので、
 // これが無いと delete の直後にまだ取得できてしまう。
-func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string, timeout time.Duration) error {
+func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string,
+	timeout, interval time.Duration) error {
 	out := cmd.ErrOrStderr()
 	return client.WaitDeleted(cmd.Context(), service, cloudrun.WaitOptions{
-		Timeout: timeout,
+		Timeout:  timeout,
+		Interval: interval,
 		OnUpdate: func(message string) {
 			fmt.Fprintf(out, "waiting for %s to be deleted: %s\n", service, message)
 		},

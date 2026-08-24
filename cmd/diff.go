@@ -12,6 +12,7 @@ var (
 	diffProject    string
 	diffRegion     string
 	diffTfstate    []string
+	diffImages     []string
 	diffNoDefaults bool
 	diffExitCode   bool
 )
@@ -35,6 +36,7 @@ var diffCmd = &cobra.Command{
 func init() {
 	addTargetFlags(diffCmd, &diffProject, &diffRegion)
 	addManifestFlags(diffCmd, &diffTfstate)
+	addImageFlag(diffCmd, &diffImages)
 	addServerDefaultsFlag(diffCmd, &diffNoDefaults)
 	diffCmd.Flags().BoolVar(&diffExitCode, "exit-code", false,
 		"exit with 2 when there is a difference (0 when there is none, 1 on error)")
@@ -57,6 +59,12 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
 	local, err = renderManifest(ctx, local, diffTfstate)
+	if err != nil {
+		return err
+	}
+	// deploy と同じ差し替えを通す。ここを外すと、diff が見せたものと deploy が
+	// 適用するものが食い違う。
+	local, err = cloudrun.ApplyImageOverrides(local, diffImages)
 	if err != nil {
 		return err
 	}

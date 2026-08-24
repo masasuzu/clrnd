@@ -14,6 +14,7 @@ type applyOptions struct {
 	AutoApprove bool
 	NoWait      bool
 	Timeout     time.Duration
+	Interval    time.Duration
 	// Prompt は確認プロンプトの文言。
 	Prompt string
 }
@@ -26,6 +27,8 @@ func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
 		"apply without the interactive confirmation prompt (for CI/CD)")
 	cmd.Flags().BoolVar(&o.NoWait, "no-wait", false,
 		"return as soon as the request is accepted, without waiting for the rollout")
+	cmd.Flags().DurationVar(&o.Interval, "interval", defaultRolloutInterval,
+		"how long to wait between rollout polls")
 	cmd.Flags().DurationVar(&o.Timeout, "timeout", defaultRolloutTimeout,
 		"how long to wait for the rollout to finish")
 }
@@ -79,7 +82,8 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 		// ここを素通りさせると壊れたまま成功扱いになる (待機を入れた意味が消える)。
 		// Generation は指定しない = 世代を問わず「いま Ready か」だけを見る。
 		return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
-			Timeout: o.Timeout,
+			Timeout:  o.Timeout,
+			Interval: o.Interval,
 		})
 	}
 	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
@@ -105,6 +109,7 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 	}
 	return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
 		Timeout:    o.Timeout,
+		Interval:   o.Interval,
 		Generation: cloudrun.AppliedGeneration(applied),
 	})
 }

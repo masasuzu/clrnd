@@ -13,6 +13,7 @@ var (
 	deleteDryRun      bool
 	deleteAutoApprove bool
 	deleteNoWait      bool
+	deleteInterval    time.Duration
 	deleteTimeout     time.Duration
 )
 
@@ -39,6 +40,8 @@ func init() {
 		"delete without the interactive confirmation prompt (for CI/CD)")
 	deleteCmd.Flags().BoolVar(&deleteNoWait, "no-wait", false,
 		"return as soon as the request is accepted, without waiting for the service to disappear")
+	deleteCmd.Flags().DurationVar(&deleteInterval, "interval", defaultRolloutInterval,
+		"how long to wait between polls while the deletion completes")
 	deleteCmd.Flags().DurationVar(&deleteTimeout, "timeout", defaultRolloutTimeout,
 		"how long to wait for the service to disappear")
 }
@@ -82,7 +85,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	if deleteDryRun || deleteNoWait {
 		return nil
 	}
-	return waitForDeletion(cmd, client, service, deleteTimeout)
+	return waitForDeletion(cmd, client, service, deleteTimeout, deleteInterval)
 }
 
 // printDeleteTarget は削除対象を stderr に並べる。プロジェクトとリージョンを必ず

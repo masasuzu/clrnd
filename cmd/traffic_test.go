@@ -176,3 +176,68 @@ func TestDeployNoTrafficPinsTheCurrentSplit(t *testing.T) {
 		t.Error("spec.traffic[0].latestRevision = true, want the split pinned by name")
 	}
 }
+
+// TestDeployImageOverrideIsWhatGetsApplied は、--image で差し替えたイメージが実際に
+// 適用されることを確認する。CI で「マニフェストは固定、タグだけ差し替える」典型。
+func TestDeployImageOverrideIsWhatGetsApplied(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	manifest := writeManifest(t, localManifest)
+	if _, _, err := executeRoot(t, "deploy", "my-svc", manifest,
+		"--image", "gcr.io/project/image:from-ci",
+		"--no-server-defaults", "--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("deploy --image error = %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(sentBody(), &sent); err != nil {
+		t.Fatalf("failed to parse the applied body: %v", err)
+	}
+	spec, _ := sent["spec"].(map[string]any)
+	template, _ := spec["template"].(map[string]any)
+	templateSpec, _ := template["spec"].(map[string]any)
+	containers, _ := templateSpec["containers"].([]any)
+	if len(containers) != 1 {
+		t.Fatalf("containers = %v, want one", containers)
+	}
+	container, _ := containers[0].(map[string]any)
+	if container["image"] != "gcr.io/project/image:from-ci" {
+		t.Errorf("image = %v, want the overridden image", container["image"])
+	}
+}
+
+// TestDiffImageOverrideMatchesDeploy は、diff が差し替え後のイメージで比較することを
+// 確認する。ここが揃っていないと、見た差分と適用結果が食い違う。
+func TestDiffImageOverrideMatchesDeploy(t *testing.T) {
+	startServiceAPI(t, rollbackServiceJSON)
+
+	manifest := writeManifest(t, localManifest)
+	stdout, _, err := executeRoot(t, "diff", "my-svc", manifest,
+		"--image", "gcr.io/project/image:from-ci", "--no-server-defaults",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err != nil {
+		t.Fatalf("diff --image error = %v", err)
+	}
+	if !strings.Contains(stdout, "from-ci") {
+		t.Errorf("diff stdout = %q, want the overridden image compared", stdout)
+	}
+}
+
+// TestDeployImageOverrideRejectsAnUnknownContainer は、誤った指定が適用より先に
+// 弾かれることを確認する。
+func TestDeployImageOverrideRejectsAnUnknownContainer(t *testing.T) {
+	sentBody := startRollbackAPI(t)
+
+	manifest := writeManifest(t, localManifest)
+	_, _, err := executeRoot(t, "deploy", "my-svc", manifest,
+		"--image", "sidecar=gcr.io/project/image:from-ci",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("deploy error = nil, want the unknown container to be rejected")
+	}
+	if sentBody() != nil {
+		t.Errorf("a body was applied (%s), want nothing applied", sentBody())
+	}
+}
