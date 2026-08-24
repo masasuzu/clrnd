@@ -5,6 +5,7 @@ package render
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -44,8 +45,9 @@ type Source struct {
 // 名前をそのままプレフィックスにした {{ <name>tfstate "addr" }} / {{ <name>tfstatef ... }}。
 func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, error) {
 	funcs := template.FuncMap{
-		"env":      envFunc,
-		"must_env": mustEnvFunc,
+		"env":         envFunc,
+		"must_env":    mustEnvFunc,
+		"json_escape": jsonEscapeFunc,
 	}
 
 	for _, s := range sources {
@@ -99,6 +101,22 @@ func mustEnvFunc(name string) (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("environment variable %q is not defined", name)
+}
+
+// jsonEscapeFunc は値を JSON 文字列としてエスケープした中身を返す
+// (ecspresso 互換の {{ ... | json_escape }})。前後の " は付けない: 使う側が
+// '{"key": "{{ ... | json_escape }}"}' のように引用符を書くため。
+//
+// Cloud Run のマニフェストでは、アノテーションや env[].value に JSON をそのまま
+// 埋める場面がある。tfstate や環境変数から来た値に " や改行が入っていると、
+// エスケープ無しでは壊れた JSON/YAML になる。
+func jsonEscapeFunc(v interface{}) (string, error) {
+	encoded, err := json.Marshal(fmt.Sprint(v))
+	if err != nil {
+		return "", fmt.Errorf("failed to escape %v as JSON: %w", v, err)
+	}
+	// json.Marshal は前後に " を付けるので落とす。
+	return string(encoded[1 : len(encoded)-1]), nil
 }
 
 // stateLoader は state を遅延・一度きりで読み込み、属性を引く。

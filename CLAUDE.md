@@ -67,7 +67,9 @@ revision-name conflicts, asynchronous rollout failures).
   [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. The `render` subcommand prints this
   rendered output as-is (no parse/normalize), for debugging template output. Template funcs (ecspresso-compatible):
   `{{ tfstate "addr" }}`, `{{ tfstatef "fmt" args }}`, `{{ env "VAR" ["default"] }}`,
-  `{{ must_env "VAR" }}`. The `tfstate`/`tfstatef` funcs resolve Terraform state via
+  `{{ must_env "VAR" }}`, `{{ value | json_escape }}` (escapes the *body* of a JSON string — the
+  surrounding quotes belong to the manifest, which is what makes it usable inside an annotation
+  holding JSON). The `tfstate`/`tfstatef` funcs resolve Terraform state via
   `fujiwara/tfstate-lookup`; states are declared with the repeatable
   `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read when a
   placeholder references it, so manifests without placeholders need no `--tfstate`). A *named* state

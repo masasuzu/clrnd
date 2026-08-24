@@ -229,3 +229,31 @@ func TestRenderErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderJSONEscape は、JSON に埋める値のエスケープを確認する。ecspresso にある
+// 関数で、アノテーションや env[].value に JSON を書くときに要る。
+func TestRenderJSONEscape(t *testing.T) {
+	t.Setenv("CONFIG_JSON", `he said "hi"`+"\n\tdone\\")
+
+	got, err := Render(context.Background(),
+		[]byte(`value: '{"note": "{{ must_env "CONFIG_JSON" | json_escape }}"}'`), nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	want := `value: '{"note": "he said \"hi\"\n\tdone\\"}'`
+	if string(got) != want {
+		t.Errorf("Render() = %q, want %q", got, want)
+	}
+}
+
+// TestRenderJSONEscapeAcceptsNonStrings は、文字列以外を渡しても壊れないことを
+// 確認する (tfstate は数値や真偽値も返しうる)。
+func TestRenderJSONEscapeAcceptsNonStrings(t *testing.T) {
+	got, err := Render(context.Background(), []byte(`n: "{{ 42 | json_escape }}"`), nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if string(got) != `n: "42"` {
+		t.Errorf("Render() = %q, want the value rendered as a JSON string body", got)
+	}
+}
