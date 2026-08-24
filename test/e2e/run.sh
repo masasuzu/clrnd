@@ -245,15 +245,20 @@ print(best.get("revisionName", "") if best else "")
 # revision_percent <revision> : そのリビジョンが受けている割合を gcloud 側で確認する
 # (clrnd の出力ではなく API の状態を見る)。同じリビジョンが割合用とタグ用で複数の
 # エントリに現れることがあるので合算する。
+# 読めなかった場合は空を返す。0 や -1 を返すと、認証エラーや API の失敗が
+# 「割合 0%」「リビジョン 0 件」として *合格* に化ける。呼び出し側は空を失敗として扱う。
 revision_percent() {
-  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
-    --format=json 2>/dev/null | python3 -c '
+  local raw
+  raw="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format=json 2>/dev/null)" || return 0
+  [ -n "$raw" ] || return 0
+  printf '%s' "$raw" | python3 -c '
 import json, sys
 name = sys.argv[1]
 try:
     d = json.load(sys.stdin)
 except Exception:
-    print("0"); raise SystemExit
+    raise SystemExit
 total = sum(t.get("percent", 0) or 0
             for t in ((d.get("status") or {}).get("traffic") or [])
             if t.get("revisionName") == name)
@@ -261,10 +266,48 @@ print(total)
 ' "$1"
 }
 
-# revision_count : サービスに属するリビジョンの数。
+# revision_count : サービスに属するリビジョンの数。読めなければ空を返す。
 revision_count() {
-  gcloud run revisions list --service "$SERVICE" --project "$PROJECT" --region "$REGION" \
-    --format='value(metadata.name)' 2>/dev/null | grep -c . || true
+  local raw
+  raw="$(gcloud run revisions list --service "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format='value(metadata.name)' 2>/dev/null)" || return 0
+  printf '%s' "$raw" | grep -c . || true
+}
+
+# assert_percent <ラベル> <リビジョン> <期待する割合>
+assert_percent() {
+  local got
+  got="$(revision_percent "$2")"
+  if [ -z "$got" ]; then
+    ng "$1 (could not read the traffic split)"
+  elif [ "$got" = "$3" ]; then
+    ok "$1"
+  else
+    ng "$1 (got ${got}%, want $3%)"
+  fi
+}
+
+# wait_serving <リビジョン> : そのリビジョンが配信を受けるまで待つ (最大 60s)。
+# latestRevision は「最新の *ready* な版」に解決されるので、直後に見ると
+# まだ 1 つ前を指していることがある。
+wait_serving() {
+  local i
+  for i in $(seq 1 20); do
+    [ "$(serving_revision)" = "$1" ] && return 0
+    sleep 3
+  done
+  return 1
+}
+
+# wait_revision_gone <リビジョン> : そのリビジョンが消えるまで待つ (最大 60s)。
+# Cloud Run の削除は非同期で、返った直後はまだ引ける。
+wait_revision_gone() {
+  local i
+  for i in $(seq 1 20); do
+    revision_exists "$1" || return 0
+    sleep 3
+  done
+  return 1
 }
 
 # revision_exists <revision> : そのリビジョンがまだ在るか。
@@ -601,30 +644,22 @@ else
   assert_rc_zero "traffic splits the assignment"
   wait_ready || ng "the service did not settle after the traffic split"
 
-  if [ "$(revision_percent "$PREV_REV")" = "20" ]; then
-    ok "the target revision receives the requested share"
-  else
-    ng "the target revision receives $(revision_percent "$PREV_REV")%, want 20%"
-  fi
-  if [ "$(revision_percent "$LATEST_REV")" = "80" ]; then
-    ok "the rest stays on the revision that was serving"
-  else
-    ng "the previously serving revision receives $(revision_percent "$LATEST_REV")%, want 80%"
-  fi
-  if [ "$(revision_count)" = "$BEFORE_COUNT" ]; then
+  assert_percent "the target revision receives the requested share" "$PREV_REV" 20
+  assert_percent "the rest stays on the revision that was serving" "$LATEST_REV" 80
+  AFTER_COUNT="$(revision_count)"
+  if [ -z "$BEFORE_COUNT" ] || [ -z "$AFTER_COUNT" ]; then
+    ng "could not read the revision count"
+  elif [ "$AFTER_COUNT" = "$BEFORE_COUNT" ]; then
     ok "traffic creates no revision"
   else
-    ng "the revision count changed from $BEFORE_COUNT to $(revision_count)"
+    ng "the revision count changed from $BEFORE_COUNT to $AFTER_COUNT"
   fi
 
   run_cmd "$CLRND" traffic "$SERVICE" --to-latest --auto-approve --timeout 120s
   assert_rc_zero "traffic --to-latest succeeds"
   wait_ready || ng "the service did not settle after --to-latest"
-  if [ "$(revision_percent "$LATEST_REV")" = "100" ]; then
-    ok "traffic follows the latest revision again"
-  else
-    ng "the latest revision receives $(revision_percent "$LATEST_REV")%, want 100%"
-  fi
+  wait_serving "$LATEST_REV" || true
+  assert_percent "traffic follows the latest revision again" "$LATEST_REV" 100
   # 固定が外れたか (spec 側が latestRevision に戻ったか) も見る。ここが名前のままだと
   # 次の deploy で作られるリビジョンへ traffic が移らない。
   if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
@@ -652,11 +687,7 @@ if [ -n "$NEW_REV" ] && [ "$NEW_REV" != "$SERVING_BEFORE" ]; then
 else
   ng "no new revision was created (latest=$NEW_REV serving-before=$SERVING_BEFORE)"
 fi
-if [ "$(revision_percent "$NEW_REV")" = "0" ]; then
-  ok "the new revision receives no traffic"
-else
-  ng "the new revision receives $(revision_percent "$NEW_REV")%, want 0%"
-fi
+assert_percent "the new revision receives no traffic" "$NEW_REV" 0
 if [ "$(serving_revision)" = "$SERVING_BEFORE" ]; then
   ok "the previous revision keeps serving"
 else
@@ -666,7 +697,9 @@ fi
 run_cmd "$CLRND" traffic "$SERVICE" --to-latest --auto-approve --timeout 120s
 assert_rc_zero "traffic moves to the revision deployed with --no-traffic"
 wait_ready || ng "the service did not settle after moving traffic"
-if [ "$(serving_revision)" = "$NEW_REV" ]; then
+# latestRevision は「最新の *ready* な版」に解決される。--no-traffic で作った版は
+# インスタンスが用意されるまで ready にならないので、切り替わるまで待つ。
+if wait_serving "$NEW_REV"; then
   ok "the canary sequence ends on the new revision"
 else
   ng "serving revision is $(serving_revision), want $NEW_REV"
@@ -870,18 +903,46 @@ else
   ng "--dry-run changed the revision count ($PRUNE_BEFORE -> $(revision_count))"
 fi
 
+# 消す対象を 1 つ控えておく。削除は非同期なので、件数ではなくこの 1 件が消えることで
+# 判定する (返った直後は件数がまだ減っていないことがある)。
+PRUNE_TARGET="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
+import json, sys
+revisions = json.load(sys.stdin)
+for r in revisions[1:]:
+    if r.get("percent", 0) == 0 and not r.get("tags"):
+        print(r["name"]); break
+')"
 run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 1 --auto-approve
 assert_rc_zero "revisions --prune succeeds"
-PRUNE_AFTER="$(revision_count)"
-if [ "$PRUNE_AFTER" -lt "$PRUNE_BEFORE" ]; then
-  ok "old revisions are gone ($PRUNE_BEFORE -> $PRUNE_AFTER)"
+if [ -z "$PRUNE_TARGET" ]; then
+  ng "could not determine a revision that should have been pruned"
+elif wait_revision_gone "$PRUNE_TARGET"; then
+  ok "an old revision is gone"
 else
-  ng "no revision was deleted (still $PRUNE_AFTER)"
+  ng "$PRUNE_TARGET is still there after pruning"
 fi
+
+# --keep 1 では配信中の版が「いちばん新しい 1 件」でもあるため、保護の規則そのものは
+# 試されていない。--keep 0 まで詰めて、トラフィックが向いている版が残ることを確かめる。
+run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 0 --auto-approve
+assert_rc_zero "revisions --prune --keep 0 succeeds"
 if revision_exists "$PRUNE_SERVING"; then
-  ok "the revision serving traffic is kept"
+  ok "the revision serving traffic is kept even with --keep 0"
 else
   ng "the revision serving traffic was deleted"
+fi
+if [ "$(serving_revision)" = "$PRUNE_SERVING" ]; then
+  ok "the traffic split is unchanged after pruning"
+else
+  ng "serving revision is $(serving_revision), want $PRUNE_SERVING"
+fi
+PRUNE_AFTER="$(revision_count)"
+if [ -z "$PRUNE_BEFORE" ] || [ -z "$PRUNE_AFTER" ]; then
+  ng "could not read the revision count"
+elif [ "$PRUNE_AFTER" -lt "$PRUNE_BEFORE" ]; then
+  ok "the revision count went down ($PRUNE_BEFORE -> $PRUNE_AFTER)"
+else
+  ng "no revision was deleted (still $PRUNE_AFTER)"
 fi
 run_cmd "$CLRND" status
 assert_rc_zero "the service still works after pruning"

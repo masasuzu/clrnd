@@ -97,7 +97,7 @@ pasting it rather than trusting the redaction blindly.
 | 1-8b2 | `verify` confirms a real Artifact Registry image, **fails** on a tag that does not exist, and stays quiet about a `gcr.io` image it cannot check |
 | 1-8d | `--image` overrides an image the manifest cannot pull: `verify` and `deploy` both look at the overridden one, the live service ends up running it, and an unknown container name is rejected |
 | 1-8c | `render` expands `{{ tfstate }}` / `{{ must_env }}` / `{{ env }}`, applies `json_escape` to a value containing quotes, `-o` writes the result and refuses to overwrite its own input, and `verify` accepts what it produced |
-| 1-8e | `revisions --prune --dry-run` deletes nothing, then `--prune --keep 1` removes the old revisions while keeping the one serving traffic, and the service still works |
+| 1-8e | `revisions --prune --dry-run` deletes nothing, then `--prune --keep 1` removes an old revision, and `--prune --keep 0` still keeps the one serving traffic (the protection rule, not just the `--keep` window) and leaves the split untouched |
 | 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
 
 Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
