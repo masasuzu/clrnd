@@ -75,11 +75,11 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 	// project/region が解決できる場合のみ API 実在チェックを行う (CI でのオフライン
 	// 検証を壊さないため、解決できなければローカル検証だけで成功とする)。
-	// リージョン自体はリモートチェックに使わない (VerifyRemote が引く IAM / Secret Manager /
-	// Artifact Registry はどれもリージョンを取らない) が、「デプロイ先が決まっている」条件は
-	// 揃っている方を採る: 片方しか無い状態は設定ミスの可能性が高く、黙って本番の
-	// プロジェクトを引きに行くより何もしない方が安全なため。
-	project, _, ok := resolveTargetOptional(verifyProject, verifyRegion)
+	// リージョンを使うのは VPC コネクタの短縮名を完全なリソース名に補うときだけ
+	// (IAM / Secret Manager / Artifact Registry / Cloud SQL はリージョンを取らない) だが、
+	// 「デプロイ先が決まっている」条件は両方揃っている方を採る: 片方しか無い状態は設定
+	// ミスの可能性が高く、黙って本番のプロジェクトを引きに行くより何もしない方が安全。
+	project, region, ok := resolveTargetOptional(verifyProject, verifyRegion)
 	if !ok {
 		// 片方だけ明示的に指定された場合は、リモートチェックを黙ってスキップせず知らせる。
 		if cmd.Flags().Changed("project") || cmd.Flags().Changed("region") {
@@ -89,7 +89,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	res, err := cloudrun.VerifyRemote(ctx, project, manifest, clientOptions...)
+	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest, clientOptions...)
 	if err != nil {
 		return err
 	}

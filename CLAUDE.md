@@ -95,13 +95,24 @@ revision-name conflicts, asynchronous rollout failures).
   [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
   cover them against the fake API rather than leaving them untested.
   `VerifyRemote` ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) builds its own IAM /
-  Secret Manager / Artifact Registry clients but takes the same variadic `option.ClientOption`, so
-  `cmd` passes `clientOptions` through and one fake server can answer all three APIs (they are
-  routed by path). It takes **no region**: the Artifact Registry location is part of the image
-  reference, and neither IAM nor Secret Manager is regional.
+  Secret Manager / Artifact Registry / Serverless VPC Access / Cloud SQL Admin clients but takes the
+  same variadic `option.ClientOption`, so
+  `cmd` passes `clientOptions` through and one fake server can answer all of those APIs (they are
+  routed by path). It takes the region **only** for one thing: a
+  `run.googleapis.com/vpc-access-connector` written as a bare name has to be resolved to
+  `projects/<p>/locations/<region>/connectors/<n>`, and a connector is a regional resource. Nothing
+  else needs it — the Artifact Registry location comes from the image reference, the Cloud SQL
+  project comes from the `<project>:<region>:<instance>` connection name, and neither IAM nor
+  Secret Manager is regional. A connector written as a full resource name is used as written, so a
+  connector in another project or region is not rewritten to the deploy target's.
   It looks the service account up as `projects/-/serviceAccounts/<email>`: Cloud Run allows a
   service account from **another** project, and pinning the project would turn a valid setup into a
   404, which `RemoteCheck.Missing` reports as a hard failure.
+  Secret **versions** are checked separately from the secret (`secrets.versions.get`, with no
+  version meaning `latest`, as Cloud Run assumes) because a live secret whose referenced version was
+  destroyed fails only at deploy time — but the version lookup is skipped once the secret itself
+  came back 404, since "no such secret" and "no such version of it" say the same thing twice and
+  bury the real cause.
   It also checks `containers[].image` against Artifact Registry
   ([internal/cloudrun/image.go](internal/cloudrun/image.go) parses the reference; `checkImages` in
   `verify.go` makes the call). Only `<location>-docker.pkg.dev` is checkable, and the location and
