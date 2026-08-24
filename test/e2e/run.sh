@@ -868,22 +868,52 @@ assert_file_has "the template source is untouched" "$D4/template.yaml" "must_env
 
 # json_escape はテンプレート側の関数だが、壊れた値を通したときに YAML/JSON として
 # 成立するかは実際に展開してみないと分からない。
-cat > "$D4/escape.yaml" <<'YAML'
-note: '{"text": "{{ must_env "CLRND_E2E_RAW" | json_escape }}"}'
+# README が勧める書き方 (>- のブロックスカラー) を、アポストロフィを含む値で確かめる。
+# json_escape は JSON 用のエスケープで ' は対象外なので、'...' に埋めると値によっては
+# YAML が壊れる。アノテーションに JSON を入れる実際の形で試す。
+export CLRND_E2E_RAW="it's \"quoted\" & fine"
+cat > "$D4/escape.yaml" <<YAML
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: $SERVICE
+spec:
+  template:
+    metadata:
+      annotations:
+        clrnd-e2e.example.com/config: >-
+          {"text": "{{ must_env "CLRND_E2E_RAW" | json_escape }}"}
+    spec:
+      containers:
+      - image: $IMAGE
 YAML
-CLRND_E2E_RAW='he said "hi"' run_cmd "$CLRND" render "$D4/escape.yaml"
+run_cmd "$CLRND" render "$D4/escape.yaml" -o "$D4/escaped.yaml"
 assert_rc_zero "render applies json_escape"
-assert_contains "json_escape escapes the quotes" '\\"hi\\"'
-if printf '%s' "$OUT" | python3 -c '
-import json, sys, re
-line = sys.stdin.read()
-payload = line.split("note: ", 1)[1].strip().strip("\x27")
-json.loads(payload)
-' 2>/dev/null; then
-  ok "the escaped value is valid JSON"
+assert_file_has "json_escape escapes the quotes" "$D4/escaped.yaml" '\\"quoted\\"'
+
+# YAML 層: 厳格パーサ (verify) が読めること。'...' に埋めていればここで落ちる。
+run_cmd "$CLRND" verify "$SERVICE" "$D4/escaped.yaml" --local-only
+assert_rc_zero "the manifest with an escaped JSON annotation still parses"
+
+# JSON 層: アノテーションの値を取り出し、JSON として読めて元の値に戻ること。
+# 期待値は argv で渡す (シェルと Python の引用符を二重に重ねない)。
+cat > "$D4/check-escape.py" <<'PYCHECK'
+import json, sys
+
+lines = open(sys.argv[1]).read().split("\n")
+payload = ""
+for i, line in enumerate(lines):
+    if line.rstrip().endswith(">-"):
+        payload = lines[i + 1].strip()
+        break
+raise SystemExit(0 if payload and json.loads(payload)["text"] == sys.argv[2] else 1)
+PYCHECK
+if python3 "$D4/check-escape.py" "$D4/escaped.yaml" "$CLRND_E2E_RAW"; then
+  ok "the escaped value parses as JSON and round-trips"
 else
-  ng "json_escape produced something that does not parse as JSON"
+  ng "json_escape produced something that does not round-trip through YAML and JSON"
 fi
+unset CLRND_E2E_RAW
 
 # 展開結果が本当にデプロイできる形かは、verify を同じテンプレートに通せば分かる。
 run_cmd "$CLRND" verify "$SERVICE" "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" --local-only
