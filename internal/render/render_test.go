@@ -2,10 +2,13 @@ package render
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // Terraform state v4 のミニマルなフィクスチャ。output と resource 属性を含む。
@@ -285,5 +288,45 @@ func TestRenderJSONEscapeRejectsInvalidUTF8(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "UTF-8") {
 		t.Errorf("Render() error = %v, want it to name the encoding problem", err)
+	}
+}
+
+// TestRenderJSONEscapeInABlockScalar は、README が勧める書き方 (>- のブロックスカラー)
+// を、アポストロフィを含む値で通しで確認する。
+//
+// json_escape は JSON 用のエスケープなので ' は対象外で、'...' の YAML スカラーに
+// 埋めると値によっては YAML が壊れる (この template を '...' に変えると、実際に
+// このテストは YAML のパースで落ちる)。展開結果を YAML として読み、取り出した文字列を
+// さらに JSON としてパースすることで、YAML 層と JSON 層の両方を見る。
+func TestRenderJSONEscapeInABlockScalar(t *testing.T) {
+	const raw = `it's "quoted" & has
+a newline`
+	t.Setenv("CLRND_CONFIG", raw)
+
+	const template = `note: >-
+  {"text": "{{ must_env "CLRND_CONFIG" | json_escape }}"}
+`
+	rendered, err := Render(context.Background(), []byte(template), nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	// YAML 層: ドキュメントとして読めること。
+	var doc struct {
+		Note string `json:"note"`
+	}
+	if err := yaml.Unmarshal(rendered, &doc); err != nil {
+		t.Fatalf("the rendered manifest is not valid YAML: %v\n%s", err, rendered)
+	}
+
+	// JSON 層: 取り出した文字列が JSON として読め、元の値に戻ること。
+	var payload struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(doc.Note), &payload); err != nil {
+		t.Fatalf("the value is not valid JSON: %v\n%s", err, doc.Note)
+	}
+	if payload.Text != raw {
+		t.Errorf("round-tripped value = %q, want %q", payload.Text, raw)
 	}
 }
