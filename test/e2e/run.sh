@@ -242,6 +242,37 @@ print(best.get("revisionName", "") if best else "")
 '
 }
 
+# revision_percent <revision> : そのリビジョンが受けている割合を gcloud 側で確認する
+# (clrnd の出力ではなく API の状態を見る)。同じリビジョンが割合用とタグ用で複数の
+# エントリに現れることがあるので合算する。
+revision_percent() {
+  gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format=json 2>/dev/null | python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("0"); raise SystemExit
+total = sum(t.get("percent", 0) or 0
+            for t in ((d.get("status") or {}).get("traffic") or [])
+            if t.get("revisionName") == name)
+print(total)
+' "$1"
+}
+
+# revision_count : サービスに属するリビジョンの数。
+revision_count() {
+  gcloud run revisions list --service "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format='value(metadata.name)' 2>/dev/null | grep -c . || true
+}
+
+# revision_exists <revision> : そのリビジョンがまだ在るか。
+revision_exists() {
+  gcloud run revisions describe "$1" --project "$PROJECT" --region "$REGION" \
+    --format='value(metadata.name)' >/dev/null 2>&1
+}
+
 current_revision() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format='value(status.latestReadyRevisionName)' 2>/dev/null
@@ -542,10 +573,112 @@ set_env_value "$D2/manifest.yaml" "after-rollback"
 run_cmd "$CLRND" deploy --auto-approve --timeout 120s
 assert_rc_zero "deploy still works after a rollback"
 
+info "--- 1-5e. traffic: split, then follow the latest again ---"
+# rollback は 100% 戻すだけで、途中の割合と「最新へ戻す」経路は traffic にしかない。
+# ここで確かめるのは、実 API 上で (a) 割合が指定どおりに分かれること、(b) リビジョンを
+# 作らずに済むこと、(c) latestRevision の固定を外して最新へ戻せること。
+LATEST_REV="$(current_revision)"
+PREV_REV="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
+import json, sys
+latest = sys.argv[1]
+for r in json.load(sys.stdin):
+    if r["name"] != latest and r.get("ready") == "True":
+        print(r["name"]); break
+' "$LATEST_REV")"
+if [ -z "$PREV_REV" ]; then
+  ng "no older ready revision to split traffic with"
+else
+  BEFORE_COUNT="$(revision_count)"
+  run_cmd "$CLRND" traffic "$SERVICE" --to "$PREV_REV" --percent 20 --auto-approve --timeout 120s
+  assert_rc_zero "traffic splits the assignment"
+  wait_ready || ng "the service did not settle after the traffic split"
+
+  if [ "$(revision_percent "$PREV_REV")" = "20" ]; then
+    ok "the target revision receives the requested share"
+  else
+    ng "the target revision receives $(revision_percent "$PREV_REV")%, want 20%"
+  fi
+  if [ "$(revision_percent "$LATEST_REV")" = "80" ]; then
+    ok "the rest stays on the revision that was serving"
+  else
+    ng "the previously serving revision receives $(revision_percent "$LATEST_REV")%, want 80%"
+  fi
+  if [ "$(revision_count)" = "$BEFORE_COUNT" ]; then
+    ok "traffic creates no revision"
+  else
+    ng "the revision count changed from $BEFORE_COUNT to $(revision_count)"
+  fi
+
+  run_cmd "$CLRND" traffic "$SERVICE" --to-latest --auto-approve --timeout 120s
+  assert_rc_zero "traffic --to-latest succeeds"
+  wait_ready || ng "the service did not settle after --to-latest"
+  if [ "$(revision_percent "$LATEST_REV")" = "100" ]; then
+    ok "traffic follows the latest revision again"
+  else
+    ng "the latest revision receives $(revision_percent "$LATEST_REV")%, want 100%"
+  fi
+  # 固定が外れたか (spec 側が latestRevision に戻ったか) も見る。ここが名前のままだと
+  # 次の deploy で作られるリビジョンへ traffic が移らない。
+  if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+      --format=json 2>/dev/null |
+      python3 -c 'import json,sys; print(any(t.get("latestRevision") for t in ((json.load(sys.stdin).get("spec") or {}).get("traffic") or [])))' |
+      grep -q True; then
+    ok "--to-latest leaves the split unpinned"
+  else
+    ng "--to-latest pinned the split to a revision name"
+  fi
+fi
+
+info "--- 1-5f. deploy --no-traffic, then move traffic over ---"
+# 「デプロイしてから配信を決める」経路。マニフェストには書けない指定なので、実 API で
+# 新しいリビジョンが 0% で作られることを確認する。
+SERVING_BEFORE="$(serving_revision)"
+set_env_value "$D2/manifest.yaml" "no-traffic"
+run_cmd "$CLRND" deploy --no-traffic --auto-approve --timeout 120s
+assert_rc_zero "deploy --no-traffic succeeds"
+NEW_REV="$(current_revision)"
+if [ -n "$NEW_REV" ] && [ "$NEW_REV" != "$SERVING_BEFORE" ]; then
+  ok "deploy --no-traffic creates a new revision"
+else
+  ng "no new revision was created (latest=$NEW_REV serving-before=$SERVING_BEFORE)"
+fi
+if [ "$(revision_percent "$NEW_REV")" = "0" ]; then
+  ok "the new revision receives no traffic"
+else
+  ng "the new revision receives $(revision_percent "$NEW_REV")%, want 0%"
+fi
+if [ "$(serving_revision)" = "$SERVING_BEFORE" ]; then
+  ok "the previous revision keeps serving"
+else
+  ng "traffic moved to $(serving_revision), want it to stay on $SERVING_BEFORE"
+fi
+
+run_cmd "$CLRND" traffic "$SERVICE" --to-latest --auto-approve --timeout 120s
+assert_rc_zero "traffic moves to the revision deployed with --no-traffic"
+wait_ready || ng "the service did not settle after moving traffic"
+if [ "$(serving_revision)" = "$NEW_REV" ]; then
+  ok "the canary sequence ends on the new revision"
+else
+  ng "serving revision is $(serving_revision), want $NEW_REV"
+fi
+
 info "--- 1-6. verify ---"
 run_cmd "$CLRND" verify
 assert_rc_zero "verify succeeds"
 assert_missing "no warning when the revision name is not pinned" "warning:"
+
+info "--- 1-6b. verify --format json ---"
+run_cmd "$CLRND" verify --format json
+assert_rc_zero "verify --format json succeeds"
+if printf '%s' "$OUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+raise SystemExit(0 if d.get("ok") is True and d.get("service") and not d.get("missing") else 1)
+' 2>/dev/null; then
+  ok "verify --format json reports ok with no missing resources"
+else
+  ng "verify --format json did not produce the expected object"
+fi
 
 info "--- 1-7. verify warns about a pinned revision name ---"
 cp "$D2/manifest.yaml" "$D2/pinned.yaml"
@@ -609,6 +742,30 @@ run_cmd "$CLRND" verify "$SERVICE" "$D5/gcr.yaml"
 assert_rc_zero "verify passes a gcr.io image it cannot check"
 assert_missing "verify says nothing about a registry it cannot check" "warning:"
 
+info "--- 1-8d. --image overrides the manifest ---"
+# 存在しないタグを書いたマニフェストを、--image で実在するイメージに差し替える。
+# 差し替えが効いていなければ verify も deploy も落ちるので、成功すること自体が証拠になる。
+run_cmd "$CLRND" verify "$SERVICE" "$D5/bad-tag.yaml" --image "$IMAGE"
+assert_rc_zero "verify checks the overridden image, not the one in the manifest"
+
+run_cmd "$CLRND" deploy "$SERVICE" "$D5/bad-tag.yaml" --image "$IMAGE" --auto-approve --timeout 120s
+assert_rc_zero "deploy applies the overridden image"
+LIVE_IMAGE="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+  --format='value(spec.template.spec.containers[0].image)' 2>/dev/null)"
+if [ "$LIVE_IMAGE" = "$IMAGE" ]; then
+  ok "the live service runs the overridden image"
+else
+  ng "the live image is $LIVE_IMAGE, want $IMAGE"
+fi
+
+# コンテナが 1 つしか無いので名前は省けるが、存在しない名前は弾かれる。
+run_cmd "$CLRND" deploy "$SERVICE" "$D5/bad-tag.yaml" --image "sidecar=$IMAGE" --auto-approve
+if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "does not define"; then
+  ok "--image rejects a container the manifest does not define"
+else
+  ng "--image accepted an unknown container name (exit=$RC)"
+fi
+
 info "--- 1-8c. render ---"
 # render は API に触れないが、テンプレート展開 (tfstate / env / must_env) を実バイナリで
 # 通すのはここだけ。ユニットテストは render.Render を直接叩いており、フラグの解析から
@@ -666,10 +823,58 @@ run_cmd "$CLRND" render "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" -o "$D4/
 if [ "$RC" -ne 0 ]; then ok "render refuses to write over its own input"; else ng "render overwrote its own input"; fi
 assert_file_has "the template source is untouched" "$D4/template.yaml" "must_env"
 
+# json_escape はテンプレート側の関数だが、壊れた値を通したときに YAML/JSON として
+# 成立するかは実際に展開してみないと分からない。
+cat > "$D4/escape.yaml" <<'YAML'
+note: '{"text": "{{ must_env "CLRND_E2E_RAW" | json_escape }}"}'
+YAML
+CLRND_E2E_RAW='he said "hi"' run_cmd "$CLRND" render "$D4/escape.yaml"
+assert_rc_zero "render applies json_escape"
+assert_contains "json_escape escapes the quotes" '\\"hi\\"'
+if printf '%s' "$OUT" | python3 -c '
+import json, sys, re
+line = sys.stdin.read()
+payload = line.split("note: ", 1)[1].strip().strip("\x27")
+json.loads(payload)
+' 2>/dev/null; then
+  ok "the escaped value is valid JSON"
+else
+  ng "json_escape produced something that does not parse as JSON"
+fi
+
 # 展開結果が本当にデプロイできる形かは、verify を同じテンプレートに通せば分かる。
 run_cmd "$CLRND" verify "$SERVICE" "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" --local-only
 assert_rc_zero "verify accepts the rendered template"
 unset CLRND_E2E_SERVICE
+
+info "--- 1-8e. revisions --prune ---"
+# Cloud Run は古いリビジョンを自動では消さない。ここまでで数本たまっているので、
+# 配信中のものを残したまま古いものだけが消えることを確認する。
+PRUNE_BEFORE="$(revision_count)"
+PRUNE_SERVING="$(serving_revision)"
+run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 1 --dry-run
+assert_rc_zero "revisions --prune --dry-run succeeds"
+if [ "$(revision_count)" = "$PRUNE_BEFORE" ]; then
+  ok "--dry-run deletes nothing"
+else
+  ng "--dry-run changed the revision count ($PRUNE_BEFORE -> $(revision_count))"
+fi
+
+run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 1 --auto-approve
+assert_rc_zero "revisions --prune succeeds"
+PRUNE_AFTER="$(revision_count)"
+if [ "$PRUNE_AFTER" -lt "$PRUNE_BEFORE" ]; then
+  ok "old revisions are gone ($PRUNE_BEFORE -> $PRUNE_AFTER)"
+else
+  ng "no revision was deleted (still $PRUNE_AFTER)"
+fi
+if revision_exists "$PRUNE_SERVING"; then
+  ok "the revision serving traffic is kept"
+else
+  ng "the revision serving traffic was deleted"
+fi
+run_cmd "$CLRND" status
+assert_rc_zero "the service still works after pruning"
 
 info "--- 1-9. delete ---"
 if [ -n "$OLD_REF" ]; then

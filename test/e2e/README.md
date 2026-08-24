@@ -87,12 +87,17 @@ pasting it rather than trusting the redaction blindly.
 | 1-5c | `rollback` moves traffic to the previous ready revision |
 | 1-5c2 | `refresh` refuses a suffix that creates no revision, and refuses while traffic is pinned |
 | 1-5d | a `deploy` after a rollback still works |
+| 1-5e | `traffic --to <rev> --percent 20` splits the assignment 20/80 **without creating a revision**, and `--to-latest` unpins it and returns all of it to the newest revision |
+| 1-5f | `deploy --no-traffic` creates a revision that receives 0% while the previous one keeps serving, and `traffic --to-latest` then moves traffic onto it |
 | 1-6 | `verify` succeeds and prints no warning |
+| 1-6b | `verify --format json` produces one object with `ok: true` and no `missing` |
 | 1-7 | `verify` warns about a pinned revision name but still succeeds |
 | 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
 | 1-8b | re-deploying the same manifest while the service is unhealthy still fails (the no-changes path checks health) |
 | 1-8b2 | `verify` confirms a real Artifact Registry image, **fails** on a tag that does not exist, and stays quiet about a `gcr.io` image it cannot check |
-| 1-8c | `render` expands `{{ tfstate }}` / `{{ must_env }}` / `{{ env }}`, `-o` writes the result and refuses to overwrite its own input, and `verify` accepts what it produced |
+| 1-8d | `--image` overrides an image the manifest cannot pull: `verify` and `deploy` both look at the overridden one, the live service ends up running it, and an unknown container name is rejected |
+| 1-8c | `render` expands `{{ tfstate }}` / `{{ must_env }}` / `{{ env }}`, applies `json_escape` to a value containing quotes, `-o` writes the result and refuses to overwrite its own input, and `verify` accepts what it produced |
+| 1-8e | `revisions --prune --dry-run` deletes nothing, then `--prune --keep 1` removes the old revisions while keeping the one serving traffic, and the service still works |
 | 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
 
 Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
