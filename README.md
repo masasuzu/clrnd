@@ -333,6 +333,9 @@ When `--project` / `--region` are resolvable (flag, env, or config) and `--local
 | -------- | ------------ | ----- |
 | `spec.template.spec.serviceAccountName` | IAM `serviceAccounts.get` | looked up across projects, since Cloud Run allows a service account from another project |
 | `secretKeyRef` and secret volumes | Secret Manager `secrets.get` | cross-project aliases in `run.googleapis.com/secrets` are resolved |
+| the secret **version** each reference points at | Secret Manager `secrets.versions.get` | the version comes from `key`, or from a `/versions/<v>` suffix on the name, or `latest` as Cloud Run assumes; a `DISABLED` or `DESTROYED` version fails the same way a missing one does, and the lookup is skipped when the secret itself is missing |
+| `run.googleapis.com/vpc-access-connector` | Serverless VPC Access `connectors.get` | a bare connector name is resolved against the target project and region; a fully qualified name is used as written |
+| `run.googleapis.com/cloudsql-instances` | Cloud SQL Admin `instances.get` | each `<project>:<region>:<instance>`; the project comes from the connection name, so a cross-project (or domain-scoped `example.com:project`) instance works |
 | `containers[].image` | Artifact Registry | **only `*-docker.pkg.dev` images**; the location and project come from the image reference, so a cross-project image works |
 
 Both a tag and a digest are handled (`repo/app:v1` and `repo/app@sha256:…`); with neither, `latest`

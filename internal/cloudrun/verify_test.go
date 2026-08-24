@@ -161,7 +161,7 @@ func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string
 func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusNotFound })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -208,7 +208,7 @@ func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -225,7 +225,7 @@ func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(validManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -258,7 +258,7 @@ spec:
 func TestVerifyRemoteChecksArtifactRegistryImages(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -287,7 +287,7 @@ func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 		return http.StatusOK
 	})
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -305,7 +305,7 @@ func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 func TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
-	res, err := VerifyRemote(context.Background(), testProject, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -324,7 +324,7 @@ func TestVerifyRemoteSkipsRegistriesItCannotCheck(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
 	// validManifest のイメージは gcr.io。
-	res, err := VerifyRemote(context.Background(), testProject, []byte(validManifest), opts...)
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -345,4 +345,256 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// --- VPC コネクタ / Cloud SQL / シークレットのバージョン ---
+
+// verifyRefsManifest は VPC コネクタ (短縮名) と Cloud SQL を参照するマニフェスト。
+// シークレットは版を明示している。
+const verifyRefsManifest = `apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: my-svc
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/vpc-access-connector: my-connector
+        run.googleapis.com/cloudsql-instances: other-project:asia-northeast1:main-db
+    spec:
+      containers:
+      - image: gcr.io/project/image:tag
+        env:
+        - name: TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: api-token
+              key: "3"
+`
+
+// pathsMatching は記録されたリクエストのうち、部分文字列を含むものを返す。
+func pathsMatching(paths []string, substr string) []string {
+	var out []string
+	for _, p := range paths {
+		if strings.Contains(p, substr) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TestVerifyRemoteChecksTheVPCConnector は、短縮名のコネクタがデプロイ先の
+// プロジェクトとリージョンで完全なリソース名に補われることを確認する。コネクタは
+// リージョナルなリソースなので、ここだけリージョンが要る。
+func TestVerifyRemoteChecksTheVPCConnector(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	if _, err := VerifyRemote(context.Background(), testProject, testRegion,
+		[]byte(verifyRefsManifest), opts...); err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+
+	got := pathsMatching(recorded(), "/connectors/")
+	if len(got) != 1 {
+		t.Fatalf("connector lookups = %v, want exactly one", got)
+	}
+	want := fmt.Sprintf("projects/%s/locations/%s/connectors/my-connector", testProject, testRegion)
+	if !strings.Contains(got[0], want) {
+		t.Errorf("connector lookup path = %q, want it to contain %q", got[0], want)
+	}
+}
+
+// TestVerifyRemoteKeepsAFullyQualifiedConnector は、完全なリソース名で書かれている
+// 場合にそれをそのまま使うことを確認する (別プロジェクト・別リージョンのコネクタを
+// デプロイ先の値で上書きしない)。
+func TestVerifyRemoteKeepsAFullyQualifiedConnector(t *testing.T) {
+	manifest := strings.Replace(verifyRefsManifest, "vpc-access-connector: my-connector",
+		"vpc-access-connector: projects/other-project/locations/us-central1/connectors/shared", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	if _, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...); err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+
+	got := pathsMatching(recorded(), "/connectors/")
+	if len(got) != 1 || !strings.Contains(got[0], "projects/other-project/locations/us-central1/connectors/shared") {
+		t.Errorf("connector lookups = %v, want the qualified name used as written", got)
+	}
+}
+
+// TestVerifyRemoteReportsMissingReferences は、404 が返る参照が Missing になることを
+// 確認する。どれもデプロイして初めて落ちる種類の参照。
+func TestVerifyRemoteReportsMissingReferences(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(path string) int {
+		// シークレット本体は在るが、指定された版だけが無い状況を作る。
+		if strings.Contains(path, "/versions/") ||
+			strings.Contains(path, "/connectors/") ||
+			strings.Contains(path, "/instances/") {
+			return http.StatusNotFound
+		}
+		return http.StatusOK
+	})
+
+	res, err := VerifyRemote(context.Background(), testProject, testRegion,
+		[]byte(verifyRefsManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Unchecked) != 0 {
+		t.Errorf("Unchecked = %v, want empty (404 is a decision)", res.Unchecked)
+	}
+	joined := strings.Join(res.Missing, "\n")
+	for _, want := range []string{
+		`secret "api-token" has no version "3"`,
+		`VPC connector "my-connector" does not exist`,
+		`Cloud SQL instance "other-project:asia-northeast1:main-db" does not exist`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Missing = %v, want it to contain %q", res.Missing, want)
+		}
+	}
+	// Cloud SQL は接続名のプロジェクトで引く (デプロイ先で固定しない)。
+	if got := pathsMatching(recorded(), "/instances/"); len(got) != 1 ||
+		!strings.Contains(got[0], "other-project") {
+		t.Errorf("Cloud SQL lookups = %v, want the project from the connection name", got)
+	}
+}
+
+// TestVerifyRemoteSkipsVersionsOfAMissingSecret は、シークレット自体が無い場合に
+// その版を問い合わせないことを確認する。両方並べても分かることは増えず、本当の原因が
+// 埋もれる。
+func TestVerifyRemoteSkipsVersionsOfAMissingSecret(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(path string) int {
+		if strings.Contains(path, "/secrets/") {
+			return http.StatusNotFound
+		}
+		return http.StatusOK
+	})
+
+	res, err := VerifyRemote(context.Background(), testProject, testRegion,
+		[]byte(verifyRefsManifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if got := pathsMatching(recorded(), "/versions/"); len(got) != 0 {
+		t.Errorf("version lookups = %v, want none once the secret is known to be missing", got)
+	}
+	for _, m := range res.Missing {
+		if strings.Contains(m, "version") {
+			t.Errorf("Missing = %v, want no version entry for a missing secret", res.Missing)
+		}
+	}
+}
+
+// TestVerifyRemoteReportsAMalformedCloudSQLConnection は、接続名の形が違うものを
+// 「無い」ではなく「確かめられない」に倒すことを確認する。
+func TestVerifyRemoteReportsAMalformedCloudSQLConnection(t *testing.T) {
+	manifest := strings.Replace(verifyRefsManifest,
+		"cloudsql-instances: other-project:asia-northeast1:main-db",
+		"cloudsql-instances: main-db", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Missing) != 0 {
+		t.Errorf("Missing = %v, want a malformed value not to be reported as absent", res.Missing)
+	}
+	if len(pathsMatching(recorded(), "/instances/")) != 0 {
+		t.Error("a Cloud SQL lookup was made for a value that could not be parsed")
+	}
+	if len(res.Unchecked) != 1 || !strings.Contains(res.Unchecked[0], "main-db") {
+		t.Errorf("Unchecked = %v, want the malformed connection reported", res.Unchecked)
+	}
+}
+
+// TestVerifyRemoteSkipsUnreferencedAPIs は、アノテーションが無いマニフェストで
+// VPC / Cloud SQL の API を触らないことを確認する。使っていない API の有効化を
+// verify のために要求しない。
+func TestVerifyRemoteSkipsUnreferencedAPIs(t *testing.T) {
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	if _, err := VerifyRemote(context.Background(), testProject, testRegion,
+		[]byte(verifyManifest), opts...); err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	for _, substr := range []string{"/connectors/", "/instances/"} {
+		if got := pathsMatching(recorded(), substr); len(got) != 0 {
+			t.Errorf("lookups matching %q = %v, want none", substr, got)
+		}
+	}
+}
+
+// TestVerifyRemoteReportsADestroyedSecretVersion は、破棄・無効化された版を実在しない
+// 版と同じ扱いにすることを確認する。Secret Manager は get ではこれらも 200 で返す
+// (読めなくなるのは access の方) ので、状態を見ないと素通りする。
+func TestVerifyRemoteReportsADestroyedSecretVersion(t *testing.T) {
+	for _, state := range []string{"DESTROYED", "DISABLED"} {
+		t.Run(state, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.Contains(r.URL.Path, "/versions/") {
+					_, _ = fmt.Fprintf(w, `{"name": %q, "state": %q}`, r.URL.Path, state)
+					return
+				}
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			t.Cleanup(srv.Close)
+			opts := []option.ClientOption{
+				option.WithEndpoint(srv.URL + "/"),
+				option.WithHTTPClient(srv.Client()),
+			}
+
+			res, err := VerifyRemote(context.Background(), testProject, testRegion,
+				[]byte(verifyManifest), opts...)
+			if err != nil {
+				t.Fatalf("VerifyRemote() error = %v", err)
+			}
+			if len(res.Missing) != 1 || !strings.Contains(res.Missing[0], state) {
+				t.Errorf("Missing = %v, want the %s version reported", res.Missing, state)
+			}
+		})
+	}
+}
+
+// TestVerifyRemoteReadsTheVersionFromTheSecretPath は、版が name に埋まっている形
+// (projects/<p>/secrets/<s>/versions/<v>) でもその版を引くことを確認する。
+// secretResourceName はこの形を明示的に扱うので、版の取り出しだけ食い違うと
+// 「常に latest を見ている」状態になる。
+func TestVerifyRemoteReadsTheVersionFromTheSecretPath(t *testing.T) {
+	manifest := strings.Replace(verifyManifest,
+		"              name: api-token\n              key: latest",
+		"              name: projects/other-project/secrets/api-token/versions/7", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	if _, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...); err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	got := pathsMatching(recorded(), "/versions/")
+	if len(got) != 1 || !strings.Contains(got[0], "/secrets/api-token/versions/7") {
+		t.Errorf("version lookups = %v, want the version from the secret path", got)
+	}
+}
+
+// TestVerifyRemoteHandlesADomainScopedCloudSQLProject は、ドメインスコープの
+// プロジェクト (example.com:my-project) を含む接続名を扱えることを確認する。
+// 左から 3 つに切ると、正当な値が毎回「形が違う」警告になる。
+func TestVerifyRemoteHandlesADomainScopedCloudSQLProject(t *testing.T) {
+	manifest := strings.Replace(verifyRefsManifest,
+		"cloudsql-instances: other-project:asia-northeast1:main-db",
+		"cloudsql-instances: example.com:other-project:asia-northeast1:main-db", 1)
+	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
+
+	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...)
+	if err != nil {
+		t.Fatalf("VerifyRemote() error = %v", err)
+	}
+	if len(res.Unchecked) != 0 {
+		t.Errorf("Unchecked = %v, want the domain-scoped project accepted", res.Unchecked)
+	}
+	got := pathsMatching(recorded(), "/instances/")
+	if len(got) != 1 || !strings.Contains(got[0], "example.com:other-project") {
+		t.Errorf("Cloud SQL lookups = %v, want the domain-scoped project kept whole", got)
+	}
 }
