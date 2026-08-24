@@ -337,3 +337,106 @@ func TestClientListRevisionsFailsAtThePageLimit(t *testing.T) {
 		t.Errorf("requested %d pages, want it to stop at the limit of %d", pages, listRevisionsMaxPages)
 	}
 }
+
+// TestSelectPrunableRevisions は掃除の対象選びを確認する。消してはいけないものを
+// 消さないことがこの関数の要件。
+func TestSelectPrunableRevisions(t *testing.T) {
+	// 新しい順。00005 が配信中、00003 にタグが付いている。
+	all := Revisions{
+		{Name: "my-svc-00007-abc"},
+		{Name: "my-svc-00006-def"},
+		{Name: "my-svc-00005-ghi", Percent: 100},
+		{Name: "my-svc-00004-jkl"},
+		{Name: "my-svc-00003-mno", Tags: []string{"previous"}},
+		{Name: "my-svc-00002-pqr"},
+	}
+
+	tests := []struct {
+		name string
+		keep int
+		want []string
+	}{
+		{
+			name: "keeps the newest and skips protected ones",
+			keep: 2,
+			want: []string{"my-svc-00004-jkl", "my-svc-00002-pqr"},
+		},
+		{
+			name: "keep 0 still protects traffic and tags",
+			keep: 0,
+			want: []string{"my-svc-00007-abc", "my-svc-00006-def", "my-svc-00004-jkl", "my-svc-00002-pqr"},
+		},
+		{
+			name: "keeping everything prunes nothing",
+			keep: len(all),
+			want: nil,
+		},
+		{
+			name: "a negative keep is treated as zero, not as a wildcard",
+			keep: -1,
+			want: []string{"my-svc-00007-abc", "my-svc-00006-def", "my-svc-00004-jkl", "my-svc-00002-pqr"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, r := range SelectPrunableRevisions(all, tt.keep) {
+				got = append(got, r.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("SelectPrunableRevisions(keep=%d) = %v, want %v", tt.keep, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSelectPrunableRevisionsCountsProtectedTowardKeep は、保護されたリビジョンも
+// 保持数に数えることを確認する。数え方を変えると、--keep 3 と指定したのに残る数が
+// 増減して、指定と結果が一致しなくなる。
+func TestSelectPrunableRevisionsCountsProtectedTowardKeep(t *testing.T) {
+	all := Revisions{
+		{Name: "my-svc-00003-abc", Percent: 100},
+		{Name: "my-svc-00002-def"},
+		{Name: "my-svc-00001-ghi"},
+	}
+	got := SelectPrunableRevisions(all, 2)
+	if len(got) != 1 || got[0].Name != "my-svc-00001-ghi" {
+		t.Errorf("SelectPrunableRevisions(keep=2) = %+v, want only the oldest", got)
+	}
+}
+
+// TestClientDeleteRevisionUsesTheNamespacedName は、削除がリビジョンのリソース名を
+// 組み立てて呼ばれることを確認する。
+func TestClientDeleteRevisionUsesTheNamespacedName(t *testing.T) {
+	c, api := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusOK, &run.Status{}
+	})
+
+	if err := c.DeleteRevision(context.Background(), "my-svc-00002-pqr"); err != nil {
+		t.Fatalf("DeleteRevision() error = %v", err)
+	}
+	recorded := api.recorded()
+	if len(recorded) != 1 {
+		t.Fatalf("requests = %d, want 1", len(recorded))
+	}
+	if recorded[0].Method != http.MethodDelete {
+		t.Errorf("method = %s, want DELETE", recorded[0].Method)
+	}
+	want := "/apis/serving.knative.dev/v1/namespaces/test-project/revisions/my-svc-00002-pqr"
+	if recorded[0].Path != want {
+		t.Errorf("path = %q, want %q", recorded[0].Path, want)
+	}
+}
+
+// TestClientDeleteRevisionReportsTheFailure は、失敗時にどのリビジョンかが分かる
+// ことを確認する (掃除は複数件を回すので、名前が出ないとどこで止まったか分からない)。
+func TestClientDeleteRevisionReportsTheFailure(t *testing.T) {
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusForbidden, googleAPIError(403, "denied")
+	})
+
+	err := c.DeleteRevision(context.Background(), "my-svc-00002-pqr")
+	if err == nil || !strings.Contains(err.Error(), "my-svc-00002-pqr") {
+		t.Errorf("DeleteRevision() error = %v, want it to name the revision", err)
+	}
+}

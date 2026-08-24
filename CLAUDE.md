@@ -292,7 +292,12 @@ revision-name conflicts, asynchronous rollout failures).
   and the one to return to out of it, so treating it as complete can roll back to the wrong
   version (or report that there is nothing to roll back to). `newRevisions` is the
   pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
-  the API. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
+  the API. `--prune` is the one part of it that writes: `SelectPrunableRevisions` (pure) drops the
+  newest `keep` entries and then skips anything with traffic or a tag, and `Client.DeleteRevision`
+  removes what is left. Protected revisions **count toward `keep`** on purpose — counting only
+  deletable ones would make `--keep 20` leave a different number behind depending on how many
+  revisions happen to be tagged. The command shares `confirmAction` with `delete` (no TTY and no
+  `--auto-approve` → refuse) rather than `applyPlan`, since there is no diff to show. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
   have sidecars), joined with `,` for the `IMAGE` column; returning only the first one meant an
   image that was actually running never appeared anywhere in the output. `Revision.Image` is kept
   as `Images[0]` **only** for JSON compatibility — `--format json` is a published interface and

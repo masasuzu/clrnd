@@ -243,3 +243,43 @@ func dash(s string) string {
 	}
 	return s
 }
+
+// revisionName は namespaces API のリビジョンのリソース名を組み立てる。
+func (c *Client) revisionName(revision string) string {
+	return fmt.Sprintf("namespaces/%s/revisions/%s", c.project, revision)
+}
+
+// DeleteRevision はリビジョンを 1 件削除する。Cloud Run は古いリビジョンを自動では
+// 消さないので、掃除はこちらから呼ぶしかない。
+func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
+	if _, err := c.api.Namespaces.Revisions.Delete(c.revisionName(revision)).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("failed to delete revision %q: %w", revision, err)
+	}
+	return nil
+}
+
+// SelectPrunableRevisions は削除してよいリビジョンを新しい順の一覧から選ぶ。
+// revisions は ListRevisions が返す「新しい順」であることを前提にする。
+//
+// 規則は 2 つだけで、どちらも「消して困るものを消さない」ためにある。
+//   - 新しい方から keep 件はそのまま残す (保護されているかどうかに関わらず数える。
+//     数え方を変えると、--keep 3 と指定したのに 4 件残ったり、保護されたリビジョンの
+//     数だけ古い版が余計に消えたりして、指定した数と結果が一致しなくなる)
+//   - それより古くても、トラフィックが向いているものとタグが付いているものは残す。
+//     配信中の版を消せばサービスが落ちるし、タグは URL の入口なので消せば経路が消える
+func SelectPrunableRevisions(revisions Revisions, keep int) Revisions {
+	if keep < 0 {
+		keep = 0
+	}
+	var out Revisions
+	for i, r := range revisions {
+		if i < keep {
+			continue
+		}
+		if r.Percent > 0 || len(r.Tags) > 0 {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}

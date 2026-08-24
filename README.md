@@ -659,6 +659,25 @@ clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 | `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
 | `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
 | `--format`  | Output format: `text` (default) or `json`.                     |
+| `--prune`   | Delete the revisions older than the newest `--keep`.           |
+| `--keep`    | How many of the newest revisions to keep when pruning (default `10`). |
+| `--auto-approve` | Prune without the interactive confirmation prompt.         |
+| `--dry-run` | With `--prune`, only show what would be deleted.                |
+
+Cloud Run never deletes a revision on its own, and a service can only hold so many, so
+`--prune` is the way to clear out old ones:
+
+```sh
+clrnd revisions --prune --keep 20 --dry-run   # see what would go
+clrnd revisions --prune --keep 20
+```
+
+**A revision serving traffic or carrying a tag is never deleted**, however old it is — deleting the
+first would take the service down, and the second would remove a tag URL. The `--keep` count
+includes those protected revisions, so `--keep 20` always leaves 20 behind rather than 20 plus
+however many happened to be protected. What is about to go is printed first (as data on stdout, so
+`--format json` works here too), and the confirmation follows the same rule as `delete`: without a
+terminal, clrnd refuses unless `--auto-approve` is given.
 
 Revisions are ordered newest-first by `creationTimestamp`, falling back to the revision name when a
 timestamp cannot be parsed. That fallback is a plain descending string comparison: Cloud Run's own
