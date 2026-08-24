@@ -330,7 +330,22 @@ revision-name conflicts, asynchronous rollout failures).
   and the one to return to out of it, so treating it as complete can roll back to the wrong
   version (or report that there is nothing to roll back to). `newRevisions` is the
   pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
-  the API. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
+  the API. `--prune` is the one part of it that writes: `SelectPrunableRevisions` (pure) drops the
+  newest `keep` entries and then skips anything with traffic, a tag, or a name in `spec.traffic`
+  (`Revision.Pinned`), and `Client.DeleteRevision` removes what is left. The spec side matters
+  because `status.traffic` carries no share until a rollout settles — protecting only by the live
+  split would, mid-rollout, make every revision look idle. `latestRevision: true` needs its own
+  handling there: it names no revision, so `pinnedRevisionNames` falls back to
+  `status.latestCreatedRevisionName` and `latestReadyRevisionName` when it sees one. Without that,
+  a `--prune --keep 0` during a rollout deletes the revision that is about to take the traffic.
+  The fallback is deliberately conditional: once traffic is pinned by name (after a `rollback`),
+  the newest revision is genuinely idle and should stay prunable. `keep` counts from the newest down
+  regardless of protection, so it is a "how far back do I look" number, not a promise about how
+  many survive; the docs say so rather than claiming a fixed count. A negative `keep` is a CLI
+  error rather than a silent clamp to 0 (a miscomputed `--keep "$N"` would otherwise delete
+  everything unprotected), and `--keep`/`--dry-run`/`--auto-approve` without `--prune` are rejected
+  instead of ignored. The command shares `confirmAction` with `delete` (no TTY and no
+  `--auto-approve` → refuse) rather than `applyPlan`, since there is no diff to show. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
   have sidecars), joined with `,` for the `IMAGE` column; returning only the first one meant an
   image that was actually running never appeared anywhere in the output. `Revision.Image` is kept
   as `Images[0]` **only** for JSON compatibility — `--format json` is a published interface and
