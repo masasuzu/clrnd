@@ -14,8 +14,8 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// serviceWithReady は Ready 条件と observedGeneration を指定したサービスを組み立てる。
-// status が空なら Ready 条件そのものを持たない (作成直後の状態)。
+// serviceWithReady builds a service with the given Ready condition and observedGeneration.
+// When status is empty, it has no Ready condition at all (the state right after creation).
 func serviceWithReady(status, reason, message string, observed int64) *run.Service {
 	svc := &run.Service{
 		ApiVersion: manifestAPIVersion,
@@ -31,8 +31,9 @@ func serviceWithReady(status, reason, message string, observed int64) *run.Servi
 	return svc
 }
 
-// sequenceHandler は呼ばれるたびに次のサービスを返す。最後の要素はそれ以降ずっと返す。
-// 呼び出し回数も返すので「何回ポーリングしたか」を検証できる。
+// sequenceHandler returns the next service each time it is called. The last element keeps being
+// returned from then on. It also returns the call count, so "how many times it polled" can be
+// verified.
 func sequenceHandler(objs ...*run.Service) (func(*http.Request) (int, interface{}), func() int) {
 	var mu sync.Mutex
 	calls := 0
@@ -51,7 +52,7 @@ func sequenceHandler(objs ...*run.Service) (func(*http.Request) (int, interface{
 	return handler, count
 }
 
-// fastWait はテスト用に待ち時間をほぼ 0 にした WaitOptions を返す。
+// fastWait returns WaitOptions with the wait time brought close to 0, for tests.
 func fastWait(generation int64) WaitOptions {
 	return WaitOptions{Timeout: 5 * time.Second, Interval: time.Millisecond, Generation: generation}
 }
@@ -86,7 +87,7 @@ func TestWaitDone(t *testing.T) {
 			wantDone: false,
 		},
 		{
-			// 前の世代の Ready=True を見て「成功」と誤判定しないこと。
+			// It must not see the previous generation's Ready=True and misjudge it as "success".
 			name:       "generation not observed yet",
 			status:     newStatus(serviceWithReady(conditionTrue, "", "", 2)),
 			generation: 3,
@@ -148,7 +149,7 @@ func TestWaitFailsFastWhenReadyIsFalse(t *testing.T) {
 	if !strings.Contains(err.Error(), "ConflictingRevisionName") || !strings.Contains(err.Error(), "name taken") {
 		t.Errorf("Wait() error = %v, want the reason and message", err)
 	}
-	// 失敗が確定したら待ち続けない。
+	// Once the failure is certain, it does not keep waiting.
 	if calls() != 1 {
 		t.Errorf("polled %d times, want 1 (must not keep waiting after a failure)", calls())
 	}
@@ -158,8 +159,8 @@ func TestWaitFailsFastWhenReadyIsFalse(t *testing.T) {
 }
 
 func TestWaitIgnoresThePreviousGeneration(t *testing.T) {
-	// 直前の世代が Ready=True のまま残っている状態から始める。世代が追いつくまでは
-	// 完了と判定してはいけない。
+	// Start from a state where the previous generation is still left at Ready=True. Until the
+	// generation catches up, it must not be judged as done.
 	handler, calls := sequenceHandler(
 		serviceWithReady(conditionTrue, "", "", 2),
 		serviceWithReady(conditionTrue, "", "", 2),
@@ -224,7 +225,7 @@ func TestWaitStopsWhenTheContextIsCancelled(t *testing.T) {
 func TestWaitReportsChangesOnce(t *testing.T) {
 	handler, _ := sequenceHandler(
 		serviceWithReady("Unknown", "Deploying", "", 3),
-		serviceWithReady("Unknown", "Deploying", "", 3), // 同じ状態: 通知しない
+		serviceWithReady("Unknown", "Deploying", "", 3), // same state: not reported
 		serviceWithReady(conditionTrue, "", "", 3),
 	)
 	c, _ := newTestClient(t, handler)
@@ -270,7 +271,7 @@ func TestWaitDeletedReturnsWhenTheServiceIsGone(t *testing.T) {
 	if got != 3 {
 		t.Errorf("polled %d times, want 3", got)
 	}
-	// まだ残っていることは 1 度だけ知らせる。
+	// That it is still present is reported only once.
 	if len(updates) != 1 || updates[0] != "still present" {
 		t.Errorf("updates = %v, want a single 'still present'", updates)
 	}
@@ -328,8 +329,8 @@ func TestNextWaitInterval(t *testing.T) {
 		{name: "clamps to the cap", in: 12 * time.Second, want: maxWaitInterval},
 		{name: "stays at the cap", in: maxWaitInterval, want: maxWaitInterval},
 		{
-			// 上限より長い指定は縮めない。--interval 60s を 15s に切り下げると、
-			// 呼び出しを減らしたいという指定に反して増やしてしまう。
+			// An interval longer than the cap is not shortened. Cutting --interval 60s down to
+			// 15s would increase the calls, against a setting whose intent is to reduce them.
 			name: "keeps an interval longer than the cap",
 			in:   60 * time.Second,
 			want: 60 * time.Second,
@@ -368,7 +369,8 @@ func TestWaitProgress(t *testing.T) {
 			want:   "observed generation 3, Ready=False (RevisionFailed): boom",
 		},
 		{
-			// 待っている世代が未反映のうちは、前の世代の Ready を出さない。
+			// While the awaited generation is not observed yet, the previous generation's Ready
+			// is not shown.
 			name:       "awaited generation not observed yet",
 			status:     newStatus(serviceWithReady(conditionTrue, "", "", 7)),
 			generation: 8,
@@ -384,9 +386,9 @@ func TestWaitProgress(t *testing.T) {
 	}
 }
 
-// TestWaitToleratesTransientErrors は、状態の取得が一時的に失敗しても待機を
-// 打ち切らないことを確認する。打ち切ると、適用は成功しているのに deploy が
-// 失敗を返し、この待機が防ぎたい CI の誤判定を裏返しに作ってしまう。
+// TestWaitToleratesTransientErrors checks that the wait is not abandoned when fetching the status
+// fails temporarily. Abandoning it makes deploy return a failure even though the apply succeeded,
+// producing, inverted, the very CI misjudgement this wait is meant to prevent.
 func TestWaitToleratesTransientErrors(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -416,10 +418,10 @@ func TestWaitToleratesTransientErrors(t *testing.T) {
 	}
 }
 
-// TestWaitFailsFastWhenTheServiceIsMissing は 404 では再試行しないことを確認する。
-// 実在しないサービスはタイムアウトまで待っても現れない。
+// TestWaitFailsFastWhenTheServiceIsMissing checks that a 404 is not retried.
+// A service that does not exist will not appear even if you wait until the timeout.
 func TestWaitFailsFastWhenTheServiceIsMissing(t *testing.T) {
-	c, api := newTestClient(t, nil) // 既定の handler は 404
+	c, api := newTestClient(t, nil) // the default handler returns 404
 
 	_, err := c.Wait(context.Background(), "missing", fastWait(0))
 	if err == nil {
@@ -433,8 +435,8 @@ func TestWaitFailsFastWhenTheServiceIsMissing(t *testing.T) {
 	}
 }
 
-// TestWaitTimeoutReportsTheLastError は、取得に失敗し続けたままタイムアウトした
-// 場合に原因を隠さないことを確認する。
+// TestWaitTimeoutReportsTheLastError checks that, when it times out with the fetch still failing,
+// the cause is not hidden.
 func TestWaitTimeoutReportsTheLastError(t *testing.T) {
 	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
 		return http.StatusServiceUnavailable, googleAPIError(503, "backend error")
@@ -453,8 +455,8 @@ func TestWaitTimeoutReportsTheLastError(t *testing.T) {
 	}
 }
 
-// googleAPIErrorWithReason はエラー理由 (googleapi.Error.Errors[].Reason) を持つ
-// エラー応答を組み立てる。Google API はレート制限を 403 + 理由で返す。
+// googleAPIErrorWithReason builds an error response carrying an error reason
+// (googleapi.Error.Errors[].Reason). Google APIs report a rate limit as 403 + a reason.
 func googleAPIErrorWithReason(code int, message, reason string) map[string]interface{} {
 	return map[string]interface{}{
 		"error": map[string]interface{}{
@@ -465,9 +467,9 @@ func googleAPIErrorWithReason(code int, message, reason string) map[string]inter
 	}
 }
 
-// TestWaitFailsFastOnPermanentErrors は、待っても回復しないエラーをタイムアウトまで
-// 引きずらないことを確認する。原因は最初のポーリングで分かっているのに、既定 10 分の
-// タイムアウトまで CI のジョブを占有してから同じエラーで落ちるのは無駄でしかない。
+// TestWaitFailsFastOnPermanentErrors checks that an error that will not recover by waiting is not
+// dragged out until the timeout. The cause is known from the first poll, so holding a CI job until
+// the default 10-minute timeout and then failing with the same error is pure waste.
 func TestWaitFailsFastOnPermanentErrors(t *testing.T) {
 	for _, code := range []int{
 		http.StatusBadRequest,
@@ -493,8 +495,9 @@ func TestWaitFailsFastOnPermanentErrors(t *testing.T) {
 	}
 }
 
-// TestWaitRetriesARateLimitedForbidden は、403 でもレート制限は再試行することを
-// 確認する。権限不足と同じ扱いにすると、混み合っているだけの状況で待機が落ちる。
+// TestWaitRetriesARateLimitedForbidden checks that a rate limit is retried even though it is a
+// 403. Treating it the same as insufficient permissions makes the wait fail when things are merely
+// busy.
 func TestWaitRetriesARateLimitedForbidden(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -518,8 +521,9 @@ func TestWaitRetriesARateLimitedForbidden(t *testing.T) {
 	}
 }
 
-// TestWaitDeletedFailsFastOnPermanentErrors は、削除待ちも Wait と同じ分類で
-// 打ち切ることを確認する。両者がずれると、delete だけ 10 分待たされる。
+// TestWaitDeletedFailsFastOnPermanentErrors checks that waiting for deletion gives up using the
+// same classification as Wait. If the two drifted apart, only delete would be kept waiting for 10
+// minutes.
 func TestWaitDeletedFailsFastOnPermanentErrors(t *testing.T) {
 	c, api := newTestClient(t, func(*http.Request) (int, interface{}) {
 		return http.StatusForbidden, googleAPIError(403, "permission denied")

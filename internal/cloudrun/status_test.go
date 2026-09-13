@@ -9,7 +9,7 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// readyService は Ready なサービスの API レスポンス相当。
+// readyService is the equivalent of an API response for a Ready service.
 func readyService() *run.Service {
 	return &run.Service{
 		ApiVersion: manifestAPIVersion,
@@ -62,7 +62,7 @@ func TestNewStatus(t *testing.T) {
 }
 
 func TestNewStatusIsNilSafe(t *testing.T) {
-	// nil や status 未設定 (作成直後など) でも panic しない。
+	// It does not panic on nil or on an unset status (e.g. right after creation).
 	for _, tt := range []struct {
 		name string
 		obj  *run.Service
@@ -97,7 +97,7 @@ func TestStatusReady(t *testing.T) {
 		t.Errorf("Ready().Status = %q, want True", c.Status)
 	}
 
-	// Ready 条件が無ければ nil。
+	// nil when there is no Ready condition.
 	if (&Status{Conditions: []Condition{{Type: "RoutesReady", Status: "True"}}}).Ready() != nil {
 		t.Error("Ready() should be nil when there is no Ready condition")
 	}
@@ -168,7 +168,8 @@ func TestStatusTextTrafficDetails(t *testing.T) {
 }
 
 func TestStatusTextIsEmptyForAnEmptyStatus(t *testing.T) {
-	// 何も無いときに "Generation: 0 (observed 0)" のような無意味な行を出さない。
+	// When there is nothing, it does not print meaningless lines like
+	// "Generation: 0 (observed 0)".
 	if got := (&Status{}).Text(); got != "" {
 		t.Errorf("Text() = %q, want empty", got)
 	}
@@ -195,7 +196,7 @@ func TestClientStatus(t *testing.T) {
 }
 
 func TestClientStatusPropagatesErrors(t *testing.T) {
-	c, _ := newTestClient(t, nil) // 既定の handler は 404
+	c, _ := newTestClient(t, nil) // the default handler returns 404
 	if _, err := c.Status(context.Background(), "missing"); err == nil {
 		t.Fatal("Status() error = nil, want an error")
 	}

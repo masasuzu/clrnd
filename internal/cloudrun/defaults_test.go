@@ -10,8 +10,8 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// defaultedService は Cloud Run が既定値を埋めたあとのサービス定義。
-// validManifest には無いフィールドが入っている。
+// defaultedService is the service definition after Cloud Run has filled in its defaults.
+// It holds fields that validManifest does not have.
 func defaultedService() *run.Service {
 	return &run.Service{
 		ApiVersion: manifestAPIVersion,
@@ -30,8 +30,9 @@ func defaultedService() *run.Service {
 	}
 }
 
-// defaultingAPI は既定値を埋めるサーバを模す。dryRun=all の PUT には既定値入りの
-// 定義を返し、GET でも同じものを返す。dryRun でない PUT の body は記録する。
+// defaultingAPI mimics a server that fills in defaults. It returns the definition with the
+// defaults in it for a dryRun=all PUT, and returns the same thing for a GET too. It records the
+// body of a PUT that is not a dryRun.
 func defaultingAPI(t *testing.T) (*Client, func() []recordedRequest) {
 	t.Helper()
 	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
@@ -47,7 +48,7 @@ func TestPlanWithoutResolveDefaultsShowsThem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	// 最小マニフェストなので、サーバが埋めた分がそのまま差分になる (issue #11)。
+	// It is a minimal manifest, so whatever the server filled in becomes a diff as is (issue #11).
 	for _, want := range []string{"containerConcurrency", "timeoutSeconds", "latestRevision"} {
 		if !strings.Contains(plan.Diff, want) {
 			t.Errorf("Plan().Diff should contain %q without --server-defaults:\n%s", want, plan.Diff)
@@ -67,7 +68,7 @@ func TestPlanResolvesServerDefaults(t *testing.T) {
 		t.Errorf("Plan().Diff = %q, want empty once the defaults are resolved", plan.Diff)
 	}
 
-	// 解決には dryRun=all の書き込み系リクエストを使う (何も変えない)。
+	// Resolving uses a dryRun=all write request (which changes nothing).
 	var dryRuns int
 	for _, r := range recorded() {
 		if r.Method == http.MethodPut && strings.Contains(r.Query, "dryRun=all") {
@@ -79,9 +80,9 @@ func TestPlanResolvesServerDefaults(t *testing.T) {
 	}
 }
 
-// TestPlanAppliesTheOriginalManifest は、既定値を解決しても適用に送るのは元の
-// マニフェストのままであることを確認する。サーバが埋めた値を書き戻すと、将来
-// Cloud Run の既定値が変わったときに古い値へ固定してしまう。
+// TestPlanAppliesTheOriginalManifest checks that, even when the defaults are resolved, what is
+// sent to apply is still the original manifest. Writing back the values the server filled in
+// would pin them to the old values when Cloud Run's defaults change in the future.
 func TestPlanAppliesTheOriginalManifest(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
@@ -132,10 +133,10 @@ func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 	}
 }
 
-// TestCompareManifestValidatesBeforeTheDryRun は、--server-defaults のとき
-// サービス名の不一致を API に投げる前に弾くことを確認する。dry-run は path の
-// サービス名と body の metadata.name が一致していないと 400 になるので、投げると
-// 「権限が要る」と誤読される紛らわしいエラーになる。
+// TestCompareManifestValidatesBeforeTheDryRun checks that, with --server-defaults, a service name
+// mismatch is rejected before anything is sent to the API. A dry run returns 400 when the service
+// name in the path and metadata.name in the body do not match, so sending it produces a confusing
+// error that gets misread as "permission is required".
 func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
@@ -154,9 +155,9 @@ func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
 	}
 }
 
-// TestCompareManifestSetsTheNamespace は、dry-run に送る定義が deploy と同じ
-// 前処理 (namespace を送信先に合わせる) を通ることを確認する。これが無いと、
-// namespace 付きのマニフェストで diff --server-defaults だけが API に弾かれる。
+// TestCompareManifestSetsTheNamespace checks that the definition sent to the dry run goes through
+// the same pre-processing as deploy (setting the namespace to the target). Without it, for a
+// manifest that carries a namespace, only diff --server-defaults gets rejected by the API.
 func TestCompareManifestSetsTheNamespace(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
@@ -187,16 +188,16 @@ spec:
 	}
 }
 
-// TestCompareManifestTreatsAMissingServiceAsAnAddition は、まだ作られていない
-// サービスに対して diff が動くことを確認する。PlanService (deploy) は 404 を
-// 新規作成として扱うのに、CompareManifest (diff) はそのまま返していたため、
-// README が勧める手順の初回だけ diff が落ちていた。
+// TestCompareManifestTreatsAMissingServiceAsAnAddition checks that diff works against a service
+// that has not been created yet. PlanService (deploy) treated a 404 as a create, but
+// CompareManifest (diff) returned it as is, so diff failed on just the first run of the procedure
+// the README recommends.
 func TestCompareManifestTreatsAMissingServiceAsAnAddition(t *testing.T) {
 	var mu sync.Mutex
 	var dryRuns int
 	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		if r.Method == http.MethodPost {
-			// 未存在なので dry-run は Create でなければならない。
+			// The service does not exist, so the dry run must be a Create.
 			mu.Lock()
 			dryRuns++
 			mu.Unlock()
@@ -222,7 +223,7 @@ func TestCompareManifestTreatsAMissingServiceAsAnAddition(t *testing.T) {
 }
 
 func TestCompareManifestHandlesAMissingServiceWithoutResolvingDefaults(t *testing.T) {
-	c, _ := newTestClient(t, nil) // 既定の handler は 404
+	c, _ := newTestClient(t, nil) // the default handler returns 404
 
 	got, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{})
@@ -234,9 +235,9 @@ func TestCompareManifestHandlesAMissingServiceWithoutResolvingDefaults(t *testin
 	}
 }
 
-// TestCompareManifestValidatesWithoutResolvingDefaults は、--no-server-defaults でも
-// deploy と同じ入力検証を通すことを確認する。ここを飛ばすと、deploy が拒否する
-// マニフェストで diff だけが「名前を変更できるかのような差分」を出す。
+// TestCompareManifestValidatesWithoutResolvingDefaults checks that, even with
+// --no-server-defaults, the input goes through the same validation as deploy. Skipping it makes
+// diff alone show "a diff as if the name could be changed" for a manifest deploy refuses.
 func TestCompareManifestValidatesWithoutResolvingDefaults(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
@@ -253,8 +254,8 @@ func TestCompareManifestValidatesWithoutResolvingDefaults(t *testing.T) {
 	}
 }
 
-// TestResolveDefaultsErrorPointsAtTheFlag は、権限不足のときに何をすればよいかを
-// 伝えることを確認する。dry-run は書き込み系なので、読むだけの権限では通らない。
+// TestResolveDefaultsErrorPointsAtTheFlag checks that, on insufficient permissions, the error says
+// what to do. A dry run is a write, so read-only permissions do not get it through.
 func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		if r.Method == http.MethodPut {
@@ -270,9 +271,9 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	}
 	for _, want := range []string{
 		"failed to resolve server defaults",
-		"permission denied",    // 原因をそのまま見せる
-		"dry-run update",       // 実際に投げた呼び出し
-		"--no-server-defaults", // 対処を示す
+		"permission denied",    // shows the cause as is
+		"dry-run update",       // the call that was actually made
+		"--no-server-defaults", // points at the way out
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Plan() error = %v, want it to contain %q", err, want)
@@ -280,10 +281,10 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 	}
 }
 
-// TestResolveDefaultsErrorNamesTheCreatePath は、まだ存在しないサービスに対する diff で
-// 権限不足になったときに create の権限を案内することを確認する。この経路の dry-run は
-// Create なので run.services.create が要る。update と案内すると、権限を足す人が
-// 案内どおりに直しても通らないままになる。
+// TestResolveDefaultsErrorNamesTheCreatePath checks that, when a diff against a service that does
+// not exist yet fails on insufficient permissions, the error points at the create permission. The
+// dry run on this path is a Create, so it needs run.services.create. Pointing at update means
+// someone adding the permission follows the advice and still does not get through.
 func TestResolveDefaultsErrorNamesTheCreatePath(t *testing.T) {
 	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		switch r.Method {
@@ -303,8 +304,8 @@ func TestResolveDefaultsErrorNamesTheCreatePath(t *testing.T) {
 	for _, want := range []string{
 		"failed to resolve server defaults",
 		"permission denied",
-		"dry-run create",       // update ではない
-		"permission to create", // 足すべき権限
+		"dry-run create",       // not update
+		"permission to create", // the permission to add
 		"--no-server-defaults",
 	} {
 		if !strings.Contains(err.Error(), want) {

@@ -7,9 +7,9 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// serviceWithTraffic は spec.traffic と status.traffic を持つ live サービスを組み立てる。
-// spec 側は「いま宣言されている配分」、status 側は「実際に配られている配分」で、
-// 残りの受け皿を選ぶのは後者を見る。
+// serviceWithTraffic builds a live service with spec.traffic and status.traffic.
+// The spec side is "the split currently declared" and the status side is "the split actually
+// being served"; choosing where the remainder goes looks at the latter.
 func serviceWithTraffic(spec []*run.TrafficTarget, status []*run.TrafficTarget, latestReady string) *run.Service {
 	return &run.Service{
 		ApiVersion: manifestAPIVersion,
@@ -28,8 +28,9 @@ func serviceWithTraffic(spec []*run.TrafficTarget, status []*run.TrafficTarget, 
 	}
 }
 
-// TestShiftTrafficTargetSplitsAgainstTheLargestShare は、割合を 100 未満にしたときに
-// 残りが「いちばん多く受けているリビジョン」に寄ることを確認する。カナリアの形。
+// TestShiftTrafficTargetSplitsAgainstTheLargestShare checks that, when the percentage is below
+// 100, the remainder goes to "the revision currently receiving the most". This is the canary
+// shape.
 func TestShiftTrafficTargetSplitsAgainstTheLargestShare(t *testing.T) {
 	live := serviceWithTraffic(
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
@@ -50,9 +51,9 @@ func TestShiftTrafficTargetSplitsAgainstTheLargestShare(t *testing.T) {
 	assertTraffic(t, got.Spec.Traffic, want)
 }
 
-// TestShiftTrafficTargetToLatestFollowsTheNewest は、--to-latest がリビジョン名を
-// 固定せず latestRevision を立てることを確認する。rollback が固定したトラフィックを
-// 最新へ戻す (行き止まりから抜ける) のがこの経路。
+// TestShiftTrafficTargetToLatestFollowsTheNewest checks that --to-latest sets latestRevision
+// rather than pinning a revision name. This is the path that returns traffic pinned by a rollback
+// to the latest revision (the way out of the dead end).
 func TestShiftTrafficTargetToLatestFollowsTheNewest(t *testing.T) {
 	live := serviceWithTraffic(
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00006-def", Percent: 100}},
@@ -72,9 +73,9 @@ func TestShiftTrafficTargetToLatestFollowsTheNewest(t *testing.T) {
 	}
 }
 
-// TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision は、--to-latest でも
-// 残りが最新以外のリビジョンに寄ることを確認する (最新自身を受け皿にすると、同じ版に
-// 2 つのエントリが向くだけで分割にならない)。
+// TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision checks that, even with
+// --to-latest, the remainder goes to a revision other than the latest (using the latest itself
+// to take the remainder would just point two entries at the same revision, which is no split).
 func TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision(t *testing.T) {
 	live := serviceWithTraffic(
 		nil,
@@ -93,8 +94,9 @@ func TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision(t *testing.T) 
 	}
 }
 
-// TestShiftTrafficTargetKeepsTags は、タグ付きの経路が 0% で残ることを確認する。
-// 割合を動かしただけでタグ URL が消えると、そこを指していた確認手段が失われる。
+// TestShiftTrafficTargetKeepsTags checks that tagged routes are kept at 0%.
+// If a tag URL disappeared just because the percentages moved, the means of checking that pointed
+// at it would be lost.
 func TestShiftTrafficTargetKeepsTags(t *testing.T) {
 	live := serviceWithTraffic(
 		[]*run.TrafficTarget{
@@ -122,8 +124,8 @@ func TestShiftTrafficTargetKeepsTags(t *testing.T) {
 	}
 }
 
-// TestShiftTrafficTargetLeavesTheTemplateAlone は、テンプレートに触らないこと
-// (= 新しいリビジョンを作らないこと) と、引数を書き換えないことを確認する。
+// TestShiftTrafficTargetLeavesTheTemplateAlone checks that it does not touch the template
+// (= does not create a new revision) and does not mutate its argument.
 func TestShiftTrafficTargetLeavesTheTemplateAlone(t *testing.T) {
 	live := serviceWithTraffic(
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
@@ -146,7 +148,7 @@ func TestValidateTrafficRequest(t *testing.T) {
 	tests := []struct {
 		name string
 		req  TrafficRequest
-		want string // エラーに含まれてほしい文字列。空なら成功。
+		want string // string the error should contain. When empty, success.
 	}{
 		{"revision", TrafficRequest{Revision: "my-svc-00007-abc", Percent: 100}, ""},
 		{"latest", TrafficRequest{Latest: true, Percent: 50}, ""},
@@ -169,8 +171,8 @@ func TestValidateTrafficRequest(t *testing.T) {
 	}
 }
 
-// TestLargestShareIsDeterministic は、同率のときに結果が実行のたびに変わらない
-// ことを確認する (map の反復順に引きずられると、同じ入力で別のリビジョンが選ばれる)。
+// TestLargestShareIsDeterministic checks that, on a tie, the result does not change from run to
+// run (if it followed map iteration order, the same input would pick a different revision).
 func TestLargestShareIsDeterministic(t *testing.T) {
 	status := statusWithTraffic(
 		TrafficTarget{RevisionName: "my-svc-00007-abc", Percent: 50},
@@ -184,12 +186,13 @@ func TestLargestShareIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestShiftTrafficTargetRefusesToDemoteTheServingRevision は、既に本番を持っている
-// リビジョンを送り先にした部分指定を断ることを確認する。
+// TestShiftTrafficTargetRefusesToDemoteTheServingRevision checks that a partial shift whose target
+// is the revision already carrying production traffic is refused.
 //
-// 「送り先を除いた中で最大」に残りを預ける実装だと、カナリア中 (安定版 90% / 旧版 10%)
-// に --to-latest --percent 10 を撃ったときに、安定版が 10% に落ちて旧版が 90% を持つ。
-// 誰も望まない配分なので、繰り上げずに断る。
+// With an implementation that hands the remainder to "the largest excluding the target", running
+// --to-latest --percent 10 mid-canary (stable 90% / old 10%) drops the stable revision to 10% and
+// gives the old one 90%. Nobody wants that split, so it refuses instead of promoting the
+// runner-up.
 func TestShiftTrafficTargetRefusesToDemoteTheServingRevision(t *testing.T) {
 	live := serviceWithTraffic(
 		nil,
@@ -200,8 +203,8 @@ func TestShiftTrafficTargetRefusesToDemoteTheServingRevision(t *testing.T) {
 		"my-svc-00007-abc")
 
 	for _, req := range []TrafficRequest{
-		{Latest: true, Percent: 10},                 // latestRevision は安定版に解決する
-		{Revision: "my-svc-00007-abc", Percent: 10}, // 名前で同じものを指した場合
+		{Latest: true, Percent: 10},                 // latestRevision resolves to the stable revision
+		{Revision: "my-svc-00007-abc", Percent: 10}, // the same one pointed at by name
 	} {
 		_, err := ShiftTrafficTarget(live, req)
 		if err == nil {
@@ -213,8 +216,8 @@ func TestShiftTrafficTargetRefusesToDemoteTheServingRevision(t *testing.T) {
 	}
 }
 
-// TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary は、カナリア中でも
-// 別のリビジョンを送り先にすれば、残りが安定版に載ることを確認する。
+// TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary checks that, even mid-canary,
+// targeting a different revision puts the remainder on the stable revision.
 func TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary(t *testing.T) {
 	live := serviceWithTraffic(
 		nil,
@@ -234,9 +237,9 @@ func TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary(t *testing.T)
 	})
 }
 
-// TestPinnedTrafficFixesTheLatestPointer は、deploy --no-traffic が使う固定処理が
-// latestRevision を具体的なリビジョン名に置き換えることを確認する。ここが名前に
-// ならないと、これから作るリビジョンが全量を受け取ってしまう。
+// TestPinnedTrafficFixesTheLatestPointer checks that the pinning deploy --no-traffic uses replaces
+// latestRevision with a concrete revision name. If this does not become a name, the revision about
+// to be created receives all of the traffic.
 func TestPinnedTrafficFixesTheLatestPointer(t *testing.T) {
 	live := serviceWithTraffic(
 		nil,
@@ -269,7 +272,7 @@ func TestHasTraffic(t *testing.T) {
 	}
 }
 
-// assertTraffic は revisionName / tag / percent の並びが一致することを確かめる。
+// assertTraffic checks that the sequence of revisionName / tag / percent matches.
 func assertTraffic(t *testing.T, got, want []*run.TrafficTarget) {
 	t.Helper()
 	if len(got) != len(want) {

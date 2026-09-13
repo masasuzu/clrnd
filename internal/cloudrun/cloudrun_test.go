@@ -29,7 +29,7 @@ func TestValidate(t *testing.T) {
 		name     string
 		manifest string
 		service  string
-		wantErr  string // 期待するエラー部分文字列。空なら成功 (nil) を期待。
+		wantErr  string // expected error substring. When empty, success (nil) is expected.
 	}{
 		{
 			name:     "valid",
@@ -115,7 +115,7 @@ spec:
 			wantErr: "image is required",
 		},
 		{
-			// #1 で修正した nil パニックの回帰テスト。
+			// Regression test for the nil panic fixed in #1.
 			name: "null container",
 			manifest: `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -131,7 +131,7 @@ spec:
 			wantErr: "must not be null",
 		},
 		{
-			// UnmarshalStrict が未知フィールド (typo) を検出する。
+			// UnmarshalStrict detects an unknown field (a typo).
 			name: "unknown field",
 			manifest: `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -224,9 +224,9 @@ func TestToManifestStripsServerManagedFields(t *testing.T) {
 	}
 }
 
-// compareManifest は「live サービスとローカルのマニフェストを比較する」純粋な処理を
-// テストから呼ぶためのヘルパ。本体では Client.CompareManifest / PlanService が
-// 同じ compareServices を通る。
+// compareManifest is a helper that lets tests call the pure step of "comparing the live service
+// with the local manifest". In the production code, Client.CompareManifest / PlanService go
+// through the same compareServices.
 func compareManifest(current *run.Service, manifest []byte, currentName, desiredName string) (string, error) {
 	desired, err := parseManifest(manifest)
 	if err != nil {
@@ -235,8 +235,8 @@ func compareManifest(current *run.Service, manifest []byte, currentName, desired
 	return compareServices(current, desired, currentName, desiredName)
 }
 
-// normalize はテスト用に「ローカルのマニフェストを live 側と同じ正規化にそろえる」処理。
-// かつて Normalize として公開していたが、今は Compare がこの経路を内包している。
+// normalize is, for tests, the step that "brings the local manifest to the same normalization as
+// the live side". It used to be exported as Normalize, but Compare now contains this path.
 func normalize(t *testing.T, manifest []byte) []byte {
 	t.Helper()
 	svc, err := parseManifest(manifest)
@@ -284,8 +284,8 @@ func TestNormalizationIsIdempotent(t *testing.T) {
 }
 
 func TestCompareRejectsUnknownField(t *testing.T) {
-	// Compare は parseManifest(strict) を通すため、diff も deploy と同様に未知
-	// フィールド (typo) を弾く。これで両コマンドの挙動が一致する。
+	// Compare goes through parseManifest (strict), so diff rejects an unknown field (a typo)
+	// just as deploy does. This keeps the behaviour of the two commands the same.
 	manifest := []byte(`apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -304,8 +304,8 @@ spec:
 }
 
 func TestCompareIgnoresServerManagedFieldsInTheManifest(t *testing.T) {
-	// ローカルのマニフェストにサーバ管理フィールドが残っていても、live 側と同じ正規化を
-	// 通すので差分にはならない。
+	// Even if server-managed fields are left in the local manifest, it goes through the same
+	// normalization as the live side, so they do not become a diff.
 	manifest := []byte(`apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -397,26 +397,27 @@ func TestWithoutRevisionName(t *testing.T) {
 	if name := revisionName(got); name != "" {
 		t.Errorf("revisionName() = %q, want empty", name)
 	}
-	// 名前以外の metadata は残す。
+	// Metadata other than the name is kept.
 	if got.Spec.Template.Metadata.Annotations["a"] != "b" {
 		t.Error("WithoutRevisionName should keep other metadata")
 	}
-	// 引数は書き換えない。
+	// The argument is not mutated.
 	if name := revisionName(svc); name != "my-svc-00007-abc" {
 		t.Errorf("WithoutRevisionName mutated its argument: revisionName() = %q", name)
 	}
 
-	// リビジョン名が無ければそのまま返す (無駄なコピーをしない)。
+	// With no revision name, it returns the value as is (no needless copy).
 	plain := &run.Service{}
 	if WithoutRevisionName(plain) != plain {
 		t.Error("WithoutRevisionName should return the same value when there is nothing to strip")
 	}
-	// spec.template.metadata が無くても panic しない。
+	// It does not panic even without spec.template.metadata.
 	WithoutRevisionName(nil)
 }
 
-// TestCompareDoesNotMutateCurrent は Compare が引数の live サービスを書き換えないことを
-// 確認する。書き換えると、比較後に live のリビジョン名を読む処理が静かに壊れる。
+// TestCompareDoesNotMutateCurrent checks that Compare does not mutate the live service it is
+// given. If it did, code that reads the live revision name after the comparison would silently
+// break.
 func TestCompareDoesNotMutateCurrent(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
@@ -429,9 +430,10 @@ func TestCompareDoesNotMutateCurrent(t *testing.T) {
 	}
 }
 
-// TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt は、リビジョン名を書いていない
-// マニフェストに対して、live 側のサーバ採番されたリビジョン名が差分にならないことを
-// 確認する。これが無いと init 直後の diff に消えない差分が出続ける。
+// TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt checks that, against a manifest that does
+// not specify a revision name, the server-generated revision name on the live side does not
+// become a diff. Without this, a diff right after init keeps showing a difference that never goes
+// away.
 func TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
@@ -445,8 +447,8 @@ func TestCompareIgnoresLiveRevisionNameWhenManifestOmitsIt(t *testing.T) {
 	}
 }
 
-// TestCompareShowsRevisionNameWhenManifestPinsIt は、マニフェストが明示している場合は
-// リビジョン名の違いを差分として見せることを確認する。
+// TestCompareShowsRevisionNameWhenManifestPinsIt checks that, when the manifest specifies one
+// explicitly, a difference in the revision name is shown as a diff.
 func TestCompareShowsRevisionNameWhenManifestPinsIt(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
@@ -583,10 +585,10 @@ func TestDeleteMapKeys(t *testing.T) {
 	})
 }
 
-// TestCompareIgnoresServerManagedMetadata は、Cloud Run が勝手に付ける metadata が
-// 手書きの最小マニフェストとの差分に出ないことを確認する。実際のサービス (gcloud で
-// 作成したもの) から採った項目をそのまま並べている。--server-defaults を切ると
-// この経路しか無いので、取りこぼすと「何をしても消えない差分」になる。
+// TestCompareIgnoresServerManagedMetadata checks that metadata Cloud Run adds on its own does not
+// show up as a diff against a hand-written minimal manifest. The entries are listed exactly as
+// taken from a real service (one created with gcloud). With --server-defaults turned off this is
+// the only path, so anything it misses becomes "a diff that never goes away no matter what".
 func TestCompareIgnoresServerManagedMetadata(t *testing.T) {
 	current := &run.Service{
 		ApiVersion: "serving.knative.dev/v1",
@@ -601,7 +603,7 @@ func TestCompareIgnoresServerManagedMetadata(t *testing.T) {
 				"run.googleapis.com/client-name":    "gcloud",
 				"run.googleapis.com/client-version": "1.2.3",
 			},
-			// 他のコントローラが管理しているサービスに付きうる read-only フィールド。
+			// Read-only fields that a service managed by another controller may carry.
 			Finalizers:      []string{"controller.example/finalizer"},
 			OwnerReferences: []*run.OwnerReference{{Kind: "Thing", Name: "owner"}},
 			GenerateName:    "my-svc-",
@@ -642,10 +644,10 @@ spec:
 	}
 }
 
-// TestPlanServiceKeepsTheResourceVersionItWasGiven は、live を読んでから編集する経路
-// (rollback / refresh / traffic) が、自分が読んだ版に対して compare-and-swap すること
-// を確認する。PlanService の GET は 2 回目なので、そちらの版に差し替えてしまうと、
-// 2 つの GET の間に入った他人の変更を黙って巻き戻す。
+// TestPlanServiceKeepsTheResourceVersionItWasGiven checks that the paths that read the live
+// service and then edit it (rollback / refresh / traffic) compare-and-swap against the version
+// they themselves read. PlanService's GET is the second one, so replacing the version with that
+// one would silently revert someone else's change that landed between the two GETs.
 func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
 	var mu sync.Mutex
 	gets := 0
@@ -662,7 +664,7 @@ func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
 		return http.StatusOK, svc
 	})
 
-	// 1 回目の GET (呼び出し側が live を読む) の版を desired に載せる。
+	// The version from the first GET (the caller reading the live service) goes onto desired.
 	live, err := c.GetService(context.Background(), "my-svc")
 	if err != nil {
 		t.Fatalf("GetService() error = %v", err)
@@ -680,9 +682,10 @@ func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
 	}
 }
 
-// TestPlanServiceStampsTheResourceVersionWhenThereIsNone は、マニフェスト由来の
-// desired (版を持たない) には GET した版を載せることを確認する。載せないと Cloud Run は
-// 無条件の上書きとして受け付け、並走した deploy が互いの変更を消す。
+// TestPlanServiceStampsTheResourceVersionWhenThereIsNone checks that a desired definition that
+// came from a manifest (and so carries no version) gets the version from the GET. Without it,
+// Cloud Run accepts the write as an unconditional overwrite, and concurrent deploys erase each
+// other's changes.
 func TestPlanServiceStampsTheResourceVersionWhenThereIsNone(t *testing.T) {
 	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
 		svc := readyService()

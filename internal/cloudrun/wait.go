@@ -7,44 +7,45 @@ import (
 	"time"
 )
 
-// 条件の Status がとる値。Unknown はまだ収束していないことを表す。
+// Values a condition's Status takes. Unknown means it has not converged yet.
 const (
 	conditionTrue  = "True"
 	conditionFalse = "False"
 )
 
-// 待機のパラメータの既定値。
+// Default values for the wait parameters.
 const (
 	defaultWaitTimeout  = 10 * time.Minute
 	defaultWaitInterval = 2 * time.Second
-	// ポーリング間隔の上限。長い起動を待つ間に API を叩き続けないよう、
-	// 間隔を少しずつ伸ばして頭打ちにする。
+	// Upper bound on the polling interval. The interval grows gradually and then levels off, so
+	// the API is not hit continuously while waiting out a long startup.
 	maxWaitInterval = 15 * time.Second
 	waitBackoffNum  = 3
 	waitBackoffDen  = 2
 )
 
-// WaitOptions は Wait の挙動を決める。ゼロ値でも使える (既定値が入る)。
+// WaitOptions controls how Wait behaves. The zero value is usable (defaults are filled in).
 type WaitOptions struct {
-	// Timeout は待機全体の上限。0 なら 10 分。
+	// Timeout is the upper bound on the whole wait. 0 means 10 minutes.
 	Timeout time.Duration
-	// Interval は最初のポーリング間隔。0 なら 2 秒。以降 15 秒まで伸びる。
+	// Interval is the first polling interval. 0 means 2 seconds. It then grows up to 15 seconds.
 	Interval time.Duration
-	// Generation は「この世代以上が反映されるまで待つ」指定。deploy 直後に、
-	// 自分が適用した世代のロールアウトだけを見るために使う。0 なら世代は問わない。
+	// Generation means "wait until this generation or later is observed". Used right after a
+	// deploy to look only at the rollout of the generation it applied. 0 means any generation.
 	Generation int64
-	// OnUpdate は状態が変わったときに、表示用の 1 行を伴って呼ばれる
-	// (最初の取得時にも呼ばれる)。nil なら何もしない。
+	// OnUpdate is called with a one-line message for display whenever the state changes
+	// (it is also called on the first fetch). nil does nothing.
 	OnUpdate func(message string)
-	// OnRetry は状態の取得に失敗して再試行するときに呼ばれる。nil なら何もしない。
+	// OnRetry is called when fetching the state fails and is about to be retried. nil does nothing.
 	OnRetry func(err error)
 }
 
-// Wait はサービスが安定するまでポーリングする。Ready=True になれば成功、
-// Ready=False になった時点で失敗として返す (無駄に待たない)。
-// ctx が cancel されると即座に戻るので、Ctrl-C で中断できる。
+// Wait polls until the service settles. It succeeds once Ready=True, and returns a failure as
+// soon as Ready=False (rather than waiting for nothing).
+// It returns immediately when ctx is cancelled, so Ctrl-C can interrupt it.
 //
-// 戻り値の *Status は最後に観測した状態で、エラー時も (取得できていれば) 返す。
+// The returned *Status is the last observed state, and it is returned on error as well (if one
+// was fetched).
 func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*Status, error) {
 	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -52,9 +53,10 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 
 	var last *Status
 	var previous string
-	// lastErr は「観測に失敗したが再試行で回復するかもしれない」エラー。
-	// これで待機を打ち切ると、適用自体は成功しているのに deploy が失敗を返す。
-	// それは本来この待機が防ぎたい CI の誤判定を裏返しに作ってしまう。
+	// lastErr is an error where "observing failed, but a retry might recover".
+	// Giving up the wait on it would make deploy report a failure even though the apply itself
+	// succeeded. That would create, inverted, exactly the CI misjudgement this wait exists to
+	// prevent.
 	var lastErr error
 	for {
 		status, err := c.Status(waitCtx, service)
@@ -74,16 +76,18 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 			}
 
 		case waitCtx.Err() != nil:
-			// 待機中の cancel/期限切れは、API のエラーではなく待機の結果として返す。
+			// A cancel/deadline during the wait is returned as the outcome of the wait, not as an
+			// API error.
 			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
 
 		case !isRetryable(err):
-			// 待っても回復しない失敗。実在しないサービス (404) は現れないし、
-			// 不正な要求 (400) や認証・権限の不備 (401/403) も時間では変わらない。
+			// A failure that waiting will not fix. A service that does not exist (404) will not
+			// appear, and a bad request (400) or missing authentication/permission (401/403) does
+			// not change with time either.
 			return last, err
 
 		default:
-			// 一時的な失敗 (503/429/接続断など)。タイムアウトまで再試行する。
+			// A transient failure (503/429/dropped connection, etc.). Retry until the timeout.
 			lastErr = err
 			if opts.OnRetry != nil {
 				opts.OnRetry(err)
@@ -100,9 +104,9 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 	}
 }
 
-// WaitDeleted はサービスが実際に消えるまで待つ。Cloud Run の削除は非同期で、
-// DELETE が受理された時点ではまだ取得できてしまうため、これが無いと
-// 「削除してから作り直す」ような手順が競合する。
+// WaitDeleted waits until the service is actually gone. Cloud Run deletion is asynchronous, and
+// the service can still be fetched when the DELETE is accepted, so without this a procedure such
+// as "delete, then recreate" races.
 func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptions) error {
 	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -114,7 +118,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 		_, err := c.GetService(waitCtx, service)
 		switch {
 		case isNotFound(err):
-			// 消えた。これが待っていた結果。
+			// Gone. This is the outcome being waited for.
 			return nil
 		case err == nil:
 			lastErr = nil
@@ -127,10 +131,11 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 		case waitCtx.Err() != nil:
 			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
 		case !isRetryable(err):
-			// Wait と同じ分類。待っても回復しない失敗は、その場で返す。
+			// The same classification as Wait. A failure that waiting will not fix is returned
+			// right away.
 			return err
 		default:
-			// 一時的な失敗の可能性がある。Wait と同じくタイムアウトまで再試行する。
+			// Possibly a transient failure. Like Wait, retry until the timeout.
 			lastErr = err
 			if opts.OnRetry != nil {
 				opts.OnRetry(err)
@@ -146,7 +151,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 	}
 }
 
-// waitDeleteInterrupted は削除待ちが打ち切られた理由を組み立てる。
+// waitDeleteInterrupted builds the reason the wait for deletion was cut short.
 func waitDeleteInterrupted(parent, waitCtx context.Context, service string,
 	timeout time.Duration, lastErr error) error {
 	if parent.Err() != nil {
@@ -162,7 +167,7 @@ func waitDeleteInterrupted(parent, waitCtx context.Context, service string,
 	return fmt.Errorf("stopped waiting for service %q to be deleted: %w", service, waitCtx.Err())
 }
 
-// waitDefaults は未指定のパラメータを既定値で埋める。
+// waitDefaults fills unset parameters with their default values.
 func waitDefaults(opts WaitOptions) (timeout, interval time.Duration) {
 	timeout, interval = opts.Timeout, opts.Interval
 	if timeout <= 0 {
@@ -174,10 +179,10 @@ func waitDefaults(opts WaitOptions) (timeout, interval time.Duration) {
 	return timeout, interval
 }
 
-// nextWaitInterval は次のポーリング間隔を返す。上限まで少しずつ伸ばす。
-// 利用者が上限より長い間隔を指定している場合はそれを尊重し、縮めない
-// (--interval 60s は「API を叩く回数を減らしたい」という意思表示なので、
-// それを 15s に切り下げるとかえって呼び出しを増やしてしまう)。
+// nextWaitInterval returns the next polling interval, growing it gradually up to the upper bound.
+// If the user specified an interval longer than the upper bound, it is respected and not shortened
+// (--interval 60s expresses "I want to hit the API less often", so cutting it down to 15s would
+// increase the number of calls instead).
 func nextWaitInterval(interval time.Duration) time.Duration {
 	if interval >= maxWaitInterval {
 		return interval
@@ -189,11 +194,11 @@ func nextWaitInterval(interval time.Duration) time.Duration {
 	return next
 }
 
-// waitDone は現在の状態で待機を終えてよいかを返す。done が true でエラーが nil なら成功、
-// エラー付きならロールアウトの失敗。done が false なら継続する。
+// waitDone reports whether the wait may end in the current state. done true with a nil error is
+// success; with an error it is a rollout failure. done false means keep going.
 //
-// Cloud Run のドキュメントどおり、observedGeneration が対象の世代に追いつくまでは
-// conditions が前の世代のものなので判定しない。
+// As the Cloud Run documentation describes, until observedGeneration catches up to the target
+// generation the conditions belong to the previous generation, so no judgement is made.
 func waitDone(s *Status, service string, generation int64) (bool, error) {
 	if s.ObservedGeneration < generation {
 		return false, nil
@@ -208,19 +213,19 @@ func waitDone(s *Status, service string, generation int64) (bool, error) {
 	case conditionFalse:
 		return true, fmt.Errorf("service %q failed to become ready: %s", service, conditionDetail(ready))
 	}
-	// Unknown: まだ収束していない。
+	// Unknown: not converged yet.
 	return false, nil
 }
 
-// waitInterrupted は待機が打ち切られた理由を組み立てる。呼び出し元の ctx が
-// cancel されていれば中断 (Ctrl-C など)、そうでなければタイムアウト。
+// waitInterrupted builds the reason the wait was cut short. If the caller's ctx was cancelled it
+// is an interruption (Ctrl-C and the like); otherwise it is a timeout.
 func waitInterrupted(parent, waitCtx context.Context, service string, last *Status,
 	timeout time.Duration, generation int64, lastErr error) error {
 	if parent.Err() != nil {
 		return fmt.Errorf("interrupted while waiting for service %q: %w", service, parent.Err())
 	}
 	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
-		// 最後の取得が失敗したままなら、その原因を隠さない。
+		// If the last fetch was still failing, do not hide its cause.
 		if lastErr != nil {
 			return fmt.Errorf("timed out after %s waiting for service %q; the last poll failed: %w",
 				timeout, service, lastErr)
@@ -231,9 +236,11 @@ func waitInterrupted(parent, waitCtx context.Context, service string, last *Stat
 	return fmt.Errorf("stopped waiting for service %q: %w", service, waitCtx.Err())
 }
 
-// waitProgress は進捗表示と状態比較に使う 1 行の状態表現を返す。nil でも安全。
-// 待っている世代がまだ反映されていない間は Ready を出さない。そこで見える Ready は
-// 前の世代のもので、表示すると「もう終わった」と誤読させるため。
+// waitProgress returns a one-line representation of the state, used for progress display and for
+// comparing states. Safe with nil.
+// While the awaited generation has not been observed yet, Ready is not shown. The Ready visible
+// at that point belongs to the previous generation, and showing it would be misread as "already
+// finished".
 func waitProgress(s *Status, generation int64) string {
 	if s == nil {
 		return "unknown"
@@ -248,7 +255,7 @@ func waitProgress(s *Status, generation int64) string {
 	return fmt.Sprintf("observed generation %d, Ready=%s", s.ObservedGeneration, conditionDetail(ready))
 }
 
-// conditionDetail は条件を "Status (Reason): Message" の形に整える。
+// conditionDetail formats a condition as "Status (Reason): Message".
 func conditionDetail(c *Condition) string {
 	detail := c.Status
 	if c.Reason != "" {

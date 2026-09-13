@@ -8,49 +8,49 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// artifactRegistryHost は Artifact Registry のホスト名。先頭がロケーション名になる
-// (例: asia-northeast1-docker.pkg.dev, us-docker.pkg.dev)。
+// artifactRegistryHost matches an Artifact Registry host name. The leading part is the location
+// name (e.g. asia-northeast1-docker.pkg.dev, us-docker.pkg.dev).
 var artifactRegistryHost = regexp.MustCompile(`^([a-z0-9-]+)-docker\.pkg\.dev$`)
 
-// defaultImageTag はタグもダイジェストも書かれていないときに参照されるタグ。
+// defaultImageTag is the tag referenced when neither a tag nor a digest is written.
 const defaultImageTag = "latest"
 
-// imageRef はコンテナイメージの参照を分解したもの。Artifact Registry のイメージだけは
-// 実在を確認できるので、その場合に必要な要素まで取り出す。
+// imageRef is a container image reference split into its parts. Only Artifact Registry images
+// can have their existence checked, so for those it also extracts the parts that check needs.
 type imageRef struct {
-	// Raw はマニフェストに書かれていた文字列。エラーメッセージに使う。
+	// Raw is the string as written in the manifest. Used in error messages.
 	Raw string
-	// Host はレジストリのホスト名。省略時は Docker Hub とみなして空のまま。
+	// Host is the registry host name. Left empty when omitted, which means Docker Hub.
 	Host string
-	// Location 以降は Artifact Registry のイメージのときだけ埋まる。
+	// Location and the fields after it are filled only for an Artifact Registry image.
 	Location string
 	Project  string
 	Repo     string
-	// Path はリポジトリ以下のイメージパス。入れ子 ("team/app") もありうる。
+	// Path is the image path below the repository. It can be nested ("team/app").
 	Path string
-	// Tag と Digest は排他。どちらも無い場合は Tag が "latest" になる。
+	// Tag and Digest are mutually exclusive. When neither is present, Tag is "latest".
 	Tag    string
 	Digest string
 }
 
-// IsArtifactRegistry は参照が Artifact Registry のイメージかを返す。
+// IsArtifactRegistry reports whether the reference is an Artifact Registry image.
 func (r imageRef) IsArtifactRegistry() bool { return r.Location != "" }
 
-// parseImageRef はイメージ参照を分解する。形式は [host/]path[:tag][@digest]。
-// Artifact Registry でない参照も Host / Raw までは埋めて返す (確認できない理由を
-// 説明するのに使う)。
+// parseImageRef splits an image reference. The form is [host/]path[:tag][@digest].
+// A reference that is not Artifact Registry is still returned with Host / Raw filled (they are
+// used to explain why it cannot be checked).
 func parseImageRef(image string) imageRef {
 	ref := imageRef{Raw: image}
 	rest := image
 
-	// ダイジェストが先。タグの ":" と混同しないよう、先に切り離す。
+	// The digest comes first. Cut it off up front so it is not confused with the ":" of a tag.
 	if i := strings.LastIndex(rest, "@"); i >= 0 {
 		ref.Digest = rest[i+1:]
 		rest = rest[:i]
 	}
 
-	// 最初の要素がホスト名かどうか。"." か ":" を含むか localhost ならホスト。
-	// これを取り違えると "team/app" のようなパスをホストとして扱ってしまう。
+	// Whether the first element is a host name. It is a host if it contains "." or ":", or is
+	// localhost. Getting this wrong treats a path such as "team/app" as a host.
 	if i := strings.Index(rest, "/"); i >= 0 {
 		head := rest[:i]
 		if strings.ContainsAny(head, ".:") || head == "localhost" {
@@ -59,7 +59,7 @@ func parseImageRef(image string) imageRef {
 		}
 	}
 
-	// 残りの末尾にタグが付きうる。"/" より後の ":" だけがタグ。
+	// The end of what remains may carry a tag. Only a ":" after the last "/" is a tag.
 	if ref.Digest == "" {
 		if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
 			ref.Tag = rest[i+1:]
@@ -73,8 +73,8 @@ func parseImageRef(image string) imageRef {
 	if m == nil {
 		return ref
 	}
-	// Artifact Registry のパスは <project>/<repo>/<image...>。3 要素に満たなければ
-	// イメージとして不完全なので、ロケーションを埋めず「確認できない」側に倒す。
+	// An Artifact Registry path is <project>/<repo>/<image...>. With fewer than 3 elements the
+	// image is incomplete, so leave the location empty and fall back to "cannot be checked".
 	parts := strings.SplitN(rest, "/", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return ref
@@ -83,11 +83,12 @@ func parseImageRef(image string) imageRef {
 	return ref
 }
 
-// resourceName は Artifact Registry API で実在を確認するリソース名を返す。
-// ダイジェスト指定なら dockerImages、タグ指定なら packages/.../tags を引く。
+// resourceName returns the resource name used to check existence with the Artifact Registry
+// API. A digest looks up dockerImages; a tag looks up packages/.../tags.
 //
-// イメージパスの "/" は %2F にする。API が返す名前もこの形で、二重にエスケープすると
-// 404 になる (実 API で確認済み) ので、ここでの置換以外のエスケープはしないこと。
+// The "/" in the image path becomes %2F. The names the API returns are in this form too, and a
+// double-escaped one is a 404 (confirmed against the real API), so do not escape anything
+// beyond the replacement done here.
 func (r imageRef) resourceName() string {
 	repo := fmt.Sprintf("projects/%s/locations/%s/repositories/%s", r.Project, r.Location, r.Repo)
 	path := strings.ReplaceAll(r.Path, "/", "%2F")
@@ -97,7 +98,7 @@ func (r imageRef) resourceName() string {
 	return fmt.Sprintf("%s/packages/%s/tags/%s", repo, path, r.Tag)
 }
 
-// containerImages はマニフェストが参照するイメージを重複なく順序どおりに集める。
+// containerImages collects the images the manifest references, in order and without duplicates.
 func containerImages(svc *run.Service) []string {
 	spec := templateSpec(svc)
 	if spec == nil {

@@ -1,4 +1,4 @@
-// Package cloudrun は Cloud Run Admin API へのアクセスとマニフェストの整形を提供する。
+// Package cloudrun provides access to the Cloud Run Admin API and manifest normalization.
 package cloudrun
 
 import (
@@ -17,17 +17,17 @@ import (
 const (
 	manifestAPIVersion = "serving.knative.dev/v1"
 	manifestKind       = "Service"
-	// dryRunAll は API の dryRun クエリパラメータで「検証のみ」を指示する値。
+	// dryRunAll is the value of the API's dryRun query parameter that requests "validate only".
 	dryRunAll = "all"
 )
 
-// サーバ側が付与する read-only なアノテーション。デプロイ用マニフェストには不要。
-// metadata 直下と spec.template.metadata の両方に対して使う。
+// Read-only annotations added by the server. A manifest for deploying does not need them.
+// Applied to top-level metadata and to spec.template.metadata.
 //
-// client-name / client-version は「最後に書き込んだツール」を記録するもので、設定では
-// ない。gcloud で作られたサービスを init で取り込むとマニフェストに "gcloud" が焼き付き、
-// 以後の clrnd deploy がそれを送り返し続ける。手書きマニフェストでは逆に、消えない削除
-// 差分として出る。clrnd はこれを管理しない。
+// client-name / client-version record "the tool that last wrote", not configuration. Importing a
+// service created with gcloud through init would bake "gcloud" into the manifest, and every later
+// clrnd deploy would keep sending it back. With a hand-written manifest it shows up the other way
+// round, as a removal diff that never goes away. clrnd does not manage these.
 var serverManagedAnnotations = []string{
 	"run.googleapis.com/operation-id",
 	"run.googleapis.com/ingress-status",
@@ -38,19 +38,19 @@ var serverManagedAnnotations = []string{
 	"serving.knative.dev/lastModifier",
 }
 
-// サーバ側が付与する read-only なラベル。metadata 直下と spec.template.metadata の
-// 両方に対して使う (cloud.googleapis.com/location は実際には metadata 直下にだけ付くが、
-// テンプレート側から消えて困るものではないので一覧を分けていない)。
+// Read-only labels added by the server. Applied to top-level metadata and to
+// spec.template.metadata (cloud.googleapis.com/location is in practice only set on top-level
+// metadata, but removing it from the template side does no harm, so the lists are not split).
 var serverManagedLabels = []string{
 	"client.knative.dev/nonce",
 	"run.googleapis.com/startupProbeType",
 	"cloud.googleapis.com/location",
 }
 
-// metadata 直下の read-only フィールド。run.ObjectMeta のうち、クライアントが書かない
-// (書いても意味が無い) ものを列挙する。削除中のサービスや、他のコントローラ (Terraform,
-// Config Connector など) が管理しているサービスを init で取り込んだときに、これらが
-// scaffold されたマニフェストに残って次の deploy でそのまま送り返されるのを防ぐ。
+// Read-only fields of top-level metadata. Lists the parts of run.ObjectMeta that clients do not
+// write (or where writing them has no effect). This keeps them from being left in the scaffolded
+// manifest, and sent back as is on the next deploy, when init imports a service that is being
+// deleted or one managed by another controller (Terraform, Config Connector, etc.).
 var serverManagedMetaFields = []string{
 	"creationTimestamp",
 	"generation",
@@ -66,38 +66,41 @@ var serverManagedMetaFields = []string{
 	"clusterName",
 }
 
-// DeployPlan は適用予定の内容。Plan で算出し、Apply で適用する。
+// DeployPlan is what is about to be applied. Computed by Plan and applied by Apply.
 type DeployPlan struct {
-	Service string // サービス名
-	Create  bool   // 未存在で新規作成になるか
-	Diff    string // live と desired の統一 diff (差分が無ければ空)
+	Service string // service name
+	Create  bool   // whether the service does not exist and will be created
+	Diff    string // unified diff of live and desired (empty when there are no differences)
 
 	client  *Client
 	desired *run.Service
 }
 
-// PlanOptions は差分の取り方に関する任意設定。ゼロ値が既定の挙動。
+// PlanOptions holds optional settings for how the diff is computed. The zero value is the default
+// behaviour.
 type PlanOptions struct {
-	// ResolveDefaults が true なら、差分を取る前にサーバ側の dry-run を通して
-	// 既定値まで埋めた desired を作る。Cloud Run は作成時に多くのフィールドへ
-	// 既定値を入れるため、手書きの最小マニフェストは何もしなくても差分が出続ける
-	// (issue #11)。これを有効にすると、その分が両側で揃って消える。
+	// ResolveDefaults, when true, runs the desired definition through a server-side dry run before
+	// diffing, to build a desired definition with the defaults filled in. Cloud Run fills defaults
+	// into many fields on create, so a hand-written minimal manifest keeps showing a diff even when
+	// nothing was changed (issue #11). Enabling this makes those differences line up on both sides
+	// and disappear.
 	//
-	// dry-run は書き込み系の API なので、読むだけの権限では使えない。CLI は既定で
-	// これを有効にし、--no-server-defaults で外せるようにしている (この構造体の
-	// ゼロ値は「解決しない」のままで、live 由来の定義を扱う rollback / refresh は
-	// 既に既定値が入っているので解決を必要としない)。
-	// 適用に送るのは常に元の desired で、サーバが埋めた値を書き戻すことはしない。
+	// A dry run is a write API, so it cannot be used with read-only permissions. The CLI enables
+	// this by default and lets --no-server-defaults turn it off (the zero value of this struct
+	// stays "do not resolve", and rollback / refresh, which work on a definition taken from live,
+	// do not need resolving because the defaults are already in it).
+	// What is sent for the apply is always the original desired definition; values the server
+	// filled in are never written back.
 	ResolveDefaults bool
 
-	// KeepTraffic が true なら、いまの配分をリビジョン名で固定してから適用する
-	// (deploy --no-traffic)。マニフェストに spec.traffic が無いと Cloud Run は
-	// latestRevision へ全量を送るため、そのままではデプロイした瞬間に新しい
-	// リビジョンが本番を受け取ってしまう。段階的に移す前提のときはこれを立てる。
+	// KeepTraffic, when true, pins the current split by revision name before applying
+	// (deploy --no-traffic). Without spec.traffic in the manifest, Cloud Run sends all traffic to
+	// latestRevision, so left as is, the new revision would take production the moment it is
+	// deployed. Set this when traffic is meant to be moved gradually.
 	KeepTraffic bool
 }
 
-// Plan はマニフェストを検証し、live サービスとの差分を算出する (変更はしない)。
+// Plan validates the manifest and computes the diff against the live service (changes nothing).
 func (c *Client) Plan(ctx context.Context, service string, manifest []byte, opts PlanOptions) (*DeployPlan, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
@@ -109,9 +112,9 @@ func (c *Client) Plan(ctx context.Context, service string, manifest []byte, opts
 	return c.PlanService(ctx, service, svc, opts)
 }
 
-// PlanService は desired のサービス定義をそのまま使って live との差分を算出する。
-// マニフェストを経由しない rollback や refresh のように、live を編集して適用する
-// 経路のための入口。desired の metadata.namespace は送信先に合わせて書き換える。
+// PlanService computes the diff against live using the desired service definition as is.
+// It is the entry point for paths that edit live and apply it without going through a manifest,
+// such as rollback and refresh. The desired metadata.namespace is rewritten to match the target.
 func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service, opts PlanOptions) (*DeployPlan, error) {
 	if desired == nil {
 		return nil, errors.New("no desired service to plan")
@@ -124,13 +127,13 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 		if !isNotFound(getErr) {
 			return nil, fmt.Errorf("failed to check service %q: %w", service, getErr)
 		}
-		// 未存在: 新規作成。current 側は空として diff を取る。
+		// Does not exist: create it. The diff is taken with the current side empty.
 		create = true
 		current = nil
 	}
 
-	// トラフィックの固定は resourceVersion を載せる前・差分を取る前に済ませる。
-	// 適用するのも差分に出るのも、固定した後の定義でなければならない。
+	// Pin the traffic before setting resourceVersion and before diffing. Both what is applied and
+	// what shows in the diff have to be the definition after pinning.
 	if opts.KeepTraffic {
 		fixed, err := keepTraffic(desired, current, service)
 		if err != nil {
@@ -141,16 +144,16 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 
 	plan := &DeployPlan{Service: service, client: c, desired: desired, Create: create}
 
-	// 更新の場合は、いま読んだ状態の resourceVersion を desired に載せて
-	// compare-and-swap にする。載せずに送ると Cloud Run は無条件の上書きとして
-	// 受け付けるので (実 API で確認済み)、並走した deploy が互いの変更を黙って
-	// 消す。差分を計算した相手そのものに対して書き込むことになるので、この GET
-	// より前に取得した定義 (rollback/refresh の live) を渡された場合も、ここで
-	// 最新に揃う。
+	// For an update, put the resourceVersion of the state just read onto desired to make the write
+	// a compare-and-swap. Sent without it, Cloud Run accepts the write as an unconditional
+	// overwrite (confirmed against the real API), so concurrent deploys silently erase each
+	// other's changes. The write is made against exactly what the diff was computed from, so even
+	// when the definition passed in was fetched before this GET (the live of rollback/refresh), it
+	// is brought up to date here.
 	setResourceVersion(desired, current)
 
-	// 差分に使う desired だけを既定値まで解決する。plan.desired (適用に送るもの) は
-	// 元のままにしておき、サーバが埋めた値を書き戻さない。
+	// Resolve defaults only on the desired definition used for the diff. plan.desired (what is sent
+	// for the apply) is left as it was, so values the server filled in are not written back.
 	compared := desired
 	if opts.ResolveDefaults {
 		resolved, err := c.resolveDefaults(ctx, service, desired, create)
@@ -168,22 +171,22 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 	return plan, nil
 }
 
-// CompareManifest は live サービスとローカルのマニフェストの差分を返す。diff 用の入口で、
-// サービスの取得と (必要なら) 既定値の解決をまとめて行う。
+// CompareManifest returns the diff between the live service and a local manifest. It is the entry
+// point for diff, and does the service fetch and (when needed) the default resolution together.
 func (c *Client) CompareManifest(ctx context.Context, service string, manifest []byte,
 	desiredLabel string, opts PlanOptions) (string, error) {
 	desired, err := parseManifest(manifest)
 	if err != nil {
 		return "", err
 	}
-	// deploy と同じ検証を通す。ここを --server-defaults のときだけにすると、
-	// deploy が拒否する入力 (metadata.name がサービス名と違う等) を diff だけが
-	// 受け入れ、「名前を変更できるかのような差分」を出してしまう。
+	// Run the same validation as deploy. Doing it only with --server-defaults would let diff alone
+	// accept input deploy rejects (metadata.name differing from the service name, etc.) and render
+	// "a diff that looks as if the name could be changed".
 	if err := validate(desired, service); err != nil {
 		return "", err
 	}
-	// 送信先に合わせる。--server-defaults の dry-run は本物の書き込みと同じ検証を
-	// 受けるので、deploy と同じ前処理を通しておかないと diff だけが弾かれる。
+	// Match the target. The --server-defaults dry run gets the same validation as a real write, so
+	// unless the same pre-processing as deploy is applied, diff alone gets rejected.
 	c.setNamespace(desired)
 
 	current, err := c.GetService(ctx, service)
@@ -191,14 +194,14 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 		if !isNotFound(err) {
 			return "", err
 		}
-		// まだ作られていないサービス。PlanService と同じく「全部追加」として扱う。
-		// ここで 404 を返していたので、README が勧める init 前の
-		// 「マニフェストを書く → diff → deploy」が初回だけ通らなかった。
+		// A service not created yet. Treated as "everything is an addition", like PlanService.
+		// A 404 used to be returned here, so the "write a manifest → diff → deploy" flow the
+		// README recommends before init failed on the first run only.
 		current = nil
 	}
 
 	if opts.ResolveDefaults {
-		// 未存在なら dry-run も Create でなければ 404 になる。
+		// If it does not exist, the dry run is also a 404 unless it is a Create.
 		if desired, err = c.resolveDefaults(ctx, service, desired, current == nil); err != nil {
 			return "", err
 		}
@@ -206,12 +209,12 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 	return compareServices(current, desired, "live/"+service, desiredLabel)
 }
 
-// keepTraffic は desired のトラフィック配分を、live サービスのいまの配分で置き換える。
-// 引数は書き換えず、Spec だけを浅くコピーした新しい定義を返す。
+// keepTraffic replaces the desired traffic split with the live service's current split.
+// It does not modify its arguments; it returns a new definition with only the Spec shallow-copied.
 //
-// 「新しいリビジョンにトラフィックを向けない」は現在の配分を名前で固定することでしか
-// 表現できない。マニフェスト側には書けない: リビジョン名は適用してみるまで分からず、
-// latestRevision のままでは新しい版が全量を受け取ってしまう。
+// "Do not send traffic to the new revision" can only be expressed by pinning the current split by
+// name. It cannot be written in the manifest: the revision name is not known until the apply, and
+// with latestRevision the new version would take all the traffic.
 func keepTraffic(desired, current *run.Service, service string) (*run.Service, error) {
 	if current == nil {
 		return nil, fmt.Errorf("cannot keep traffic: service %q does not exist yet, so the "+
@@ -231,16 +234,16 @@ func keepTraffic(desired, current *run.Service, service string) (*run.Service, e
 	return &out, nil
 }
 
-// setNamespace は送信先プロジェクトと body の namespace を一致させる。
-// 適用も dry-run もこれを通した定義で行う。
+// setNamespace makes the body's namespace match the target project.
+// Both the apply and the dry run use a definition that has been through this.
 func (c *Client) setNamespace(svc *run.Service) {
 	if svc != nil && svc.Metadata != nil {
 		svc.Metadata.Namespace = c.project
 	}
 }
 
-// resolveDefaults はサーバ側の dry-run を通して、Cloud Run が埋める既定値まで入った
-// サービス定義を得る。何も変更しない (dryRun=all)。
+// resolveDefaults runs a server-side dry run to get a service definition that includes the
+// defaults Cloud Run fills in. It changes nothing (dryRun=all).
 func (c *Client) resolveDefaults(ctx context.Context, service string, desired *run.Service, create bool) (*run.Service, error) {
 	var (
 		resolved *run.Service
@@ -254,11 +257,11 @@ func (c *Client) resolveDefaults(ctx context.Context, service string, desired *r
 			DryRun(dryRunAll).Context(ctx).Do()
 	}
 	if err != nil {
-		// 原因は権限とは限らない (マニフェストの内容が拒否された、途中で削除された等)。
-		// 断定せず、この経路が何をしているかだけを添える。ただし create と update では
-		// 要る権限が違うので、実際に投げたほうを言う。未存在のサービスに対する diff で
-		// 「update の権限が要る」と案内すると、run.services.create を足すべき人が
-		// いつまでも直せない。
+		// The cause is not necessarily permissions (the manifest's content was rejected, the
+		// service was deleted midway, etc.). Do not assert one; only add what this path is doing.
+		// But create and update need different permissions, so name the one actually called. For a
+		// diff against a service that does not exist, saying "update permission is needed" would
+		// leave someone who should add run.services.create unable to ever fix it.
 		call := "update"
 		if create {
 			call = "create"
@@ -271,12 +274,12 @@ func (c *Client) resolveDefaults(ctx context.Context, service string, desired *r
 	return resolved, nil
 }
 
-// Apply は Plan の内容を Cloud Run に適用し、適用後のサービスを返す。dryRun が true の
-// 場合はサーバ側で検証のみ行う。dryRun が false のときは DryRun を呼ばない (空文字を渡すと
-// dryRun= という空のクエリパラメータが送られてしまうため)。
+// Apply applies the Plan to Cloud Run and returns the service after the apply. When dryRun is
+// true, the server only validates. When dryRun is false, DryRun is not called (passing an empty
+// string would send an empty dryRun= query parameter).
 //
-// 戻り値の metadata.generation は「今適用した世代」なので、Wait でその世代の
-// ロールアウトだけを待つのに使える。
+// The returned metadata.generation is "the generation just applied", so it can be used to have
+// Wait wait only for the rollout of that generation.
 func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, error) {
 	if p.Create {
 		call := p.client.api.Namespaces.Services.Create(p.client.parent(), p.desired)
@@ -297,9 +300,9 @@ func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, erro
 	applied, err := call.Context(ctx).Do()
 	if err != nil {
 		if isConflict(err) {
-			// resourceVersion を送っているので、409 は「差分を計算してから適用するまでの
-			// 間に誰かが書き換えた」ケース。API の文面 (version 'X' was specified but
-			// current version is 'Y') だけでは何をすべきか分からないので言い換える。
+			// resourceVersion is sent, so a 409 is the case where "someone rewrote it between
+			// computing the diff and applying". The API's wording (version 'X' was specified but
+			// current version is 'Y') alone does not say what to do, so rephrase it.
 			return nil, fmt.Errorf("service %q changed after the diff was computed; re-run to compare against the current state: %w", p.Service, err)
 		}
 		return nil, fmt.Errorf("failed to update service %q: %w", p.Service, err)
@@ -307,25 +310,26 @@ func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, erro
 	return applied, nil
 }
 
-// setResourceVersion は current の resourceVersion を desired に写して楽観的並行制御を
-// 効かせる。current が nil (新規作成) のときは何もしない。
+// setResourceVersion copies current's resourceVersion onto desired so that optimistic concurrency
+// control takes effect. It does nothing when current is nil (a create).
 func setResourceVersion(desired, current *run.Service) {
 	if desired == nil || desired.Metadata == nil || current == nil || current.Metadata == nil {
 		return
 	}
-	// desired が既に版を持っているなら上書きしない。rollback / refresh / traffic は
-	// live を読んでから編集するので、desired には *その読み取りの* 版が載っている。
-	// ここで新しい版に差し替えると、2 回の GET の間に入った他人の変更を CAS が
-	// 素通りさせ、黙って巻き戻すことになる (traffic だけを触ったつもりが、直前の
-	// deploy のイメージまで元に戻る)。載っている版のまま送れば、その場合は 409 になる。
+	// If desired already carries a version, do not overwrite it. rollback / refresh / traffic read
+	// live and then edit it, so desired carries the version *of that read*. Replacing it with the
+	// newer version here would let the CAS wave through someone else's change made between the
+	// two GETs and silently revert it (meaning to touch only traffic, the image from the deploy
+	// just before would be rolled back too). Sent with the version it carries, that case becomes a
+	// 409.
 	if desired.Metadata.ResourceVersion != "" {
 		return
 	}
 	desired.Metadata.ResourceVersion = current.Metadata.ResourceVersion
 }
 
-// DeleteService はサービスを削除する。dryRun が true の場合はサーバ側で検証のみ行う。
-// 取り消せない操作なので、呼び出し側で確認を取ること。
+// DeleteService deletes the service. When dryRun is true, the server only validates.
+// This cannot be undone, so the caller must obtain confirmation.
 func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool) error {
 	call := c.api.Namespaces.Services.Delete(c.serviceName(service))
 	if dryRun {
@@ -337,8 +341,8 @@ func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool)
 	return nil
 }
 
-// AppliedGeneration は Apply の戻り値から metadata.generation を nil セーフに取り出す。
-// 取れなければ 0 を返し、その場合 Wait は世代を問わずに Ready だけを見る。
+// AppliedGeneration extracts metadata.generation from Apply's return value nil-safely.
+// If it cannot, it returns 0, in which case Wait looks only at Ready regardless of generation.
 func AppliedGeneration(applied *run.Service) int64 {
 	if applied == nil || applied.Metadata == nil {
 		return 0
@@ -346,7 +350,7 @@ func AppliedGeneration(applied *run.Service) int64 {
 	return applied.Metadata.Generation
 }
 
-// isNotFound は googleapi の 404 エラーかどうかを判定する。
+// isNotFound reports whether err is a googleapi 404 error.
 func isNotFound(err error) bool {
 	var gerr *googleapi.Error
 	if errors.As(err, &gerr) {
@@ -355,9 +359,9 @@ func isNotFound(err error) bool {
 	return false
 }
 
-// retryableForbiddenReasons は 403 でも待てば回復しうる理由。Google API はレート制限や
-// クォータ超過を 403 で返すことがあり、こちらは時間が解決する。権限不足の 403 とは
-// 区別が必要なので理由で見分ける。
+// retryableForbiddenReasons are the reasons for which even a 403 can recover by waiting. Google
+// APIs sometimes return rate limiting and quota exhaustion as 403, and those clear with time. They
+// have to be told apart from a 403 for missing permission, so they are distinguished by reason.
 var retryableForbiddenReasons = map[string]bool{
 	"rateLimitExceeded":       true,
 	"userRateLimitExceeded":   true,
@@ -365,13 +369,14 @@ var retryableForbiddenReasons = map[string]bool{
 	"concurrentLimitExceeded": true,
 }
 
-// isRetryable は待機中の取得エラーが再試行で回復しうるかを返す。
+// isRetryable reports whether an error fetching state during a wait can recover on retry.
 //
-// ステータスの分からないエラー (接続断/DNS 解決失敗/EOF など) は一時的なものとして扱う。
-// 生成された API クライアントは再試行しないので、単発の 503 で待機を打ち切ると、適用は
-// 成功しているのに deploy が失敗を返す。一方、400 の不正な要求や 401/403 の認証・権限は
-// 待っても同じ結果にしかならず、原因が最初のポーリングで分かっているのにタイムアウト
-// (既定 10 分) まで CI を占有してから落ちることになる。
+// An error with no known status (dropped connection/DNS resolution failure/EOF, etc.) is treated
+// as transient. The generated API client does not retry, so giving up the wait on a single 503
+// would make deploy report a failure even though the apply succeeded. On the other hand, a 400 bad
+// request or a 401/403 authentication/permission problem only gives the same result however long
+// you wait, and although the cause is known from the first poll, it would fail only after holding
+// CI until the timeout (10 minutes by default).
 func isRetryable(err error) bool {
 	var gerr *googleapi.Error
 	if !errors.As(err, &gerr) {
@@ -390,15 +395,15 @@ func isRetryable(err error) bool {
 	case gerr.Code >= 500:
 		return true
 	case gerr.Code >= 400:
-		// 400/401/403/404/409 など。恒久的な失敗。
+		// 400/401/403/404/409 and the like. A permanent failure.
 		return false
 	}
 	return true
 }
 
-// isConflict は resourceVersion の不一致 (楽観的並行制御の失敗) かを返す。
-// Cloud Run は古い (しかし形式として正しい) resourceVersion に 409 を返す。
-// 形式が壊れている場合は 400 なので、ここには入らない。
+// isConflict reports whether err is a resourceVersion mismatch (an optimistic concurrency control
+// failure). Cloud Run returns 409 for a stale (but well-formed) resourceVersion.
+// A malformed one is a 400, so it does not end up here.
 func isConflict(err error) bool {
 	var gerr *googleapi.Error
 	if errors.As(err, &gerr) {
@@ -407,8 +412,8 @@ func isConflict(err error) bool {
 	return false
 }
 
-// ToManifest はサーバ側が付与する read-only フィールドを取り除き、デプロイに使える
-// Knative 形式の YAML マニフェストを返す。
+// ToManifest removes the read-only fields added by the server and returns a Knative-style YAML
+// manifest usable for deploying.
 func ToManifest(obj *run.Service) ([]byte, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
@@ -427,7 +432,8 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 	return manifest, nil
 }
 
-// compareServices は差分を取る各経路が共有する比較の実装。引数は書き換えない。
+// compareServices is the comparison implementation shared by every path that computes a diff. It
+// does not modify its arguments.
 func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
 	current = alignRevisionName(current, desired)
 
@@ -445,17 +451,17 @@ func compareServices(current, desired *run.Service, currentName, desiredName str
 	return Diff(currentYAML, desiredYAML, currentName, desiredName)
 }
 
-// CheckSyntax はマニフェストが run.Service として厳密にパースできるかだけを確認する。
-// API アクセスを伴う処理の前にローカルの問題を先に出すために使う (Validate と違い、
-// サービス名の一致や必須フィールドは見ない)。
+// CheckSyntax only checks that the manifest parses strictly as a run.Service.
+// It is used to surface local problems before anything that accesses the API (unlike Validate, it
+// does not look at whether the service name matches or at required fields).
 func CheckSyntax(manifest []byte) error {
 	_, err := parseManifest(manifest)
 	return err
 }
 
-// Validate はローカルのマニフェストが Cloud Run のサービス定義として妥当かを検証する。
-// API へはアクセスせず、構造とデプロイに必須のフィールドだけを確認する。問題が無ければ
-// nil を、複数の問題があればまとめたエラーを返す。
+// Validate checks that a local manifest is a valid Cloud Run service definition.
+// It does not access the API and checks only the structure and the fields required to deploy. It
+// returns nil when there are no problems, and a combined error when there are several.
 func Validate(manifest []byte, service string) error {
 	svc, err := parseManifest(manifest)
 	if err != nil {
@@ -464,8 +470,8 @@ func Validate(manifest []byte, service string) error {
 	return validate(svc, service)
 }
 
-// parseManifest はマニフェストを run.Service に厳密にパースする。UnmarshalStrict は
-// 未知フィールド (フィールド名の打ち間違いなど) も検出する。
+// parseManifest strictly parses a manifest into a run.Service. UnmarshalStrict also detects
+// unknown fields (such as a misspelled field name).
 func parseManifest(manifest []byte) (*run.Service, error) {
 	var svc run.Service
 	if err := yaml.UnmarshalStrict(manifest, &svc); err != nil {
@@ -474,7 +480,7 @@ func parseManifest(manifest []byte) (*run.Service, error) {
 	return &svc, nil
 }
 
-// validate はパース済みのサービス定義を検証する。
+// validate checks a parsed service definition.
 func validate(svc *run.Service, service string) error {
 	var errs []error
 	if svc.ApiVersion != manifestAPIVersion {
@@ -507,8 +513,9 @@ func validate(svc *run.Service, service string) error {
 	return errors.Join(errs...)
 }
 
-// templateSpec はサービス定義の spec.template.spec (RevisionSpec) を nil セーフに取り出す。
-// コンテナ・サービスアカウント・ボリュームなど template 配下を見る処理で共有する。
+// templateSpec extracts a service definition's spec.template.spec (RevisionSpec) nil-safely.
+// Shared by everything that looks under the template: containers, service account, volumes and
+// so on.
 func templateSpec(svc *run.Service) *run.RevisionSpec {
 	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
 		return nil
@@ -516,7 +523,7 @@ func templateSpec(svc *run.Service) *run.RevisionSpec {
 	return svc.Spec.Template.Spec
 }
 
-// templateMeta はサービス定義の spec.template.metadata を nil セーフに取り出す。
+// templateMeta extracts a service definition's spec.template.metadata nil-safely.
 func templateMeta(svc *run.Service) *run.ObjectMeta {
 	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
 		return nil
@@ -524,7 +531,7 @@ func templateMeta(svc *run.Service) *run.ObjectMeta {
 	return svc.Spec.Template.Metadata
 }
 
-// revisionName は spec.template.metadata.name (リビジョン名) を nil セーフに取り出す。
+// revisionName extracts spec.template.metadata.name (the revision name) nil-safely.
 func revisionName(svc *run.Service) string {
 	meta := templateMeta(svc)
 	if meta == nil {
@@ -533,7 +540,7 @@ func revisionName(svc *run.Service) string {
 	return meta.Name
 }
 
-// RevisionName はマニフェストが固定しているリビジョン名を返す。指定が無ければ空文字列。
+// RevisionName returns the revision name the manifest pins. The empty string if none is given.
 func RevisionName(manifest []byte) (string, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {
@@ -542,12 +549,14 @@ func RevisionName(manifest []byte) (string, error) {
 	return revisionName(svc), nil
 }
 
-// WithoutRevisionName は spec.template.metadata.name (リビジョン名) を取り除いたサービスを
-// 返す。引数は書き換えず、変更が必要な経路 (Spec / Template / Metadata) だけを浅くコピーする。
+// WithoutRevisionName returns the service with spec.template.metadata.name (the revision name)
+// removed. It does not modify its argument; it shallow-copies only the chain that has to change
+// (Spec / Template / Metadata).
 //
-// Cloud Run はリビジョン名を省略するとサーバ側で自動採番するが、明示すると設定の異なる
-// 同名リビジョンを作れない。live から起こしたマニフェストにそのまま残すと、テンプレートを
-// 変えた 2 回目以降の deploy が失敗するため、init が scaffold するマニフェストからは落とす。
+// When the revision name is omitted, Cloud Run generates one on the server side, but when it is
+// set explicitly, a revision with the same name and a different configuration cannot be created.
+// Left as is in a manifest built from live, the second and later deploys that change the template
+// would fail, so it is dropped from the manifest init scaffolds.
 func WithoutRevisionName(svc *run.Service) *run.Service {
 	if revisionName(svc) == "" {
 		return svc
@@ -563,13 +572,13 @@ func WithoutRevisionName(svc *run.Service) *run.Service {
 	return &out
 }
 
-// alignRevisionName は desired がリビジョン名を指定していないとき、比較に使う current から
-// リビジョン名を落としたものを返す。引数は書き換えない。
+// alignRevisionName, when desired does not specify a revision name, returns the current used for
+// the comparison with its revision name dropped. It does not modify its arguments.
 //
-// Cloud Run は取得時に必ず実際のリビジョン名を埋めて返すため、ローカルが指定していない
-// 限りこれはサーバ管理フィールドと同じ扱いにするのが正しい。そうしないと、リビジョン名を
-// 書かないマニフェストでは永久に消えない差分が diff に出続ける。
-// ローカルが明示している場合は両側に残し、差分として見せる。
+// Cloud Run always fills in the actual revision name when the service is fetched, so unless the
+// local side specifies one, treating it the same as a server-managed field is correct. Otherwise a
+// manifest that does not write a revision name would keep showing a diff that never goes away.
+// When the local side sets one explicitly, it is kept on both sides and shown as a diff.
 func alignRevisionName(current, desired *run.Service) *run.Service {
 	if current == nil || revisionName(desired) != "" {
 		return current
@@ -577,7 +586,7 @@ func alignRevisionName(current, desired *run.Service) *run.Service {
 	return WithoutRevisionName(current)
 }
 
-// serviceContainers はサービス定義からコンテナ一覧を nil セーフに取り出す。
+// serviceContainers extracts the list of containers from a service definition nil-safely.
 func serviceContainers(svc *run.Service) []*run.Container {
 	spec := templateSpec(svc)
 	if spec == nil {
@@ -586,7 +595,8 @@ func serviceContainers(svc *run.Service) []*run.Container {
 	return spec.Containers
 }
 
-// Diff は current と desired の統一 diff を返す。差分が無ければ空文字列を返す。
+// Diff returns the unified diff of current and desired. It returns the empty string when there
+// are no differences.
 func Diff(current, desired []byte, currentName, desiredName string) (string, error) {
 	d := difflib.UnifiedDiff{
 		A:        difflib.SplitLines(string(current)),
@@ -602,31 +612,32 @@ func Diff(current, desired []byte, currentName, desiredName string) (string, err
 	return out, nil
 }
 
-// sanitizeMap はサーバ側が付与する read-only なフィールドを map から取り除く。
+// sanitizeMap removes the read-only fields added by the server from the map.
 func sanitizeMap(m map[string]interface{}) {
-	// status はすべてサーバ側の状態情報なので丸ごと削除する。
+	// status is entirely server-side state information, so it is removed as a whole.
 	delete(m, "status")
 
-	// metadata 直下の read-only フィールドとサーバ管理アノテーションを削除する。
+	// Remove the read-only fields and server-managed annotations of top-level metadata.
 	if meta, ok := m["metadata"].(map[string]interface{}); ok {
 		for _, k := range serverManagedMetaFields {
 			delete(meta, k)
 		}
 		deleteMapKeys(meta, "annotations", serverManagedAnnotations)
-		// Cloud Run は全サービスに cloud.googleapis.com/location を付ける。これを消さないと、
-		// 書いていない手書きマニフェストでは永久に削除差分として出続ける。
+		// Cloud Run puts cloud.googleapis.com/location on every service. Unless it is removed, a
+		// hand-written manifest that does not include it keeps showing it as a removal diff
+		// forever.
 		deleteMapKeys(meta, "labels", serverManagedLabels)
 	}
 
-	// spec.template.metadata のサーバ管理ラベル/アノテーションを削除する。
+	// Remove the server-managed labels/annotations of spec.template.metadata.
 	if spec, ok := m["spec"].(map[string]interface{}); ok {
 		if tmpl, ok := spec["template"].(map[string]interface{}); ok {
 			if tmeta, ok := tmpl["metadata"].(map[string]interface{}); ok {
 				deleteMapKeys(tmeta, "annotations", serverManagedAnnotations)
 				deleteMapKeys(tmeta, "labels", serverManagedLabels)
-				// 中身が空になった metadata は出力しない。ローカルのマニフェストには
-				// 通常 spec.template.metadata 自体が無いので、空オブジェクトを残すと
-				// "metadata: {}" が消えない差分として出続ける。
+				// Do not output a metadata that has become empty. A local manifest normally has
+				// no spec.template.metadata at all, so leaving an empty object would keep showing
+				// "metadata: {}" as a diff that never goes away.
 				if len(tmeta) == 0 {
 					delete(tmpl, "metadata")
 				}
@@ -635,7 +646,8 @@ func sanitizeMap(m map[string]interface{}) {
 	}
 }
 
-// deleteMapKeys は parent[field] (map) から指定キーを削除し、空になったら field 自体も削除する。
+// deleteMapKeys removes the given keys from parent[field] (a map), and removes field itself once
+// it is empty.
 func deleteMapKeys(parent map[string]interface{}, field string, keys []string) {
 	child, ok := parent[field].(map[string]interface{})
 	if !ok {

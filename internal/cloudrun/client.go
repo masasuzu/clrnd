@@ -9,21 +9,21 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// Client は project/region に紐づいた Cloud Run Admin API クライアント。
-// API を叩く処理はすべてこの型のメソッドとして生やし、呼び出し側 (cmd/) が
-// project/region を毎回引き回さなくて済むようにする。
+// Client is a Cloud Run Admin API client bound to a project/region.
+// Everything that calls the API is added as a method on this type, so callers (cmd/) do not
+// have to carry project/region around on every call.
 type Client struct {
 	api     *run.APIService
 	project string
 	region  string
 }
 
-// NewClient は Cloud Run Admin API クライアントを生成する。認証はローカルの
-// Application Default Credentials で、run.NewService が自動的に検出する。
-// v1 namespaces API はリージョナルエンドポイントを必要とするため region は必須。
+// NewClient creates a Cloud Run Admin API client. Authentication uses the local
+// Application Default Credentials, which run.NewService discovers automatically.
+// The v1 namespaces API requires a regional endpoint, so region is mandatory.
 //
-// opts は既定のエンドポイント設定の後ろに追加されるので、テストから
-// option.WithEndpoint / option.WithHTTPClient でフェイク API に差し替えられる。
+// opts are appended after the default endpoint option, so tests can swap in a fake API with
+// option.WithEndpoint / option.WithHTTPClient.
 func NewClient(ctx context.Context, project, region string, opts ...option.ClientOption) (*Client, error) {
 	if project == "" {
 		return nil, errors.New("project is required")
@@ -40,28 +40,28 @@ func NewClient(ctx context.Context, project, region string, opts ...option.Clien
 	return &Client{api: api, project: project, region: region}, nil
 }
 
-// Project はクライアントの対象プロジェクトを返す。
+// Project returns the client's target project.
 func (c *Client) Project() string { return c.project }
 
-// Region はクライアントの対象リージョンを返す。
+// Region returns the client's target region.
 func (c *Client) Region() string { return c.region }
 
-// regionalEndpoint は v1 namespaces API のリージョナルエンドポイントを組み立てる。
+// regionalEndpoint builds the regional endpoint for the v1 namespaces API.
 func regionalEndpoint(region string) string {
 	return fmt.Sprintf("https://%s-run.googleapis.com", region)
 }
 
-// serviceName は namespaces API のサービスリソース名を組み立てる。
+// serviceName builds the service resource name for the namespaces API.
 func (c *Client) serviceName(service string) string {
 	return fmt.Sprintf("namespaces/%s/services/%s", c.project, service)
 }
 
-// parent は namespaces API の親リソース名 (namespaces/<project>) を組み立てる。
+// parent builds the parent resource name for the namespaces API (namespaces/<project>).
 func (c *Client) parent() string {
 	return fmt.Sprintf("namespaces/%s", c.project)
 }
 
-// GetService は指定したサービスの定義を Cloud Run Admin API から取得する。
+// GetService fetches the definition of the given service from the Cloud Run Admin API.
 func (c *Client) GetService(ctx context.Context, service string) (*run.Service, error) {
 	obj, err := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
 	if err != nil {

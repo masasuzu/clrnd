@@ -10,11 +10,11 @@ import (
 
 func TestRefreshSuffix(t *testing.T) {
 	now := time.Date(2026, 8, 23, 4, 5, 6, 0, time.FixedZone("JST", 9*60*60))
-	// UTC に直すと 2026-08-22 19:05:06。
+	// In UTC this is 2026-08-22 19:05:06.
 	if got, want := RefreshSuffix(now), "r260822190506"; got != want {
 		t.Errorf("RefreshSuffix() = %q, want %q", got, want)
 	}
-	// 秒まで入るので、連続実行でも名前が衝突しない。
+	// It includes the seconds, so names do not collide even on back-to-back runs.
 	a := RefreshSuffix(time.Unix(1000, 0))
 	b := RefreshSuffix(time.Unix(1001, 0))
 	if a == b {
@@ -22,7 +22,7 @@ func TestRefreshSuffix(t *testing.T) {
 	}
 }
 
-// liveForRefresh は refresh の対象になる live サービスを組み立てる。
+// liveForRefresh builds a live service for refresh to act on.
 func liveForRefresh(templateName string) *run.Service {
 	meta := &run.ObjectMeta{Annotations: map[string]string{"run.googleapis.com/client-name": "gcloud"}}
 	if templateName != "" {
@@ -49,19 +49,19 @@ func TestRefreshTarget(t *testing.T) {
 	if name := revisionName(got); name != "my-svc-r260822190506" {
 		t.Errorf("revision name = %q, want the service name prefix plus the suffix", name)
 	}
-	// 名前以外の template metadata は残す。
+	// Template metadata other than the name is kept.
 	if got.Spec.Template.Metadata.Annotations["run.googleapis.com/client-name"] != "gcloud" {
 		t.Error("RefreshTarget dropped the other template annotations")
 	}
-	// 引数は書き換えない。
+	// The argument is not mutated.
 	if revisionName(live) != "" {
 		t.Errorf("RefreshTarget mutated its argument: %q", revisionName(live))
 	}
 }
 
 func TestRefreshTargetReplacesAnExistingName(t *testing.T) {
-	// 前回の refresh で付いた名前は新しいものに置き換わる。同じ名前のままでは
-	// 新しいリビジョンが作られない (409 になる)。
+	// The name set by the previous refresh is replaced with a new one. With the same name, no
+	// new revision is created (it becomes a 409).
 	live := liveForRefresh("my-svc-r260101000000")
 
 	got, err := RefreshTarget(live, "my-svc", "r260822190506")
@@ -96,7 +96,8 @@ func TestRefreshTargetErrors(t *testing.T) {
 			wantErr: "no revision suffix",
 		},
 		{
-			// Cloud Run は 64 文字未満しか受け付けない。手前で分かる言葉にする。
+			// Cloud Run only accepts fewer than 64 characters. Say so up front in words the
+			// user can act on.
 			name: "too long", live: liveForRefresh(""),
 			service: strings.Repeat("a", 50), suffix: "r260822190506",
 			wantErr: "Cloud Run allows at most 63",
@@ -122,15 +123,15 @@ func TestRefreshTargetErrors(t *testing.T) {
 	}
 }
 
-// withTraffic は live サービスに spec.traffic を設定する。
+// withTraffic sets spec.traffic on a live service.
 func withTraffic(live *run.Service, targets ...*run.TrafficTarget) *run.Service {
 	live.Spec.Traffic = targets
 	return live
 }
 
-// TestRefreshTargetRejectsPinnedTraffic は、トラフィックが特定のリビジョンへ固定
-// されている場合に断ることを確認する。rollback の直後がこの状態で、そのまま
-// refresh すると新しいリビジョンは作られるが 0% のままになる。
+// TestRefreshTargetRejectsPinnedTraffic checks that it refuses when traffic is pinned to a
+// specific revision. This is the state right after a rollback, and refreshing as is creates a
+// new revision that stays at 0%.
 func TestRefreshTargetRejectsPinnedTraffic(t *testing.T) {
 	live := withTraffic(liveForRefresh(""),
 		&run.TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 100})
@@ -144,8 +145,8 @@ func TestRefreshTargetRejectsPinnedTraffic(t *testing.T) {
 	}
 }
 
-// TestRefreshTargetAllowsTrafficThatFollowsTheLatest は、最新リビジョンへ向く
-// エントリがあれば (タグ付きの経路が同居していても) 通ることを確認する。
+// TestRefreshTargetAllowsTrafficThatFollowsTheLatest checks that it goes through when there is an
+// entry pointing at the latest revision (even alongside a tagged route).
 func TestRefreshTargetAllowsTrafficThatFollowsTheLatest(t *testing.T) {
 	live := withTraffic(liveForRefresh(""),
 		&run.TrafficTarget{LatestRevision: true, Percent: 90},
@@ -156,8 +157,8 @@ func TestRefreshTargetAllowsTrafficThatFollowsTheLatest(t *testing.T) {
 	}
 }
 
-// TestRefreshTargetRejectsATagOnlyLatestEntry は、latestRevision でも割合 0 の
-// タグ専用エントリは配信とみなさないことを確認する。
+// TestRefreshTargetRejectsATagOnlyLatestEntry checks that a tag-only entry with a 0 share is not
+// counted as serving, even when it is latestRevision.
 func TestRefreshTargetRejectsATagOnlyLatestEntry(t *testing.T) {
 	live := withTraffic(liveForRefresh(""),
 		&run.TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 100},
@@ -168,9 +169,9 @@ func TestRefreshTargetRejectsATagOnlyLatestEntry(t *testing.T) {
 	}
 }
 
-// TestRefreshTargetRejectsTheSameRevisionName は、生成した名前が現在のものと
-// 同じ場合に断ることを確認する。同名では新しいリビジョンが作られず、差分ゼロで
-// "No changes." になって何も起きないまま成功してしまう。
+// TestRefreshTargetRejectsTheSameRevisionName checks that it refuses when the generated name is
+// the same as the current one. With the same name no new revision is created, the diff is empty,
+// and it ends in "No changes.", succeeding without anything having happened.
 func TestRefreshTargetRejectsTheSameRevisionName(t *testing.T) {
 	live := liveForRefresh("my-svc-r260822190506")
 
@@ -183,9 +184,9 @@ func TestRefreshTargetRejectsTheSameRevisionName(t *testing.T) {
 	}
 }
 
-// TestRefreshTargetAcceptsTheLongestAllowedName は境界を確認する。
+// TestRefreshTargetAcceptsTheLongestAllowedName checks the boundary.
 func TestRefreshTargetAcceptsTheLongestAllowedName(t *testing.T) {
-	// "<49 文字>-r260822190506" = 49 + 1 + 13 = 63 文字ちょうど。
+	// "<49 characters>-r260822190506" = 49 + 1 + 13 = exactly 63 characters.
 	service := strings.Repeat("a", 49)
 	if _, err := RefreshTarget(liveForRefresh(""), service, "r260822190506"); err != nil {
 		t.Fatalf("RefreshTarget() error = %v, want 63 characters to be accepted", err)
