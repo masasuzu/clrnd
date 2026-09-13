@@ -40,7 +40,7 @@ func startPruneAPI(t *testing.T) func() []string {
 }
 
 // TestRevisionsPruneDeletesTheOldOnes checks that revisions older than --keep are deleted. Cloud
-// Run does not delete old revisions automatically, so this is the only way to clean them up.
+// Run does not delete old revisions automatically, so this is how clrnd cleans them up.
 func TestRevisionsPruneDeletesTheOldOnes(t *testing.T) {
 	deleted := startPruneAPI(t)
 

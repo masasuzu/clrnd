@@ -20,8 +20,8 @@
 # $PROJECT or a local (git-ignored) project.env file next to this script.
 set -uo pipefail
 
-# Carrying on after a failed resolution leaves HERE empty and WORK pointing at /work
-# (which is rm -rf'd right after). Always stop here.
+# Carrying on after a failed resolution leaves HERE empty, and REPO then resolves to / instead of
+# the repository, so the build and git would run against the wrong directory. Always stop here.
 HERE="$(cd "$(dirname "$0")" && pwd)" || { echo "error: cannot resolve the script directory" >&2; exit 1; }
 REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
 [ -n "$REPO" ] || { echo "error: cannot resolve the repository root" >&2; exit 1; }
@@ -71,7 +71,8 @@ redact() {
 }
 
 # ---------- output helpers ----------
-# All output goes through c or info. Redacting here covers everything.
+# Output that can carry an identifier goes through c or info, and run_cmd redacts the command
+# output it prints, so redacting in these helpers covers it. Only fixed text is printed directly.
 c() { printf '\033[%sm%s\033[0m\n' "$1" "$2" | redact; }
 step() { echo; c '1;36' "==== $* ===="; }
 info() { echo "     $*" | redact; }

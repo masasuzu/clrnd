@@ -393,9 +393,8 @@ func TestSelectPrunableRevisions(t *testing.T) {
 }
 
 // TestSelectPrunableRevisionsCountsProtectedTowardKeep checks that protected revisions also count
-// toward the number kept. Changing how they are counted would make the number left behind go up
-// or down even though --keep 3 was given, so the result would no longer match what was asked
-// for.
+// toward keep. keep is how far back from the newest to look, so a protected revision inside that
+// window must not push the window further back and expose an older revision to deletion.
 func TestSelectPrunableRevisionsCountsProtectedTowardKeep(t *testing.T) {
 	all := Revisions{
 		{Name: "my-svc-00003-abc", Percent: 100},

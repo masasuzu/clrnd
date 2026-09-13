@@ -69,8 +69,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Parse locally before creating the client (= ADC discovery), so that a manifest problem is
-	// not hidden behind an authentication error. Compare does the same parse, but it is a pure
-	// check and cheap.
+	// not hidden behind an authentication error. CompareManifest does the same parse, but it is a
+	// pure check and cheap.
 	if err := cloudrun.CheckSyntax(local); err != nil {
 		return err
 	}

@@ -1,5 +1,6 @@
-# On top of the default linters, catch the slips this repository actually tends to make
-# (swallowed errors, checking errors by comparison).
+# Enable the default linters explicitly, and add the ones for slips this repository actually tends
+# to make: checking errors by comparison instead of errors.Is/As (errorlint), and misspellings
+# (misspell).
 version: "2"
 linters:
   enable:

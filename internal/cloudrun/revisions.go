@@ -309,18 +309,19 @@ func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
 // It assumes revisions is in the "newest first" order ListRevisions returns.
 //
 // The rules are as follows, and each exists so that nothing whose loss would hurt is deleted.
-//   - The newest keep entries are left as they are (counted whether or not they are protected.
-//     Counting any other way would make the result disagree with the number given: --keep 3
-//     could leave 4, or as many extra old versions as there are protected revisions could be
-//     deleted)
+//   - The newest keep entries are left as they are, counted whether or not they are protected. So
+//     keep says how far back from the newest to look, and a protected revision inside that window
+//     does not widen it. It is not a promise about how many revisions survive: protected
+//     revisions older than the window survive too
 //   - Even when older than that, anything receiving traffic, named by spec.traffic, or carrying a
 //     tag is kept. Deleting a serving version takes the service down, and a tag is the entry point
 //     of a URL, so deleting it removes that route. spec is consulted too because the share on the
 //     status side can be absent until a rollout settles, and in that window everything looks
 //     like "0%"
 //
-// A negative keep must be rejected by the caller (clamping it to 0 here would let a CI job that
-// miscomputed it delete everything that is not protected).
+// A negative keep is treated as 0 so that the function stays well-defined, but the caller must
+// reject it rather than rely on that: a CI job that miscomputed --keep would otherwise delete
+// everything that is not protected.
 func SelectPrunableRevisions(revisions Revisions, keep int) Revisions {
 	if keep < 0 {
 		keep = 0

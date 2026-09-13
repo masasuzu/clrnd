@@ -79,9 +79,9 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 
 // validatePruneFlags validates the combination of pruning flags.
 //
-// Silently ignoring --keep or --auto-approve given without --prune would let a run that "meant to
-// prune but only listed" finish as a success. Clamping a negative --keep to 0 is the same kind of
-// accident (deleting everything that is not protected), so it is refused here.
+// Silently ignoring --keep, --dry-run or --auto-approve given without --prune would let a run that
+// "meant to prune but only listed" finish as a success. Clamping a negative --keep to 0 is the same
+// kind of accident (deleting everything that is not protected), so it is refused here.
 func validatePruneFlags(cmd *cobra.Command) error {
 	if !revisionsPrune {
 		for _, name := range []string{"keep", "auto-approve", "dry-run"} {

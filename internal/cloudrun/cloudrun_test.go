@@ -236,7 +236,7 @@ func compareManifest(current *run.Service, manifest []byte, currentName, desired
 }
 
 // normalize is, for tests, the step that "brings the local manifest to the same normalization as
-// the live side". It used to be exported as Normalize, but Compare now contains this path.
+// the live side". It used to be exported as Normalize, but compareServices now contains this path.
 func normalize(t *testing.T, manifest []byte) []byte {
 	t.Helper()
 	svc, err := parseManifest(manifest)
@@ -284,7 +284,7 @@ func TestNormalizationIsIdempotent(t *testing.T) {
 }
 
 func TestCompareRejectsUnknownField(t *testing.T) {
-	// Compare goes through parseManifest (strict), so diff rejects an unknown field (a typo)
+	// The comparison goes through parseManifest (strict), so diff rejects an unknown field (a typo)
 	// just as deploy does. This keeps the behaviour of the two commands the same.
 	manifest := []byte(`apiVersion: serving.knative.dev/v1
 kind: Service
@@ -415,9 +415,9 @@ func TestWithoutRevisionName(t *testing.T) {
 	WithoutRevisionName(nil)
 }
 
-// TestCompareDoesNotMutateCurrent checks that Compare does not mutate the live service it is
-// given. If it did, code that reads the live revision name after the comparison would silently
-// break.
+// TestCompareDoesNotMutateCurrent checks that the comparison (compareServices) does not mutate the
+// live service it is given. If it did, code that reads the live revision name after the
+// comparison would silently break.
 func TestCompareDoesNotMutateCurrent(t *testing.T) {
 	live := liveService("gcr.io/project/image:tag")
 	live.Spec.Template.Metadata = &run.ObjectMeta{Name: "my-svc-00007-abc"}
@@ -587,8 +587,8 @@ func TestDeleteMapKeys(t *testing.T) {
 
 // TestCompareIgnoresServerManagedMetadata checks that metadata Cloud Run adds on its own does not
 // show up as a diff against a hand-written minimal manifest. The entries are listed exactly as
-// taken from a real service (one created with gcloud). With --server-defaults turned off this is
-// the only path, so anything it misses becomes "a diff that never goes away no matter what".
+// taken from a real service (one created with gcloud). With --no-server-defaults this is the only
+// path, so anything it misses becomes "a diff that never goes away no matter what".
 func TestCompareIgnoresServerManagedMetadata(t *testing.T) {
 	current := &run.Service{
 		ApiVersion: "serving.knative.dev/v1",
