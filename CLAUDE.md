@@ -527,8 +527,11 @@ revision-name conflicts, asynchronous rollout failures).
   let a branch that never reached main produce a signed, attested release.
   The job's last step publishes a signed [packslip](https://packslip.dev) manifest
   (`packslip.sigstore.json`), which mise's `packslip:` backend reads instead of guessing from file
-  names; a manifest cannot be added to a past release, which is why it goes out with every one.
-  It uses `attest: link`, so it only points at the provenance the step before it registered: its
+  names. It only covers the release its own tag run builds: a past release gets a manifest only
+  from a separate run that passes `tag:` and fetches the archives with `download:`. Such a run
+  records its own `github.sha` as the source commit (the action has no input to override it), so
+  unless it was started from that tag, the manifest names a commit other than the tag's. It uses
+  `attest: link`, so it only points at the provenance the step before it registered: its
   `artifacts` globs must match that step's `subject-path`, or the links resolve to nothing. The
   step only runs on a tag, but its output can be checked beforehand by running `packslip create`
   (signed with a throwaway `packslip keygen` key and `--no-log`) and `packslip show` over the
