@@ -20,43 +20,45 @@
 # $PROJECT or a local (git-ignored) project.env file next to this script.
 set -uo pipefail
 
-# 解決に失敗したまま進むと HERE が空になり、WORK が /work を指してしまう
-# (直後に rm -rf する)。ここで必ず止める。
+# Carrying on after a failed resolution leaves HERE empty and WORK pointing at /work
+# (which is rm -rf'd right after). Always stop here.
 HERE="$(cd "$(dirname "$0")" && pwd)" || { echo "error: cannot resolve the script directory" >&2; exit 1; }
 REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
 [ -n "$REPO" ] || { echo "error: cannot resolve the repository root" >&2; exit 1; }
-# 成果物はリポジトリの外に置く。リポジトリがクラウド同期フォルダ (Dropbox, iCloud,
-# OneDrive ...) の下にあると、同期クライアントがビルド中のバイナリを古い版に差し戻したり
-# "conflicted copy" を作ったりする。そうなると古いバイナリを黙ってテストしてしまう。
+# Keep build output outside the repository. When the repository lives under a cloud-synced
+# folder (Dropbox, iCloud, OneDrive ...), the sync client can revert a binary being built to an
+# older version or create a "conflicted copy", and the test then silently runs an old binary.
 #
-# WORK_ROOT は「置き場所の親ディレクトリ」。実際に使うのは必ずその下の専用ディレクトリで、
-# 消すのもそこだけにする (WORK 自体を上書き可能にすると、後段の rm -rf が利用者の
-# 指定したディレクトリを丸ごと消してしまう)。
+# WORK_ROOT is "the parent directory of the work area". What is actually used is always a
+# dedicated directory under it, and only that directory is removed (if WORK itself could be
+# overridden, the rm -rf further down would wipe out whatever directory the user specified).
 WORK_DIR_NAME="clrnd-e2e-work"
 WORK_ROOT="${WORK_ROOT:-${TMPDIR:-/tmp}}"
 WORK="${WORK_ROOT%/}/$WORK_DIR_NAME"
 BIN="$WORK/bin"
 
-# 使い捨てサービスの共通プレフィクス。--cleanup-orphans の対象でもある。
+# Common prefix of the throwaway services. It is also what --cleanup-orphans targets.
 SERVICE_PREFIX="clrnd-e2e-"
 SERVICE="${SERVICE_PREFIX}$(date +%Y%m%d%H%M%S)"
 
 REGION="${REGION:-asia-northeast1}"
 IMAGE="${IMAGE:-us-docker.pkg.dev/cloudrun/container/hello}"
-# 過去の ref との比較は任意。指定が無ければフェーズ 2 をまるごと飛ばす。
+# Comparing against an older ref is optional. Without one, phase 2 is skipped entirely.
 OLD_REF="${OLD_REF:-}"
 
 PASS=0
 FAIL=0
 
 # ---------- redaction ----------
-# 実行ログをそのまま貼っても Google Cloud の識別子が出ないようにする。失敗したときに
-# ログを issue や PR に貼るのが自然な流れなので、伏せ字は既定で有効にしておく。
-# 判定に使う $OUT には手を入れない (表示だけを伏せる) ので、アサーションは実名で書ける。
-# 手元で調査するときは RAW=1 で素の出力に戻せる。
+# Make sure pasting the run log as-is exposes no Google Cloud identifiers. Pasting the log into
+# an issue or PR is the natural next step after a failure, so redaction is on by default.
+# $OUT, which the assertions check, is left untouched (only the display is redacted), so
+# assertions can be written against the real names. For local investigation, RAW=1 restores
+# the raw output.
 #
-# 適用順が重要: URL とサービス名を先に潰してから、残った長い数値を潰す。逆順にすると
-# 数値の置換が URL やサービス名の形を壊し、後続のパターンにマッチしなくなる。
+# The order matters: mask URLs and service names first, then the remaining long numbers. In the
+# reverse order the number replacement breaks the shape of URLs and service names, and the
+# later patterns no longer match.
 redact() {
   if [ "${RAW:-}" = "1" ]; then cat; return; fi
   sed \
@@ -69,7 +71,7 @@ redact() {
 }
 
 # ---------- output helpers ----------
-# すべての表示は c か info を通す。ここで伏せ字を掛ければ全体が覆える。
+# All output goes through c or info. Redacting here covers everything.
 c() { printf '\033[%sm%s\033[0m\n' "$1" "$2" | redact; }
 step() { echo; c '1;36' "==== $* ===="; }
 info() { echo "     $*" | redact; }
@@ -78,7 +80,7 @@ ng()   { FAIL=$((FAIL + 1)); c '31' "  FAIL  $*"; }
 die()  { c '31' "error: $*"; exit 1; }
 
 # ---------- project resolution ----------
-# プロジェクト ID をスクリプト本文にも実行ログにも出さない (漏洩防止)。
+# Keep the project ID out of both the script body and the run log (to avoid leaking it).
 resolve_project() {
   if [ -n "${PROJECT:-}" ]; then
     return
@@ -116,8 +118,8 @@ cleanup_orphans() {
   [ "$found" -eq 1 ] || info "nothing to delete"
 }
 
-# 通常終了・失敗・Ctrl-C のいずれでも今回作ったサービスを消す。
-# kill -9 では trap が動かないので、その場合は --cleanup-orphans を使う。
+# Delete the service this run created on a normal exit, a failure or Ctrl-C alike.
+# The trap does not run on kill -9; use --cleanup-orphans in that case.
 cleanup() {
   local rc=$?
   if [ "${KEEP:-}" = "1" ]; then
@@ -143,7 +145,8 @@ cleanup() {
 OUT=""
 RC=0
 
-# run_cmd はコマンドを実行し、出力を OUT に、終了コードを RC に入れる (失敗しても止めない)。
+# run_cmd runs a command and stores its output in OUT and its exit code in RC (a failure does not
+# stop the script).
 run_cmd() {
   info "\$ $(basename "$1") ${*:2}"
   OUT="$("$@" 2>&1)"
@@ -160,16 +163,16 @@ assert_file_has()   { if grep -q -- "$3" "$2"; then ok "$1"; else ng "$1 (missin
 assert_file_lacks() { if grep -q -- "$3" "$2"; then ng "$1 (present in $(basename "$2"): $3)"; else ok "$1"; fi; }
 
 # ---------- build ----------
-# file_mtime <path> : 更新時刻を epoch 秒で返す (GNU/BSD stat の両対応)。
-# GNU を先に試す。逆順にすると、GNU stat では -f がファイルシステム情報の指定になり
-# %m を解釈できず "?" を exit 0 で返すため、フォールバックに到達しない。
-# BSD stat は -c を知らずに exit != 0 で失敗するので、この順序なら両方で正しく動く。
+# file_mtime <path> : print the modification time in epoch seconds (works with GNU and BSD stat).
+# Try GNU first. In the reverse order, -f on GNU stat selects file system information, which
+# cannot interpret %m and prints "?" with exit 0, so the fallback is never reached.
+# BSD stat does not know -c and fails with exit != 0, so in this order it works correctly on both.
 file_mtime() {
   stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
-# build_binary <dest> <srcdir> : ビルドし、出力が本当に更新されたかを確認する。
-# 差し戻しやキャッシュで古いバイナリが残っていると、テストが嘘の結果を出すため。
+# build_binary <dest> <srcdir> : build, then confirm the output really was rewritten.
+# If a revert or a cache leaves an old binary in place, the test reports false results.
 build_binary() {
   local dest="$1" src="$2" before
   before="$(date +%s)"
@@ -179,7 +182,7 @@ build_binary() {
   mtime="$(file_mtime "$dest")"
   case "$mtime" in
     ''|*[!0-9]*)
-      # 検査できないまま素通りさせない (それでは保険にならない)。
+      # Do not let it pass unchecked (that would not be a safeguard at all).
       c '31' "     cannot read the mtime of $dest; refusing to trust the build"
       return 1
       ;;
@@ -191,7 +194,7 @@ build_binary() {
 }
 
 # ---------- Cloud Run helpers ----------
-# ready_condition は Ready 条件を "<status>\t<reason>\t<message>" で返す。
+# ready_condition prints the Ready condition as "<status>\t<reason>\t<message>".
 ready_condition() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format=json 2>/dev/null | python3 -c '
@@ -226,8 +229,8 @@ wait_ready() {
   return 1
 }
 
-# serving_revision はいちばん多くトラフィックを受けているリビジョン名を返す。
-# rollback 後は latestReadyRevisionName とは別になるので、こちらで確認する。
+# serving_revision prints the name of the revision receiving the most traffic.
+# After a rollback this differs from latestReadyRevisionName, so check with this one.
 serving_revision() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format=json 2>/dev/null | python3 -c '
@@ -242,11 +245,11 @@ print(best.get("revisionName", "") if best else "")
 '
 }
 
-# revision_percent <revision> : そのリビジョンが受けている割合を gcloud 側で確認する
-# (clrnd の出力ではなく API の状態を見る)。同じリビジョンが割合用とタグ用で複数の
-# エントリに現れることがあるので合算する。
-# 読めなかった場合は空を返す。0 や -1 を返すと、認証エラーや API の失敗が
-# 「割合 0%」「リビジョン 0 件」として *合格* に化ける。呼び出し側は空を失敗として扱う。
+# revision_percent <revision> : check through gcloud the share that revision receives
+# (looking at the API's state, not clrnd's output). The same revision can appear in more than
+# one entry (one for the percentage, one for a tag), so the shares are summed.
+# Prints nothing when it cannot be read. Printing 0 or -1 would turn an auth error or an API
+# failure into a *pass* as "0% share" or "0 revisions". Callers treat empty as a failure.
 revision_percent() {
   local raw
   raw="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
@@ -266,7 +269,8 @@ print(total)
 ' "$1"
 }
 
-# revision_count : サービスに属するリビジョンの数。読めなければ空を返す。
+# revision_count : the number of revisions belonging to the service. Prints nothing when it cannot
+# be read.
 revision_count() {
   local raw
   raw="$(gcloud run revisions list --service "$SERVICE" --project "$PROJECT" --region "$REGION" \
@@ -274,7 +278,7 @@ revision_count() {
   printf '%s' "$raw" | grep -c . || true
 }
 
-# assert_percent <ラベル> <リビジョン> <期待する割合>
+# assert_percent <label> <revision> <expected percent>
 assert_percent() {
   local got
   got="$(revision_percent "$2")"
@@ -287,9 +291,9 @@ assert_percent() {
   fi
 }
 
-# wait_serving <リビジョン> : そのリビジョンが配信を受けるまで待つ (最大 60s)。
-# latestRevision は「最新の *ready* な版」に解決されるので、直後に見ると
-# まだ 1 つ前を指していることがある。
+# wait_serving <revision> : wait until that revision is serving (up to 60s).
+# latestRevision resolves to "the newest *ready* revision", so right after a change it can
+# still point at the previous one.
 wait_serving() {
   local i
   for i in $(seq 1 20); do
@@ -299,8 +303,8 @@ wait_serving() {
   return 1
 }
 
-# wait_revision_gone <リビジョン> : そのリビジョンが消えるまで待つ (最大 60s)。
-# Cloud Run の削除は非同期で、返った直後はまだ引ける。
+# wait_revision_gone <revision> : wait until that revision is gone (up to 60s).
+# Cloud Run deletes asynchronously; right after the call returns it can still be read.
 wait_revision_gone() {
   local i
   for i in $(seq 1 20); do
@@ -310,7 +314,7 @@ wait_revision_gone() {
   return 1
 }
 
-# revision_exists <revision> : そのリビジョンがまだ在るか。
+# revision_exists <revision> : whether that revision still exists.
 revision_exists() {
   gcloud run revisions describe "$1" --project "$PROJECT" --region "$REGION" \
     --format='value(metadata.name)' >/dev/null 2>&1
@@ -321,9 +325,9 @@ current_revision() {
     --format='value(status.latestReadyRevisionName)' 2>/dev/null
 }
 
-# created_revision は最後に *作られた* リビジョンを返す。トラフィックを受けない
-# リビジョン (deploy --no-traffic) は ready になるまで latestReadyRevisionName に
-# 現れないので、「今の deploy が作った版」を見るときはこちらを使う。
+# created_revision prints the most recently *created* revision. A revision that receives no
+# traffic (deploy --no-traffic) does not show up in latestReadyRevisionName until it is ready,
+# so use this one to look at "the revision the deploy just created".
 created_revision() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format='value(status.latestCreatedRevisionName)' 2>/dev/null
@@ -350,15 +354,15 @@ write_manifest() {
   } > "$path"
 }
 
-# set_env_value <manifest> <value> : CLRND_E2E を必ず <value> にする (無ければ追加)。
+# set_env_value <manifest> <value> : make CLRND_E2E equal to <value> (adding it if absent).
 set_env_value() {
   python3 - "$1" "$2" <<'PY'
 import re, sys
 path, value = sys.argv[1], sys.argv[2]
 s = open(path).read()
 if "CLRND_E2E" in s:
-    # 置換文字列に値を埋め込むと \1 などが展開されてしまうので、
-    # 関数形式にして value を literal として扱う。
+    # Embedding the value in the replacement string would expand things like \1,
+    # so use a function to treat value as a literal.
     s = re.sub(r'(name: CLRND_E2E\n\s+value: )\S+', lambda m: m.group(1) + value, s)
 else:
     s = s.replace("      containers:\n      - image:",
@@ -367,25 +371,25 @@ open(path, "w").write(s)
 PY
 }
 
-# pin_live_revision <suffix> : live サービス側にリビジョン名を固定させる。
-# gcloud run deploy --revision-suffix は spec.template.metadata.name を設定する。
-# Terraform の template.metadata.name も同じ状態を作る。リビジョン名を指定せずに
-# 作ったサービスでは Cloud Run はこのフィールドを返さないので、init が名前を
-# 引き継ぐ経路を試すにはこの前提を明示的に作る必要がある。
+# pin_live_revision <suffix> : make the live service pin a revision name.
+# gcloud run deploy --revision-suffix sets spec.template.metadata.name, and Terraform's
+# template.metadata.name produces the same state. For a service created without a revision
+# name Cloud Run does not return this field, so exercising the path where init carries the
+# name over requires creating this precondition explicitly.
 pin_live_revision() {
   gcloud run deploy "$SERVICE" --image "$IMAGE" --revision-suffix="$1" \
     --project "$PROJECT" --region "$REGION" --no-allow-unauthenticated --quiet >/dev/null 2>&1
 }
 
-# live_revision_name は live サービスが固定しているリビジョン名を返す (無ければ空)。
+# live_revision_name prints the revision name the live service pins (empty if none).
 live_revision_name() {
   gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
     --format='value(spec.template.metadata.name)' 2>/dev/null
 }
 
-# pin_revision <manifest> <revision-name> : spec.template.metadata.name を設定する。
-# metadata ブロックが既に在る場合 (gcloud 由来のアノテーションが残っているときなど) は
-# その中に name を足す。無ければ metadata ごと作る。
+# pin_revision <manifest> <revision-name> : set spec.template.metadata.name.
+# When a metadata block already exists (for example when annotations from gcloud remain), add
+# name inside it. Otherwise create metadata along with it.
 pin_revision() {
   python3 - "$1" "$2" <<'PY'
 import sys
@@ -396,8 +400,8 @@ while i < len(lines):
     out.append(lines[i])
     if not done and lines[i] == "  template:":
         if i + 1 < len(lines) and lines[i + 1] == "    metadata:":
-            out.append(lines[i + 1])            # 既存の metadata: を維持し
-            out.append("      name: %s" % rev)  # その直下に name を挿す
+            out.append(lines[i + 1])            # keep the existing metadata:
+            out.append("      name: %s" % rev)  # and insert name right under it
             i += 1
         else:
             out.append("    metadata:")
@@ -424,7 +428,7 @@ trap cleanup EXIT
 step "Setup"
 command -v gcloud >/dev/null || die "gcloud is not on PATH"
 command -v go >/dev/null || die "go is not on PATH"
-# 自分が作る専用ディレクトリ以外は絶対に消さない。
+# Never remove anything other than the dedicated directory this script creates.
 case "$WORK" in
   */"$WORK_DIR_NAME") ;;
   *) die "refusing to remove $WORK: not a $WORK_DIR_NAME directory" ;;
@@ -503,13 +507,13 @@ assert_rc_zero "diff --no-server-defaults succeeds"
 assert_contains "server defaults show up in the diff (containerConcurrency)" "containerConcurrency"
 assert_contains "server defaults show up in the diff (startupProbe)" "startupProbe"
 assert_contains "server defaults show up in the diff (traffic)" "latestRevision"
-# サーバが勝手に付ける metadata は、既定値の解決に頼らずに消えていなければならない
-# (issue #25)。ここは唯一その経路を実サービスで通す場所。
+# Metadata the server adds on its own must be gone without relying on default resolution
+# (issue #25). This is the only place that runs that path against a real service.
 assert_missing "the location label is not part of the diff" "cloud.googleapis.com/location"
 assert_missing "server-set metadata is not part of the diff" "serving.knative.dev/creator"
 
 info "--- 1-2b. diff (default: server defaults resolved) ---"
-info "既定ではサーバに既定値を解決させるので、同じ最小マニフェストでも差分は消える。"
+info "By default the server resolves the defaults, so the same minimal manifest shows no diff."
 run_cmd "$CLRND" diff "$SERVICE" "$D1/manifest.yaml"
 assert_rc_zero "diff succeeds"
 assert_empty "diff converges on a minimal manifest by default"
@@ -557,8 +561,8 @@ if [ -n "$AFTER_REFRESH" ] && [ "$AFTER_REFRESH" != "$BEFORE_REFRESH" ]; then
 else
   ng "refresh did not create a new revision (still $AFTER_REFRESH)"
 fi
-# refresh はリビジョン名を明示するが、ローカルのマニフェストは名前を持たないので
-# diff には出ない (alignRevisionName)。ここが崩れると diff が収束しなくなる。
+# refresh names the revision explicitly, but the local manifest carries no name, so it does not
+# show up in the diff (alignRevisionName). If this breaks, diff never converges.
 run_cmd "$CLRND" diff
 assert_rc_zero "diff succeeds after a refresh"
 assert_empty "diff stays empty after a refresh"
@@ -593,8 +597,9 @@ else
 fi
 
 info "--- 1-5c2. refresh refuses when it cannot do its job ---"
-# (a) 現在と同じリビジョン名を指定した場合。同名では新しいリビジョンが作られず、
-#     差分ゼロで "No changes." になって何も起きないまま成功してしまう経路。
+# (a) Specifying the same revision name as the current one. With the same name no new revision
+#     is created, so this is the path where the diff is empty, "No changes." is printed, and the
+#     command succeeds having done nothing.
 CURRENT_TEMPLATE_REV="$(live_revision_name)"
 if [ -n "$CURRENT_TEMPLATE_REV" ]; then
   SAME_SUFFIX="${CURRENT_TEMPLATE_REV#"$SERVICE"-}"
@@ -608,8 +613,8 @@ else
   info "skipping: the live service pins no template revision name"
 fi
 
-# (b) rollback 直後はトラフィックが特定のリビジョンへ固定されている。この状態の
-#     refresh は新しいリビジョンを作っても 0% にしかならない。
+# (b) Right after a rollback, traffic is pinned to a specific revision. A refresh in this state
+#     would create a new revision that only ever gets 0%.
 run_cmd "$CLRND" refresh "$SERVICE" --auto-approve
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "receives no traffic"; then
   ok "refresh refuses while traffic is pinned to specific revisions"
@@ -618,16 +623,17 @@ else
 fi
 
 info "--- 1-5d. deploy again after the rollback ---"
-# rollback は spec.traffic を固定するので、その後の deploy が新しいリビジョンへ
-# 戻せることを確認する (固定したまま動けなくならないこと)。
+# rollback pins spec.traffic, so confirm that a later deploy can move it back to a new revision
+# (that the service does not get stuck pinned).
 set_env_value "$D2/manifest.yaml" "after-rollback"
 run_cmd "$CLRND" deploy --auto-approve --timeout 120s
 assert_rc_zero "deploy still works after a rollback"
 
 info "--- 1-5e. traffic: split, then follow the latest again ---"
-# rollback は 100% 戻すだけで、途中の割合と「最新へ戻す」経路は traffic にしかない。
-# ここで確かめるのは、実 API 上で (a) 割合が指定どおりに分かれること、(b) リビジョンを
-# 作らずに済むこと、(c) latestRevision の固定を外して最新へ戻せること。
+# rollback only moves all 100% back; partial shares and the "follow the latest again" path
+# exist only in traffic. What is checked here, against the real API: (a) the split matches what
+# was requested, (b) no revision is created, and (c) the pin can be removed so traffic follows
+# the latest revision via latestRevision again.
 LATEST_REV="$(current_revision)"
 PREV_REV="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
 import json, sys
@@ -660,8 +666,8 @@ else
   wait_ready || ng "the service did not settle after --to-latest"
   wait_serving "$LATEST_REV" || true
   assert_percent "traffic follows the latest revision again" "$LATEST_REV" 100
-  # 固定が外れたか (spec 側が latestRevision に戻ったか) も見る。ここが名前のままだと
-  # 次の deploy で作られるリビジョンへ traffic が移らない。
+  # Also check that the pin was removed (that the spec side is back to latestRevision). If it is
+  # still a name, traffic will not move to the revision the next deploy creates.
   if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
       --format=json 2>/dev/null |
       python3 -c 'import json,sys; print(any(t.get("latestRevision") for t in ((json.load(sys.stdin).get("spec") or {}).get("traffic") or [])))' |
@@ -673,14 +679,14 @@ else
 fi
 
 info "--- 1-5f. deploy --no-traffic, then move traffic over ---"
-# 「デプロイしてから配信を決める」経路。マニフェストには書けない指定なので、実 API で
-# 新しいリビジョンが 0% で作られることを確認する。
+# The "deploy first, decide on serving later" path. It cannot be expressed in a manifest, so
+# confirm against the real API that the new revision is created at 0%.
 SERVING_BEFORE="$(serving_revision)"
 set_env_value "$D2/manifest.yaml" "no-traffic"
 run_cmd "$CLRND" deploy --no-traffic --auto-approve --timeout 120s
 assert_rc_zero "deploy --no-traffic succeeds"
-# トラフィックを受けない版は ready 扱いになるまで latestReadyRevisionName に載らない。
-# ここで見たいのは「作られたか」なので latestCreatedRevisionName を使う。
+# A revision that receives no traffic is not listed in latestReadyRevisionName until it counts
+# as ready. What matters here is "was it created", so use latestCreatedRevisionName.
 NEW_REV="$(created_revision)"
 if [ -n "$NEW_REV" ] && [ "$NEW_REV" != "$SERVING_BEFORE" ]; then
   ok "deploy --no-traffic creates a new revision"
@@ -697,8 +703,8 @@ fi
 run_cmd "$CLRND" traffic "$SERVICE" --to-latest --auto-approve --timeout 120s
 assert_rc_zero "traffic moves to the revision deployed with --no-traffic"
 wait_ready || ng "the service did not settle after moving traffic"
-# latestRevision は「最新の *ready* な版」に解決される。--no-traffic で作った版は
-# インスタンスが用意されるまで ready にならないので、切り替わるまで待つ。
+# latestRevision resolves to "the newest *ready* revision". A revision created with --no-traffic
+# is not ready until its instances are up, so wait for the switch.
 if wait_serving "$NEW_REV"; then
   ok "the canary sequence ends on the new revision"
 else
@@ -737,9 +743,9 @@ info "--- 1-8. deploying a pinned revision name is rejected ---"
 set_env_value "$D2/pinned.yaml" "third"
 run_cmd "$CLRND" deploy "$SERVICE" "$D2/pinned.yaml" --auto-approve --timeout 120s
 assert_contains "deploy also warns about the pinned revision name" "warning:"
-# Cloud Run はこの要求を同期的に 409 で拒否することも、受理してロールアウトだけ
-# 失敗させることもある。deploy が待つようになったので、どちらの経路でも
-# 非ゼロで終わらなければならない。以前は後者で exit 0 になっていた。
+# Cloud Run may reject this request synchronously with a 409, or accept it and fail only the
+# rollout. Now that deploy waits, it must exit non-zero on either path. Previously the latter
+# exited 0.
 if [ "$RC" -ne 0 ]; then
   ok "deploy fails when a revision name cannot be reused (exit=$RC)"
   if printf '%s' "$OUT" | grep -q "alreadyExists"; then
@@ -752,8 +758,8 @@ else
 fi
 
 info "--- 1-8b. re-deploying the same manifest does not report success ---"
-# 1-8 でサービスは壊れたまま。同じマニフェストなので差分はゼロになり、
-# 以前はここで "No changes." のまま exit 0 になっていた。
+# 1-8 left the service broken. With the same manifest the diff is empty, and previously this
+# exited 0 with just "No changes.".
 run_cmd "$CLRND" deploy "$SERVICE" "$D2/pinned.yaml" --auto-approve --timeout 60s
 if [ "$RC" -ne 0 ]; then
   ok "a retry with no changes still fails while the service is unhealthy (exit=$RC)"
@@ -765,29 +771,29 @@ else
 fi
 
 info "--- 1-8b2. verify checks the container image ---"
-# イメージの実在確認は Artifact Registry を実際に引く。$IMAGE は公開イメージなので
-# 通常の ADC で読める (この前提自体をここで確かめている)。
+# The image existence check really queries Artifact Registry. $IMAGE is a public image, so
+# ordinary ADC can read it (this step also verifies that assumption itself).
 D5="$WORK/current-image"; mkdir -p "$D5"
 write_manifest "$D5/manifest.yaml"
 run_cmd "$CLRND" verify "$SERVICE" "$D5/manifest.yaml"
 assert_rc_zero "verify accepts a real Artifact Registry image"
 assert_missing "no warning for an image it could check" "warning:"
 
-# 実在しないタグ。404 になるので verify は失敗しなければならない。
+# A tag that does not exist. It returns 404, so verify must fail.
 sed "s#image: .*#image: ${IMAGE}:clrnd-e2e-no-such-tag#" "$D5/manifest.yaml" > "$D5/bad-tag.yaml"
 run_cmd "$CLRND" verify "$SERVICE" "$D5/bad-tag.yaml"
 if [ "$RC" -ne 0 ]; then ok "verify rejects an image tag that does not exist"; else ng "verify accepted a nonexistent image tag"; fi
 assert_contains "verify names the missing image" "does not exist"
 
-# 確認できないレジストリは黙って飛ばす (毎回 warning を出さない)。
+# A registry that cannot be checked is skipped silently (no warning on every run).
 sed "s#image: .*#image: gcr.io/clrnd-e2e-no-such-project/no-such-image:v1#" "$D5/manifest.yaml" > "$D5/gcr.yaml"
 run_cmd "$CLRND" verify "$SERVICE" "$D5/gcr.yaml"
 assert_rc_zero "verify passes a gcr.io image it cannot check"
 assert_missing "verify says nothing about a registry it cannot check" "warning:"
 
 info "--- 1-8d. --image overrides the manifest ---"
-# 存在しないタグを書いたマニフェストを、--image で実在するイメージに差し替える。
-# 差し替えが効いていなければ verify も deploy も落ちるので、成功すること自体が証拠になる。
+# Replace the nonexistent tag in the manifest with a real image via --image.
+# If the override did not take effect, verify and deploy would fail, so success is the evidence.
 run_cmd "$CLRND" verify "$SERVICE" "$D5/bad-tag.yaml" --image "$IMAGE"
 assert_rc_zero "verify checks the overridden image, not the one in the manifest"
 
@@ -801,7 +807,7 @@ else
   ng "the live image is $LIVE_IMAGE, want $IMAGE"
 fi
 
-# コンテナが 1 つしか無いので名前は省けるが、存在しない名前は弾かれる。
+# With a single container the name can be omitted, but a name that does not exist is rejected.
 run_cmd "$CLRND" deploy "$SERVICE" "$D5/bad-tag.yaml" --image "sidecar=$IMAGE" --auto-approve
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "does not define"; then
   ok "--image rejects a container the manifest does not define"
@@ -810,9 +816,9 @@ else
 fi
 
 info "--- 1-8c. render ---"
-# render は API に触れないが、テンプレート展開 (tfstate / env / must_env) を実バイナリで
-# 通すのはここだけ。ユニットテストは render.Render を直接叩いており、フラグの解析から
-# ファイル出力までの経路は覆えていない。
+# render does not touch the API, but this is the only place that runs template expansion
+# (tfstate / env / must_env) through the real binary. The unit tests call render.Render
+# directly and do not cover the path from flag parsing through to writing the file.
 D4="$WORK/current-render"; mkdir -p "$D4"
 cat > "$D4/e2e.tfstate" <<JSON
 {
@@ -866,11 +872,11 @@ run_cmd "$CLRND" render "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" -o "$D4/
 if [ "$RC" -ne 0 ]; then ok "render refuses to write over its own input"; else ng "render overwrote its own input"; fi
 assert_file_has "the template source is untouched" "$D4/template.yaml" "must_env"
 
-# json_escape はテンプレート側の関数だが、壊れた値を通したときに YAML/JSON として
-# 成立するかは実際に展開してみないと分からない。
-# README が勧める書き方 (>- のブロックスカラー) を、アポストロフィを含む値で確かめる。
-# json_escape は JSON 用のエスケープで ' は対象外なので、'...' に埋めると値によっては
-# YAML が壊れる。アノテーションに JSON を入れる実際の形で試す。
+# json_escape is a template function, but whether the result is still valid YAML/JSON when a
+# troublesome value goes through it can only be known by actually expanding it.
+# Check the form README recommends (a >- block scalar) with a value containing an apostrophe.
+# json_escape escapes for JSON and leaves ' alone, so embedding it in '...' can break the YAML
+# depending on the value. Test the real-world shape: JSON inside an annotation.
 export CLRND_E2E_RAW="it's \"quoted\" & fine"
 cat > "$D4/escape.yaml" <<YAML
 apiVersion: serving.knative.dev/v1
@@ -891,12 +897,12 @@ run_cmd "$CLRND" render "$D4/escape.yaml" -o "$D4/escaped.yaml"
 assert_rc_zero "render applies json_escape"
 assert_file_has "json_escape escapes the quotes" "$D4/escaped.yaml" '\\"quoted\\"'
 
-# YAML 層: 厳格パーサ (verify) が読めること。'...' に埋めていればここで落ちる。
+# YAML layer: the strict parser (verify) can read it. Embedded in '...', this would fail here.
 run_cmd "$CLRND" verify "$SERVICE" "$D4/escaped.yaml" --local-only
 assert_rc_zero "the manifest with an escaped JSON annotation still parses"
 
-# JSON 層: アノテーションの値を取り出し、JSON として読めて元の値に戻ること。
-# 期待値は argv で渡す (シェルと Python の引用符を二重に重ねない)。
+# JSON layer: extract the annotation value, and check it parses as JSON and yields the original.
+# The expected value is passed via argv (so shell and Python quoting are not layered twice).
 cat > "$D4/check-escape.py" <<'PYCHECK'
 import json, sys
 
@@ -915,14 +921,14 @@ else
 fi
 unset CLRND_E2E_RAW
 
-# 展開結果が本当にデプロイできる形かは、verify を同じテンプレートに通せば分かる。
+# Whether the expanded result is really deployable is shown by running verify on the same template.
 run_cmd "$CLRND" verify "$SERVICE" "$D4/template.yaml" --tfstate "$D4/e2e.tfstate" --local-only
 assert_rc_zero "verify accepts the rendered template"
 unset CLRND_E2E_SERVICE
 
 info "--- 1-8e. revisions --prune ---"
-# Cloud Run は古いリビジョンを自動では消さない。ここまでで数本たまっているので、
-# 配信中のものを残したまま古いものだけが消えることを確認する。
+# Cloud Run does not delete old revisions automatically. Several have piled up by now, so
+# confirm that only old ones are deleted while the serving one is kept.
 PRUNE_BEFORE="$(revision_count)"
 PRUNE_SERVING="$(serving_revision)"
 run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 1 --dry-run
@@ -933,8 +939,9 @@ else
   ng "--dry-run changed the revision count ($PRUNE_BEFORE -> $(revision_count))"
 fi
 
-# 消す対象を 1 つ控えておく。削除は非同期なので、件数ではなくこの 1 件が消えることで
-# 判定する (返った直後は件数がまだ減っていないことがある)。
+# Note down one revision that should be deleted. Deletion is asynchronous, so judge by this one
+# revision disappearing rather than by the count (right after the call returns, the count may
+# not have gone down yet).
 PRUNE_TARGET="$("$CLRND" revisions "$SERVICE" --format json 2>/dev/null | python3 -c '
 import json, sys
 revisions = json.load(sys.stdin)
@@ -952,8 +959,8 @@ else
   ng "$PRUNE_TARGET is still there after pruning"
 fi
 
-# --keep 1 では配信中の版が「いちばん新しい 1 件」でもあるため、保護の規則そのものは
-# 試されていない。--keep 0 まで詰めて、トラフィックが向いている版が残ることを確かめる。
+# With --keep 1 the serving revision is also "the newest one", so the protection rule itself
+# is not exercised. Go down to --keep 0 and confirm the revision receiving traffic is kept.
 run_cmd "$CLRND" revisions "$SERVICE" --prune --keep 0 --auto-approve
 assert_rc_zero "revisions --prune --keep 0 succeeds"
 if revision_exists "$PRUNE_SERVING"; then
@@ -990,7 +997,8 @@ else
     ng "delete --dry-run removed the service"
   fi
 
-  # 削除は非同期なので clrnd delete は消えるまで待つ。戻った直後に確認できる。
+  # Deletion is asynchronous, so clrnd delete waits until the service is gone. It can be
+  # checked right after it returns.
   run_cmd "$CLRND" delete "$SERVICE" --auto-approve --timeout 120s
   assert_rc_zero "delete succeeds"
   if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then

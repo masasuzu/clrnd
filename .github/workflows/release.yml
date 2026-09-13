@@ -5,10 +5,10 @@ on:
     tags:
       - "v*"
 
-# リリースは常に 1 本ずつ流す。group にタグ (github.ref) を含めるとタグごとに別 group に
-# なり、v1.2.3 と v1.2.4 を続けて push したときに GoReleaser が同時に走ってしまう
-# (同じリポジトリのリリース一覧と dist/ を二重に触ることになる)。固定値にして直列化する。
-# 先行のリリースは中断しない: 途中で止めると、成果物の一部だけが公開された状態になる。
+# Always run one release at a time. Including the tag (github.ref) in the group makes a separate
+# group per tag, so pushing v1.2.3 and v1.2.4 back to back runs GoReleaser concurrently (both
+# touching the same repository's release list and dist/). A fixed value serializes them.
+# An earlier release is not cancelled: stopping it midway leaves only some artifacts published.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -16,13 +16,13 @@ concurrency:
 permissions: {}
 
 jobs:
-  # 正式なリリースは main の履歴上のコミットからだけ作る。検査に通るコミットであっても、
-  # main に入っていないブランチのタグから署名・SBOM・provenance 付きのリリースが公開
-  # できてしまうのを防ぐ。検査 (verify) より前に置いてあるのは、条件を満たさないタグに
-  # 数分のビルドを回さないため。
+  # Official releases are cut only from commits in main's history. Even for a commit that passes
+  # the checks, this stops a tag on a branch that never reached main from publishing a release
+  # with signatures, an SBOM and provenance. It runs before the checks (verify) so that a tag
+  # that does not qualify does not spend minutes building.
   guard:
     runs-on: ubuntu-latest
-    # 無制限だと、ハングした 1 ジョブが既定の 6 時間まで runner を占有する。
+    # Without a limit, a single hung job holds the runner for the default 6 hours.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -38,8 +38,8 @@ jobs:
           TAG: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
         run: |
-          # checkout はタグの ref しか持ってこないので、比較先の main を明示的に取る。
-          # 公開リポジトリなので認証情報は要らない (persist-credentials: false のまま)。
+          # checkout only fetches the tag's ref, so fetch main, the comparison target, explicitly.
+          # The repository is public, so this needs no credentials (persist-credentials stays false).
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$SHA" origin/main; then
             echo "::error::tag $TAG ($SHA) is not an ancestor of main; releases are cut from main only"
@@ -47,12 +47,12 @@ jobs:
           fi
           echo "$TAG ($SHA) is on main"
 
-  # タグ push では通常 CI (ci.yml の push.branches: [main]) が起動しないので、
-  # ここで同じ検査を呼ぶ。これが無いと、テストが落ちるコミットや main に入って
-  # いないコミットに付けたタグからでも、署名と provenance の付いた正式なリリースが
-  # 公開できてしまう。署名は「そのコミットからビルドした」ことしか保証しない。
-  # 呼び出し先の checkout はこのワークフローと同じ ref (タグ) を見るので、
-  # 検査した SHA と GoReleaser がビルドする SHA は一致する。
+  # A tag push does not trigger regular CI (ci.yml's push.branches: [main]), so the same
+  # checks are called here. Without this, even a tag on a commit whose tests fail, or on a
+  # commit that is not in main, could publish an official release carrying signatures and
+  # provenance. A signature only guarantees "this was built from that commit".
+  # The called workflow's checkout sees the same ref (the tag) as this workflow, so the
+  # SHA that was checked and the SHA GoReleaser builds are the same.
   verify:
     needs: guard
     permissions:
@@ -64,16 +64,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write      # リリースの作成と成果物のアップロード
-      id-token: write      # cosign と packslip の keyless 署名、provenance
-      attestations: write  # provenance の登録
+      contents: write      # create the release and upload the artifacts
+      id-token: write      # keyless signing for cosign and packslip, provenance
+      attestations: write  # register the provenance
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # GoReleaser は GITHUB_TOKEN の環境変数で認証するので、
-          # git の認証情報を .git/config に残す必要はない。
+          # GoReleaser authenticates through the GITHUB_TOKEN environment variable,
+          # so there is no need to leave git credentials in .git/config.
           persist-credentials: false
 
       - name: Set up Go
@@ -81,9 +81,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # cosign 本体のバージョンも固定する。アクションを SHA で固定していても、
-      # 既定で入る cosign が上がると挙動が変わる (v3 で bundle 形式が既定になり、
-      # v0.3.0 の初回リリースが署名で落ちた)。
+      # Pin the version of cosign itself too. Even with the action pinned by SHA, the behaviour
+      # changes when the cosign it installs by default moves up (v3 made the bundle format the
+      # default, and the first release run for v0.3.0 failed at signing).
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -96,8 +96,8 @@ jobs:
         id: goreleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          # アクションは SHA で固定しているのに GoReleaser 本体が浮動だと、
-          # 挙動が変わってもビルドは黙って通る。正確なバージョンに固定する。
+          # If the action is pinned by SHA but GoReleaser itself floats, the build keeps
+          # passing silently even when the behaviour changes. Pin the exact version.
           version: "2.17.1"
           args: release --clean
         env:
@@ -110,21 +110,22 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
 
-      # どの成果物がどのプラットフォーム向けで、実行ファイルが中のどこにあるかを
-      # 署名付きで記したマニフェスト (packslip.sigstore.json) をリリースに添える。
-      # mise の packslip: バックエンドはファイル名を推測せずにこれを読んで検証する。
-      # 付くのはこのタグで起動した回のリリースだけで、過去のリリースには自動では付かない。
-      # 過去のリリースに付けるなら、tag: と download: を指定した別の実行が要る。
+      # Attach to the release a signed manifest (packslip.sigstore.json) recording which
+      # artifact targets which platform and where the executable sits inside it.
+      # mise's packslip: backend reads and verifies this instead of guessing from file names.
+      # It is attached only to the release this tag's run produces, not to past releases.
+      # Attaching it to a past release takes a separate run that specifies tag: and download:.
       #
-      # attest: link は直前のステップが登録した provenance を digest で参照するだけで、
-      # 自分では attest しない (既定の true だと同じ成果物に二重に登録される)。
-      # そのかわり attest されていない成果物のリンクは何も指さなくなるので、
-      # artifacts の glob は直前のステップの subject-path と揃えておくこと。
+      # attest: link only references, by digest, the provenance the previous step registered,
+      # and does not attest anything itself (the default, true, would register the same
+      # artifacts twice). In exchange, a link for an artifact that was not attested points at
+      # nothing, so keep the artifacts glob in line with the previous step's subject-path.
       #
-      # Linux の成果物は libc: gnu と記述される。packslip は Linux の成果物から libc を
-      # 外す手段を os/arch ごと消す portable しか持たないため。CGO_ENABLED=0 の静的
-      # バイナリなので musl でも動くが、mise は musl のホストで gnu のビルドを選ばない。
-      # Alpine などでは packslip: では入らず、github: なら入る。
+      # The Linux artifacts are described as libc: gnu, because the only way packslip has to
+      # drop libc from a Linux artifact is portable, which drops os/arch along with it. The
+      # binary is static (CGO_ENABLED=0), so it runs on musl too, but mise does not pick a gnu
+      # build on a musl host. On Alpine and the like it does not install via packslip:, but it
+      # does via github:.
       - name: Publish packslip
         uses: jdx/packslip@74c75db7d611b36dd5a157999ec16cf823ccf80c # v1.2.0
         with:

@@ -1,5 +1,5 @@
-# 既定の linter に、このリポジトリで実際にやりがちな取りこぼし
-# (エラーの握りつぶし、比較でのエラー判定) を足す。
+# On top of the default linters, catch the slips this repository actually tends to make
+# (swallowed errors, checking errors by comparison).
 version: "2"
 linters:
   enable:
@@ -12,9 +12,9 @@ linters:
     - misspell
   settings:
     errcheck:
-      # 端末への書き込みは失敗しても打つ手が無く、全箇所を `_ =` で潰すと
-      # 本当に見るべきエラーが埋もれる。tabwriter は Flush で失敗を返すので
-      # そちらを見れば足りる。
+      # When a write to the terminal fails there is nothing to be done, and silencing every
+      # call site with `_ =` buries the errors that really need attention. tabwriter reports
+      # failures from Flush, so checking that is enough.
       exclude-functions:
         - fmt.Fprint
         - fmt.Fprintf
