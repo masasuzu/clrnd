@@ -50,7 +50,7 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// refresh はローカルのマニフェストを見ない。いま動いている定義をそのまま流し直す。
+	// refresh does not look at a local manifest. It re-applies the definition running now as-is.
 	live, err := client.GetService(ctx, service)
 	if err != nil {
 		return err
@@ -65,7 +65,8 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// desired は live 由来なので既定値は既に入っている。解決は要らない。
+	// desired comes from the live service, so the defaults are already filled in. No resolution is
+	// needed.
 	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
 	if err != nil {
 		return err

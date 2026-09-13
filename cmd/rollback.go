@@ -54,8 +54,9 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Ready でないリビジョンへの明示指定は止めない (利用者の判断を尊重する) が、
-	// 黙って進めもしない。本当に動かないならロールアウトの待機が失敗させる。
+	// An explicit choice of a revision that is not Ready is not blocked (the user's judgement is
+	// respected), but it does not proceed silently either. If it really does not work, the wait
+	// for the rollout fails it.
 	if !target.IsReady() {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"warning: revision %q is not ready (%s); it may not be able to serve traffic\n",
@@ -71,7 +72,8 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// desired は live 由来なので既定値は既に入っている。解決は要らない。
+	// desired comes from the live service, so the defaults are already filled in. No resolution is
+	// needed.
 	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
 	if err != nil {
 		return err
@@ -81,7 +83,8 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	return applyPlan(cmd, client, plan, rollbackApply)
 }
 
-// readyLabelOrUnknown は警告に載せる Ready の状態。条件が無ければ "unknown"。
+// readyLabelOrUnknown is the Ready state shown in the warning, or "unknown" when there is no
+// condition.
 func readyLabelOrUnknown(r *cloudrun.Revision) string {
 	if r.Ready == "" {
 		return "unknown"

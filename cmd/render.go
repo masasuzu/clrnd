@@ -30,7 +30,8 @@ func init() {
 }
 
 func runRender(cmd *cobra.Command, args []string) error {
-	// render は名前一致を検証しないので service を取らず、唯一の位置引数を manifest として扱う。
+	// render does not check the name match, so it takes no service and treats its only positional
+	// argument as the manifest.
 	manifestPath, err := resolveManifestAt(args, 0)
 	if err != nil {
 		return err
@@ -41,20 +42,22 @@ func runRender(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
-	// 展開済みテキストをそのまま出す (パース/正規化はしない)。将来 --normalize を足す余地あり。
+	// Print the expanded text as-is (no parsing/normalization). There is room to add --normalize
+	// in the future.
 	rendered, err := renderManifest(ctx, manifest, renderTfstate)
 	if err != nil {
 		return err
 	}
 
 	if renderOutput != "" {
-		// -o に入力と同じファイルを渡すと、レンダリング元が結果で潰れる。
-		// 上書き自体は render の通常の使い方なので禁止しないが、これだけは断る。
+		// Passing the input file itself to -o would overwrite the render source with its result.
+		// Overwriting is ordinary use of render and is not forbidden, but this one case is refused.
 		if sameFile(manifestPath, renderOutput) {
 			return fmt.Errorf("refusing to write over the manifest being rendered: %s", renderOutput)
 		}
-		// 展開後の内容は must_env などで秘密を含みうるので、他ユーザから読めないようにする。
-		// 既存の出力先が 0644 でも 0600 になり、書き込みに失敗しても前の内容が残る。
+		// The expanded content can contain secrets (via must_env, etc.), so keep it unreadable by
+		// other users. An existing 0644 destination becomes 0600, and if the write fails the
+		// previous content remains.
 		return writeFilePrivate(renderOutput, rendered)
 	}
 
@@ -62,8 +65,8 @@ func runRender(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// sameFile は 2 つのパスが同じファイルを指すかを返す。シンボリックリンクや
-// ハードリンク越しでも同一と判定できるよう os.SameFile を使う。
+// sameFile reports whether two paths refer to the same file. It uses os.SameFile so that paths
+// reached through a symbolic link or a hard link are still recognised as the same file.
 func sameFile(a, b string) bool {
 	ai, err := os.Stat(a)
 	if err != nil {

@@ -45,8 +45,8 @@ func init() {
 		"with --prune, only show what would be deleted")
 }
 
-// defaultRevisionsKeep は --prune の既定の保持数。消しすぎるより残しすぎる方が安全なので
-// 多めに取ってある。
+// defaultRevisionsKeep is the default number of revisions --prune keeps. Keeping too many is safer
+// than deleting too many, so it is set on the generous side.
 const defaultRevisionsKeep = 10
 
 func runRevisions(cmd *cobra.Command, args []string) error {
@@ -57,7 +57,7 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 	if err := validateFormat(revisionsFormat); err != nil {
 		return err
 	}
-	// 掃除に関わるフラグの整合はクライアント生成 (= ADC 探索) より先に見る。
+	// Check the consistency of the pruning flags before creating the client (= ADC discovery).
 	if err := validatePruneFlags(cmd); err != nil {
 		return err
 	}
@@ -77,11 +77,11 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 	return writeFormatted(cmd, revisionsFormat, revisions, revisions.Text())
 }
 
-// validatePruneFlags は掃除に関わるフラグの組み合わせを検証する。
+// validatePruneFlags validates the combination of pruning flags.
 //
-// --prune 無しで --keep や --auto-approve を受け取って黙って無視すると、
-// 「掃除したつもりで一覧を見ただけ」の実行が成功として終わる。負の --keep を
-// 0 に丸めるのも同じ種類の事故 (保護対象以外を全部消す) なので、ここで断る。
+// Silently ignoring --keep or --auto-approve given without --prune would let a run that "meant to
+// prune but only listed" finish as a success. Clamping a negative --keep to 0 is the same kind of
+// accident (deleting everything that is not protected), so it is refused here.
 func validatePruneFlags(cmd *cobra.Command) error {
 	if !revisionsPrune {
 		for _, name := range []string{"keep", "auto-approve", "dry-run"} {
@@ -97,19 +97,19 @@ func validatePruneFlags(cmd *cobra.Command) error {
 	return nil
 }
 
-// pruneRevisions は古いリビジョンを削除する。消す対象は stdout にデータとして出し
-// (--format json でも読める)、確認と結果は stderr に出す。
+// pruneRevisions deletes old revisions. What is to be deleted goes to stdout as data (readable with
+// --format json too), and the confirmation and results go to stderr.
 func pruneRevisions(cmd *cobra.Command, client *cloudrun.Client, revisions cloudrun.Revisions) error {
 	targets := cloudrun.SelectPrunableRevisions(revisions, revisionsKeep)
 	if targets == nil {
-		// JSON で null ではなく [] を出す (一覧の経路と同じ形にする)。
+		// Emit [] rather than null in JSON (the same shape as the listing path).
 		targets = cloudrun.Revisions{}
 	}
 
-	// 何を消すのかを先に見せる。件数だけでなく中身を出すのは、配信中やタグ付きの
-	// リビジョンが混ざっていないことを目で確かめられるようにするため。
-	// 対象が無い場合も出力は書く: --format json の利用者にとって、対象ゼロの日だけ
-	// stdout が空になると `| jq 'length'` のような使い方が壊れる。
+	// Show what is about to be deleted first. The entries themselves are printed, not just a
+	// count, so the user can see for themselves that no serving or tagged revision is among them.
+	// Output is written even when there is nothing to delete: for --format json users, a stdout
+	// that is empty only on days with nothing to prune would break uses like `| jq 'length'`.
 	if err := writeFormatted(cmd, revisionsFormat, targets, targets.Text()); err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func pruneRevisions(cmd *cobra.Command, client *cloudrun.Client, revisions cloud
 		fmt.Fprintln(cmd.ErrOrStderr(), "Nothing to prune.")
 		return nil
 	}
-	// --dry-run は何も消さないので確認を求めない (delete と同じ方針)。
+	// --dry-run deletes nothing, so it does not ask for confirmation (the same policy as delete).
 	if revisionsDryRun {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Dry run: would delete %d revision(s).\n", len(targets))
 		return nil

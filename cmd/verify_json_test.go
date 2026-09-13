@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// manifestWithSecret はリモート実在チェックが 1 件だけ走るマニフェスト。
+// manifestWithSecret is a manifest for which exactly one remote existence check runs.
 const manifestWithSecret = `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -25,7 +25,7 @@ spec:
               key: latest
 `
 
-// decodeVerifyJSON は verify --format json の出力を読む。
+// decodeVerifyJSON parses the output of verify --format json.
 func decodeVerifyJSON(t *testing.T, stdout string) map[string]any {
 	t.Helper()
 	var out map[string]any
@@ -35,8 +35,8 @@ func decodeVerifyJSON(t *testing.T, stdout string) map[string]any {
 	return out
 }
 
-// TestVerifyJSONReportsSuccess は、成功時に ok:true の 1 オブジェクトだけが stdout へ
-// 出ることを確認する。
+// TestVerifyJSONReportsSuccess checks that on success only a single object with ok:true is
+// written to stdout.
 func TestVerifyJSONReportsSuccess(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 
@@ -53,8 +53,8 @@ func TestVerifyJSONReportsSuccess(t *testing.T) {
 	}
 }
 
-// TestVerifyJSONReportsMissingAndStillFails は、Missing を構造化して出しつつ、終了
-// コードのための失敗も返すことを確認する。片方だけでは CI から使えない。
+// TestVerifyJSONReportsMissingAndStillFails checks that Missing is reported in structured form
+// while a failure is still returned for the exit code. Either one alone is unusable from CI.
 func TestVerifyJSONReportsMissingAndStillFails(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,8 +78,8 @@ func TestVerifyJSONReportsMissingAndStillFails(t *testing.T) {
 	}
 }
 
-// TestVerifyJSONReportsUncheckedWithoutFailing は、確認できなかったものが警告として
-// 出つつ、コマンド自体は成功することを確認する (権限が無いだけで CI を赤くしない)。
+// TestVerifyJSONReportsUncheckedWithoutFailing checks that what could not be checked is reported
+// as a warning while the command itself succeeds (a mere lack of permission must not turn CI red).
 func TestVerifyJSONReportsUncheckedWithoutFailing(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -102,7 +102,7 @@ func TestVerifyJSONReportsUncheckedWithoutFailing(t *testing.T) {
 	}
 }
 
-// TestVerifyJSONReportsLocalErrors は、ローカル検証の失敗も構造化されることを確認する。
+// TestVerifyJSONReportsLocalErrors checks that local validation failures are structured too.
 func TestVerifyJSONReportsLocalErrors(t *testing.T) {
 	manifest := writeManifest(t, strings.Replace(localManifest, "name: my-svc", "name: other-svc", 1))
 
@@ -120,8 +120,8 @@ func TestVerifyJSONReportsLocalErrors(t *testing.T) {
 	}
 }
 
-// TestVerifyRejectsAnInvalidFormat は、--format の誤りが target の解決や認証より先に
-// 弾かれることを確認する (他のコマンドと同じ順序)。
+// TestVerifyRejectsAnInvalidFormat checks that a bad --format is rejected before target
+// resolution and authentication (the same order as the other commands).
 func TestVerifyRejectsAnInvalidFormat(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 
@@ -131,9 +131,9 @@ func TestVerifyRejectsAnInvalidFormat(t *testing.T) {
 	}
 }
 
-// TestVerifyJSONReportsAnImageOverrideFailure は、--image の失敗でも JSON が出ることを
-// 確認する。stdout が空のまま終わる経路があると、README が勧める
-// `clrnd verify --format json | jq ...` が読めない出力で落ちる。
+// TestVerifyJSONReportsAnImageOverrideFailure checks that JSON is written even when --image
+// fails. If any path ends with stdout still empty, the `clrnd verify --format json | jq ...` the
+// README recommends fails on unreadable output.
 func TestVerifyJSONReportsAnImageOverrideFailure(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 

@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// pinnedServiceJSON は rollback 済みのサービス。トラフィックが古いリビジョンに固定
-// されていて、最新の Ready なリビジョンには何も向いていない。
+// pinnedServiceJSON is a service after a rollback. Traffic is pinned to an older revision, and
+// nothing is routed to the latest Ready revision.
 const pinnedServiceJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -27,8 +27,8 @@ const pinnedServiceJSON = `{
   }
 }`
 
-// startServiceAPI は指定したサービス定義とリビジョン一覧に応えるフェイク API を立て、
-// 適用 (PUT) の body を拾えるようにする。
+// startServiceAPI starts a fake API that answers with the given service definition and the
+// revision list, and makes the body of the apply (PUT) available.
 func startServiceAPI(t *testing.T, serviceBody string) func() []byte {
 	t.Helper()
 	var mu sync.Mutex
@@ -56,7 +56,7 @@ func startServiceAPI(t *testing.T, serviceBody string) func() []byte {
 	}
 }
 
-// trafficTargets は適用された body から spec.traffic を取り出す。
+// trafficTargets extracts spec.traffic from the applied body.
 func trafficTargets(t *testing.T, body []byte) []map[string]any {
 	t.Helper()
 	var sent map[string]any
@@ -73,8 +73,8 @@ func trafficTargets(t *testing.T, body []byte) []map[string]any {
 	return out
 }
 
-// TestTrafficSplitsAgainstTheServingRevision は、--percent が 100 未満のときに残りが
-// いま配信しているリビジョンへ残ることを確認する (カナリアの形)。
+// TestTrafficSplitsAgainstTheServingRevision checks that when --percent is below 100, the
+// remainder stays on the revision currently serving traffic (the canary shape).
 func TestTrafficSplitsAgainstTheServingRevision(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -96,10 +96,11 @@ func TestTrafficSplitsAgainstTheServingRevision(t *testing.T) {
 	}
 }
 
-// TestTrafficToLatestUnpinsTheSplit は、--to-latest がリビジョン名の固定を外すことを
-// 確認する。rollback 後にここへ戻れないと、最新へ進む手段が deploy しか無くなる。
+// TestTrafficToLatestUnpinsTheSplit checks that --to-latest removes the pinning by revision name.
+// Without a way back to this after a rollback, deploy would be the only way to move forward to
+// the latest revision.
 func TestTrafficToLatestUnpinsTheSplit(t *testing.T) {
-	// rollback 済み (トラフィックが古いリビジョンに固定されている) 状態から始める。
+	// Start from the state after a rollback (traffic pinned to an older revision).
 	sentBody := startServiceAPI(t, pinnedServiceJSON)
 
 	if _, _, err := executeRoot(t, "traffic", "my-svc", "--to-latest",
@@ -120,8 +121,9 @@ func TestTrafficToLatestUnpinsTheSplit(t *testing.T) {
 	}
 }
 
-// TestTrafficRejectsAnUnknownRevision は、このサービスに属さないリビジョン名を
-// 適用前に弾くことを確認する。通すと、どこにも届かない配分ができる。
+// TestTrafficRejectsAnUnknownRevision checks that a revision name that does not belong to this
+// service is rejected before applying. Letting it through would create a split that reaches
+// nothing.
 func TestTrafficRejectsAnUnknownRevision(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -139,9 +141,9 @@ func TestTrafficRejectsAnUnknownRevision(t *testing.T) {
 	}
 }
 
-// TestTrafficValidatesTheFlagsFirst は、フラグの組み合わせが target の解決や認証より
-// 先に検証されることを確認する (--project も渡していないので、順序が逆なら
-// "project is required" が出る)。
+// TestTrafficValidatesTheFlagsFirst checks that the flag combination is validated before target
+// resolution and authentication (--project is not passed either, so if the order were reversed
+// "project is required" would come out instead).
 func TestTrafficValidatesTheFlagsFirst(t *testing.T) {
 	_, _, err := executeRoot(t, "traffic", "my-svc", "--to", "my-svc-00006-def", "--to-latest")
 	if err == nil {
@@ -152,9 +154,9 @@ func TestTrafficValidatesTheFlagsFirst(t *testing.T) {
 	}
 }
 
-// TestDeployNoTrafficPinsTheCurrentSplit は、--no-traffic が現在の配分をリビジョン名で
-// 固定して送ることを確認する。latestRevision のままだと、これから作るリビジョンが
-// 全量を受け取ってしまい「トラフィックを向けない」にならない。
+// TestDeployNoTrafficPinsTheCurrentSplit checks that --no-traffic sends the current split pinned
+// by revision name. Left as latestRevision, the revision about to be created would receive all of
+// the traffic, which is not "send it no traffic".
 func TestDeployNoTrafficPinsTheCurrentSplit(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -177,8 +179,9 @@ func TestDeployNoTrafficPinsTheCurrentSplit(t *testing.T) {
 	}
 }
 
-// TestDeployImageOverrideIsWhatGetsApplied は、--image で差し替えたイメージが実際に
-// 適用されることを確認する。CI で「マニフェストは固定、タグだけ差し替える」典型。
+// TestDeployImageOverrideIsWhatGetsApplied checks that the image overridden with --image is what
+// actually gets applied. This is the typical CI case of "the manifest is fixed, only the tag is
+// swapped".
 func TestDeployImageOverrideIsWhatGetsApplied(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -207,8 +210,8 @@ func TestDeployImageOverrideIsWhatGetsApplied(t *testing.T) {
 	}
 }
 
-// TestDiffImageOverrideMatchesDeploy は、diff が差し替え後のイメージで比較することを
-// 確認する。ここが揃っていないと、見た差分と適用結果が食い違う。
+// TestDiffImageOverrideMatchesDeploy checks that diff compares using the overridden image. If
+// this did not match, the diff you saw and what gets applied would disagree.
 func TestDiffImageOverrideMatchesDeploy(t *testing.T) {
 	startServiceAPI(t, rollbackServiceJSON)
 
@@ -224,8 +227,8 @@ func TestDiffImageOverrideMatchesDeploy(t *testing.T) {
 	}
 }
 
-// TestDeployImageOverrideRejectsAnUnknownContainer は、誤った指定が適用より先に
-// 弾かれることを確認する。
+// TestDeployImageOverrideRejectsAnUnknownContainer checks that a wrong override is rejected
+// before anything is applied.
 func TestDeployImageOverrideRejectsAnUnknownContainer(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 

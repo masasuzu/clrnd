@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// startPruneAPI はサービスとリビジョン一覧に応え、DELETE されたリビジョン名を記録する。
+// startPruneAPI answers the service and the revision list, and records the names of the
+// revisions that are DELETEd.
 func startPruneAPI(t *testing.T) func() []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -38,8 +39,8 @@ func startPruneAPI(t *testing.T) func() []string {
 	}
 }
 
-// TestRevisionsPruneDeletesTheOldOnes は、--keep より古いリビジョンが消えることを
-// 確認する。Cloud Run は古い版を自動では消さないので、これが唯一の掃除手段。
+// TestRevisionsPruneDeletesTheOldOnes checks that revisions older than --keep are deleted. Cloud
+// Run does not delete old revisions automatically, so this is the only way to clean them up.
 func TestRevisionsPruneDeletesTheOldOnes(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -51,14 +52,14 @@ func TestRevisionsPruneDeletesTheOldOnes(t *testing.T) {
 	if got := deleted(); len(got) != 1 || got[0] != "my-svc-00006-def" {
 		t.Errorf("deleted = %v, want only the older revision", got)
 	}
-	// 消す対象は stdout にデータとして出す。
+	// What is about to be deleted goes to stdout as data.
 	if !strings.Contains(stdout, "my-svc-00006-def") {
 		t.Errorf("stdout = %q, want the revisions to be listed before deleting", stdout)
 	}
 }
 
-// TestRevisionsPruneKeepsTheServingRevision は、配信中のリビジョンが --keep 0 でも
-// 残ることを確認する。ここを消すとサービスが落ちる。
+// TestRevisionsPruneKeepsTheServingRevision checks that the revision serving traffic survives
+// even with --keep 0. Deleting it would take the service down.
 func TestRevisionsPruneKeepsTheServingRevision(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -73,8 +74,8 @@ func TestRevisionsPruneKeepsTheServingRevision(t *testing.T) {
 	}
 }
 
-// TestRevisionsPruneDryRunDeletesNothing は、--dry-run が一覧だけ出して何も消さない
-// ことを確認する。確認プロンプトも出さない (delete と同じ方針)。
+// TestRevisionsPruneDryRunDeletesNothing checks that --dry-run only prints the list and deletes
+// nothing. It does not show the confirmation prompt either (the same policy as delete).
 func TestRevisionsPruneDryRunDeletesNothing(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -94,8 +95,9 @@ func TestRevisionsPruneDryRunDeletesNothing(t *testing.T) {
 	}
 }
 
-// TestRevisionsPruneRefusesWithoutConfirmation は、非対話環境で --auto-approve が
-// 無ければ何も消さないことを確認する。破壊的な操作は delete と同じ扱いにする。
+// TestRevisionsPruneRefusesWithoutConfirmation checks that nothing is deleted in a
+// non-interactive environment without --auto-approve. A destructive operation is treated the
+// same way as delete.
 func TestRevisionsPruneRefusesWithoutConfirmation(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -112,8 +114,8 @@ func TestRevisionsPruneRefusesWithoutConfirmation(t *testing.T) {
 	}
 }
 
-// TestRevisionsWithoutPruneStaysReadOnly は、--prune を渡さない限り一覧表示のままで
-// あることを確認する。
+// TestRevisionsWithoutPruneStaysReadOnly checks that the command only lists revisions unless
+// --prune is passed.
 func TestRevisionsWithoutPruneStaysReadOnly(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -126,9 +128,9 @@ func TestRevisionsWithoutPruneStaysReadOnly(t *testing.T) {
 	}
 }
 
-// TestRevisionsPruneFlagsNeedPrune は、--prune 無しで掃除用のフラグを受け取ったときに
-// 黙って無視しないことを確認する。無視すると「掃除したつもりで一覧を見ただけ」の実行が
-// 成功して終わる。
+// TestRevisionsPruneFlagsNeedPrune checks that the pruning flags are not silently ignored when
+// they are given without --prune. Ignoring them lets a run that "meant to clean up but only
+// looked at the list" finish successfully.
 func TestRevisionsPruneFlagsNeedPrune(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -145,8 +147,8 @@ func TestRevisionsPruneFlagsNeedPrune(t *testing.T) {
 	}
 }
 
-// TestRevisionsPruneRejectsANegativeKeep は、負の保持数を 0 に丸めないことを確認する。
-// 丸めると、計算を誤った CI が保護対象以外を全部消してしまう。
+// TestRevisionsPruneRejectsANegativeKeep checks that a negative keep count is not clamped to 0.
+// Clamping it would let a CI job that miscomputed the number delete everything unprotected.
 func TestRevisionsPruneRejectsANegativeKeep(t *testing.T) {
 	deleted := startPruneAPI(t)
 
@@ -160,8 +162,8 @@ func TestRevisionsPruneRejectsANegativeKeep(t *testing.T) {
 	}
 }
 
-// TestRevisionsPruneJSONWithNothingToDo は、対象が無い日でも JSON が空にならないことを
-// 確認する。`| jq 'length'` のような使い方が、その日だけ壊れないように。
+// TestRevisionsPruneJSONWithNothingToDo checks that the JSON output is not empty even on a day
+// with nothing to prune, so that a usage like `| jq 'length'` does not break on just that day.
 func TestRevisionsPruneJSONWithNothingToDo(t *testing.T) {
 	startPruneAPI(t)
 

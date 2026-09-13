@@ -21,7 +21,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-// liveServiceJSON はフェイク API が返す live サービス定義。
+// liveServiceJSON is the live service definition the fake API returns.
 const liveServiceJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -30,8 +30,8 @@ const liveServiceJSON = `{
   "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
 }`
 
-// liveServiceWithRevisionJSON は live のサービス定義。Cloud Run は取得時に必ず
-// spec.template.metadata.name (サーバ採番のリビジョン名) を埋めて返す。
+// liveServiceWithRevisionJSON is a live service definition. Cloud Run always fills in
+// spec.template.metadata.name (the server-assigned revision name) when it is fetched.
 const liveServiceWithRevisionJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -43,7 +43,7 @@ const liveServiceWithRevisionJSON = `{
   "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
 }`
 
-// liveServiceStatusJSON は status が読む項目を揃えた live のサービス定義。
+// liveServiceStatusJSON is a live service definition that has every field status reads.
 const liveServiceStatusJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -62,7 +62,7 @@ const liveServiceStatusJSON = `{
   }
 }`
 
-// localManifest は cmd に食わせるローカルのマニフェスト。live とはイメージタグだけ違う。
+// localManifest is the local manifest fed to cmd. It differs from live only in the image tag.
 const localManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -74,9 +74,9 @@ spec:
       - image: gcr.io/project/image:new
 `
 
-// echoDryRun は dry-run の書き込みに対して、送られてきた body をそのまま返す。
-// 「既定値を何も足さないサーバ」を模すので、--server-defaults を通しても desired は
-// 変わらず、差分はマニフェストのままになる。応答したら true を返す。
+// echoDryRun answers a dry-run write by returning the body it was sent unchanged. It simulates "a
+// server that adds no defaults", so going through --server-defaults leaves desired unchanged and
+// the diff stays exactly the manifest. It returns true when it has responded.
 func echoDryRun(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPut || !strings.Contains(r.URL.RawQuery, "dryRun=all") {
 		return false
@@ -87,8 +87,8 @@ func echoDryRun(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// startFakeAPI は Cloud Run Admin API の代わりに使う httptest サーバを立て、clientOptions を
-// そこへ向ける。テスト終了時に元へ戻す。
+// startFakeAPI starts an httptest server that stands in for the Cloud Run Admin API and points
+// clientOptions at it. It restores the original when the test ends.
 func startFakeAPI(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -102,11 +102,11 @@ func startFakeAPI(t *testing.T, handler http.HandlerFunc) {
 	t.Cleanup(func() { clientOptions = saved })
 }
 
-// resetFlags は cobra が巻き戻さないフラグ値を既定へ戻す。フラグは package 変数に
-// bind されているため、これをしないと前のテストの値が次のテストへ漏れる。
+// resetFlags puts flag values that cobra does not roll back to their defaults. The flags are
+// bound to package variables, so without this a value from one test leaks into the next.
 func resetFlags(c *cobra.Command) {
 	c.Flags().VisitAll(func(f *pflag.Flag) {
-		// StringArray などは Set が追記になるので、スライス系は Replace で空にする。
+		// For StringArray and the like, Set appends, so slice flags are emptied with Replace.
 		if sv, ok := f.Value.(pflag.SliceValue); ok {
 			_ = sv.Replace(nil)
 		} else {
@@ -119,8 +119,8 @@ func resetFlags(c *cobra.Command) {
 	}
 }
 
-// clearTargetEnv は gcloud 互換の環境変数を空にする。開発者や CI の環境に
-// CLOUDSDK_CORE_PROJECT などが設定されていてもテストの結果が変わらないようにする。
+// clearTargetEnv empties the gcloud-compatible environment variables, so that test results do
+// not change when CLOUDSDK_CORE_PROJECT or the like is set in a developer's or CI environment.
 func clearTargetEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{envProjectPrimary, envProjectSecondary, envRegionPrimary, envRegionSecondary} {
@@ -128,9 +128,9 @@ func clearTargetEnv(t *testing.T) {
 	}
 }
 
-// executeRoot はルートコマンドを引数付きで実行し、stdout/stderr を返す。
-// rootCmd はパッケージ変数なので、テスト間で状態が漏れないよう cfg / フラグ / 環境変数を
-// 実行のたびに初期化する。
+// executeRoot runs the root command with the given arguments and returns stdout/stderr.
+// rootCmd is a package variable, so cfg, the flags and the environment variables are reset on
+// every run to keep state from leaking between tests.
 func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	clearTargetEnv(t)
@@ -145,16 +145,16 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	var out, errOut bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&errOut)
-	// stdin を明示的に非対話にする。設定しないと os.Stdin にフォールバックし、
-	// 端末から go test を叩いたときだけ isInteractive が true になって、
-	// 確認プロンプト系のテストがローカルと CI で違う結果になる。
+	// Make stdin explicitly non-interactive. Without this it falls back to os.Stdin,
+	// isInteractive becomes true only when go test is started from a terminal, and the
+	// confirmation-prompt tests give different results locally and in CI.
 	rootCmd.SetIn(strings.NewReader(""))
 	rootCmd.SetArgs(args)
 	t.Cleanup(func() {
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
 		rootCmd.SetIn(nil)
-		// nil に戻すと cobra が os.Args[1:] (= go test のフラグ) を読んでしまう。
+		// Resetting to nil would make cobra read os.Args[1:] (= the go test flags).
 		rootCmd.SetArgs([]string{})
 	})
 
@@ -162,7 +162,7 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	return out.String(), errOut.String(), err
 }
 
-// writeManifest は一時ディレクトリにマニフェストを書き、そのパスを返す。
+// writeManifest writes a manifest into a temporary directory and returns its path.
 func writeManifest(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "manifest.yaml")
@@ -172,8 +172,8 @@ func writeManifest(t *testing.T, content string) string {
 	return path
 }
 
-// TestDiffEndToEnd はフラグ解決 → クライアント生成 → API 取得 → 正規化 → diff 出力までを
-// 一気通貫で確認する。
+// TestDiffEndToEnd checks the whole path end to end: flag resolution → client creation → API
+// fetch → normalization → diff output.
 func TestDiffEndToEnd(t *testing.T) {
 	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -200,14 +200,14 @@ func TestDiffEndToEnd(t *testing.T) {
 		!strings.Contains(stdout, "+      - image: gcr.io/project/image:new") {
 		t.Errorf("diff stdout = %q, want the image change", stdout)
 	}
-	// サーバ管理フィールドは正規化で落ちるので diff には出ない。
+	// Server-managed fields are dropped by normalization, so they do not appear in the diff.
 	if strings.Contains(stdout, "uid:") || strings.Contains(stdout, "status:") {
 		t.Errorf("diff stdout leaks server-managed fields:\n%s", stdout)
 	}
 }
 
-// TestDiffUsesConfigFile は config ファイルだけで project/region/service/manifest が
-// 解決できることを確認する。
+// TestDiffUsesConfigFile checks that project/region/service/manifest can all be resolved from the
+// config file alone.
 func TestDiffUsesConfigFile(t *testing.T) {
 	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -229,13 +229,13 @@ func TestDiffUsesConfigFile(t *testing.T) {
 		t.Fatalf("failed to write the config: %v", err)
 	}
 
-	// 位置引数もフラグも渡さない: service / manifest / project / region がすべて
-	// config から解決されることを確認する。
+	// Pass neither positional arguments nor flags: check that service / manifest / project /
+	// region are all resolved from the config.
 	stdout, _, err := executeRoot(t, "diff", "--config", configFile)
 	if err != nil {
 		t.Fatalf("diff error = %v", err)
 	}
-	// config の project がリクエストパスに反映されている (環境変数由来ではない)。
+	// The config's project shows up in the request path (not one taken from the environment).
 	wantPath := "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
 	if gotPath != wantPath {
 		t.Errorf("requested path = %q, want %q", gotPath, wantPath)
@@ -245,8 +245,8 @@ func TestDiffUsesConfigFile(t *testing.T) {
 	}
 }
 
-// TestDeployDryRunEndToEnd は deploy が差分を stdout に出し、dryRun=all を付けて
-// ReplaceService を呼ぶことを確認する。
+// TestDeployDryRunEndToEnd checks that deploy prints the diff to stdout and calls ReplaceService
+// with dryRun=all.
 func TestDeployDryRunEndToEnd(t *testing.T) {
 	var putQuery string
 	var putBody []byte
@@ -255,8 +255,8 @@ func TestDeployDryRunEndToEnd(t *testing.T) {
 			putQuery = r.URL.RawQuery
 			body, _ := io.ReadAll(r.Body)
 			putBody = body
-			// 既定値を足さないサーバとして、送られた body をそのまま返す。
-			// --dry-run の適用も dry-run なので、ここを通る。
+			// Act as a server that adds no defaults and return the body it was sent unchanged.
+			// The apply under --dry-run is a dry run too, so it goes through here as well.
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(body)
 			return
@@ -287,17 +287,18 @@ func TestDeployDryRunEndToEnd(t *testing.T) {
 	}
 }
 
-// TestDeployValidatesManifestBeforeResolvingTarget は、マニフェストのローカル検証が
-// project/region の解決やクライアント生成 (ADC 探索) より先に行われることを確認する。
-// 順序が逆だと、認証情報や target が無い環境でマニフェストの問題が別のエラーに隠れる。
+// TestDeployValidatesManifestBeforeResolvingTarget checks that local validation of the manifest
+// happens before project/region resolution and client creation (ADC discovery).
+// In the reverse order, in an environment with no credentials or target, a manifest problem
+// hides behind a different error.
 func TestDeployValidatesManifestBeforeResolvingTarget(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected API call to %s", r.URL.Path)
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
-	// service 引数と metadata.name が食い違うマニフェスト。project/region はどこにも
-	// 設定されていない (executeRoot が環境変数を空にし、config も無い)。
+	// A manifest whose metadata.name disagrees with the service argument. project/region are
+	// not set anywhere (executeRoot empties the environment variables, and there is no config).
 	manifest := writeManifest(t, localManifest)
 	_, _, err := executeRoot(t, "deploy", "other-svc", manifest)
 	if err == nil {
@@ -308,8 +309,8 @@ func TestDeployValidatesManifestBeforeResolvingTarget(t *testing.T) {
 	}
 }
 
-// TestVerifyLocalOnlyNeedsNoAPI は --local-only がクレデンシャルも API も要求しないことを
-// 確認する (CI でのオフライン検証)。
+// TestVerifyLocalOnlyNeedsNoAPI checks that --local-only requires neither credentials nor the API
+// (offline validation in CI).
 func TestVerifyLocalOnlyNeedsNoAPI(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected API call to %s", r.URL.Path)
@@ -322,9 +323,9 @@ func TestVerifyLocalOnlyNeedsNoAPI(t *testing.T) {
 	}
 }
 
-// TestInitScaffoldsWithoutRevisionName は init が live のリビジョン名を落として
-// マニフェストを書き出すことを確認する。残すとテンプレートを変えた 2 回目の deploy が
-// 「同名リビジョンは再作成できない」で失敗する。
+// TestInitScaffoldsWithoutRevisionName checks that init drops the live revision name when it
+// writes out the manifest. If it were kept, the second deploy that changes the template would fail
+// with "a revision with the same name cannot be recreated".
 func TestInitScaffoldsWithoutRevisionName(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -346,15 +347,15 @@ func TestInitScaffoldsWithoutRevisionName(t *testing.T) {
 	if strings.Contains(string(manifest), "my-svc-00007-abc") {
 		t.Errorf("scaffolded manifest pins the revision name:\n%s", manifest)
 	}
-	// 空になった spec.template.metadata ごと消えていること。
+	// The spec.template.metadata left empty must be gone along with it.
 	if strings.Contains(string(manifest), "metadata: {}") {
 		t.Errorf("scaffolded manifest keeps an empty template metadata:\n%s", manifest)
 	}
 }
 
-// TestDiffIsEmptyRightAfterInit は init 直後の diff が空であることを確認する。
-// live は必ずリビジョン名を持ち、init はそれを落とすので、比較時に live 側のリビジョン名を
-// 無視しないと「消えない差分」が出続ける。
+// TestDiffIsEmptyRightAfterInit checks that the diff right after init is empty.
+// Live always has a revision name and init drops it, so unless the live revision name is ignored
+// in the comparison, a "diff that never goes away" keeps showing up.
 func TestDiffIsEmptyRightAfterInit(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -369,7 +370,7 @@ func TestDiffIsEmptyRightAfterInit(t *testing.T) {
 		t.Fatalf("init error = %v", err)
 	}
 
-	// init が書いた clrnd.yml から service/manifest/project/region を解決させる。
+	// Have service/manifest/project/region resolved from the clrnd.yml init wrote.
 	stdout, _, err := executeRoot(t, "diff")
 	if err != nil {
 		t.Fatalf("diff error = %v", err)
@@ -379,9 +380,9 @@ func TestDiffIsEmptyRightAfterInit(t *testing.T) {
 	}
 }
 
-// TestVerifyWarnsWhenRevisionNameIsPinned は、リビジョン名を固定したマニフェストに対して
-// verify が警告を出しつつ成功することを確認する (使い捨てのデプロイでは正しい書き方なので
-// 失敗にはしない)。
+// TestVerifyWarnsWhenRevisionNameIsPinned checks that verify succeeds with a warning for a
+// manifest that pins the revision name (it is the correct way to write a one-shot deploy, so it
+// is not made a failure).
 func TestVerifyWarnsWhenRevisionNameIsPinned(t *testing.T) {
 	manifest := writeManifest(t, `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -405,9 +406,9 @@ spec:
 	}
 }
 
-// TestDeployWarnsWhenRevisionNameIsPinned は deploy でも同じ警告が出ることを確認する。
-// deploy だけを回す CI では verify の警告を見る機会が無く、Cloud Run からの 409 だけが
-// 出て原因が分からないため。
+// TestDeployWarnsWhenRevisionNameIsPinned checks that deploy gives the same warning.
+// A CI job that only runs deploy never gets to see verify's warning, and would see nothing but the
+// 409 from Cloud Run with no clue to the cause.
 func TestDeployWarnsWhenRevisionNameIsPinned(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -437,7 +438,7 @@ spec:
 	}
 }
 
-// TestDeployDoesNotWarnWithoutRevisionName は通常のマニフェストで警告が出ないことを確認する。
+// TestDeployDoesNotWarnWithoutRevisionName checks that an ordinary manifest produces no warning.
 func TestDeployDoesNotWarnWithoutRevisionName(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -455,8 +456,8 @@ func TestDeployDoesNotWarnWithoutRevisionName(t *testing.T) {
 	}
 }
 
-// TestVerifyDoesNotWarnWithoutRevisionName は、リビジョン名を書いていない通常のマニフェスト
-// では警告が出ないことを確認する。
+// TestVerifyDoesNotWarnWithoutRevisionName checks that an ordinary manifest with no revision name
+// produces no warning.
 func TestVerifyDoesNotWarnWithoutRevisionName(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 
@@ -469,7 +470,7 @@ func TestVerifyDoesNotWarnWithoutRevisionName(t *testing.T) {
 	}
 }
 
-// TestStatusTextEndToEnd は status が既定 (text) で読める形にまとめて出すことを確認する。
+// TestStatusTextEndToEnd checks that status, by default (text), prints a readable summary.
 func TestStatusTextEndToEnd(t *testing.T) {
 	var gotPath string
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -499,13 +500,13 @@ func TestStatusTextEndToEnd(t *testing.T) {
 			t.Errorf("status stdout should contain %q:\n%s", want, stdout)
 		}
 	}
-	// 読み取り専用のコマンドなので stderr には何も出さない。
+	// It is a read-only command, so nothing goes to stderr.
 	if stderr != "" {
 		t.Errorf("status stderr = %q, want empty", stderr)
 	}
 }
 
-// TestStatusJSONEndToEnd は --format json が機械可読な出力を出すことを確認する。
+// TestStatusJSONEndToEnd checks that --format json produces machine-readable output.
 func TestStatusJSONEndToEnd(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -538,8 +539,8 @@ func TestStatusJSONEndToEnd(t *testing.T) {
 	}
 }
 
-// TestStatusRejectsInvalidFormat は不正な --format をクライアント生成より前に弾くことを
-// 確認する。順序が逆だと、認証エラーにフラグの間違いが隠れる。
+// TestStatusRejectsInvalidFormat checks that an invalid --format is rejected before the client is
+// created. In the reverse order, the flag mistake hides behind an authentication error.
 func TestStatusRejectsInvalidFormat(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected API call to %s", r.URL.Path)
@@ -555,8 +556,8 @@ func TestStatusRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
-// serviceJSON は generation / observedGeneration / Ready 条件を指定したサービス定義を返す。
-// ready が空なら Ready 条件そのものを持たない。
+// serviceJSON returns a service definition with the given generation / observedGeneration /
+// Ready condition. When ready is empty, it has no Ready condition at all.
 func serviceJSON(generation, observed int64, ready, reason string) string {
 	conditions := ""
 	if ready != "" {
@@ -571,8 +572,8 @@ func serviceJSON(generation, observed int64, ready, reason string) string {
 }`, generation, conditions, observed)
 }
 
-// rolloutAPI は deploy -> wait の流れを模したフェイク API を立てる。
-// PUT (適用) の前後で GET の応答を変え、GET の回数を数える。
+// rolloutAPI starts a fake API that simulates the deploy -> wait flow.
+// It changes the GET response before and after the PUT (the apply), and counts the GETs.
 func rolloutAPI(t *testing.T, afterApply string) func() int {
 	t.Helper()
 	var mu sync.Mutex
@@ -580,7 +581,7 @@ func rolloutAPI(t *testing.T, afterApply string) func() int {
 	gets := 0
 
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		// 既定値の解決は dry-run なので、適用ともポーリングとも数えない。
+		// Resolving the defaults is a dry run, so it counts as neither an apply nor a poll.
 		if echoDryRun(w, r) {
 			return
 		}
@@ -589,8 +590,8 @@ func rolloutAPI(t *testing.T, afterApply string) func() int {
 		switch r.Method {
 		case http.MethodPut:
 			applied = true
-			// 適用のレスポンスは新しい世代を返す。deploy はこの世代の
-			// ロールアウトだけを待つ。
+			// The apply response returns the new generation. deploy waits only for this
+			// generation's rollout.
 			body = serviceJSON(8, 7, "Unknown", "Deploying")
 		default:
 			gets++
@@ -613,7 +614,7 @@ func rolloutAPI(t *testing.T, afterApply string) func() int {
 	}
 }
 
-// TestWaitEndToEnd は wait が Ready になるまで待ち、進捗を stderr に出すことを確認する。
+// TestWaitEndToEnd checks that wait waits until Ready and prints progress to stderr.
 func TestWaitEndToEnd(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -625,7 +626,7 @@ func TestWaitEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait error = %v", err)
 	}
-	// 成功時は stdout に何も出さない (stdout はデータ専用)。
+	// On success nothing goes to stdout (stdout is for data only).
 	if stdout != "" {
 		t.Errorf("wait stdout = %q, want empty", stdout)
 	}
@@ -634,7 +635,7 @@ func TestWaitEndToEnd(t *testing.T) {
 	}
 }
 
-// TestWaitFailsWhenTheRolloutFails は Ready=False で待たずに失敗することを確認する。
+// TestWaitFailsWhenTheRolloutFails checks that Ready=False fails without waiting further.
 func TestWaitFailsWhenTheRolloutFails(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -651,9 +652,9 @@ func TestWaitFailsWhenTheRolloutFails(t *testing.T) {
 	}
 }
 
-// TestDeployFailsWhenTheRolloutFails が本 PR の要。従来 deploy は ReplaceService が
-// 受理された時点で exit 0 を返していたため、リビジョンが起動に失敗しても CI では
-// 成功扱いになっていた。
+// TestDeployFailsWhenTheRolloutFails is the heart of this PR. deploy used to exit 0 as soon as
+// ReplaceService was accepted, so even when a revision failed to start, CI treated it as a
+// success.
 func TestDeployFailsWhenTheRolloutFails(t *testing.T) {
 	gets := rolloutAPI(t, serviceJSON(8, 8, "False", "ConflictingRevisionName"))
 
@@ -674,7 +675,8 @@ func TestDeployFailsWhenTheRolloutFails(t *testing.T) {
 	}
 }
 
-// TestDeployWaitsForTheRollout は成功したロールアウトを待って正常終了することを確認する。
+// TestDeployWaitsForTheRollout checks that deploy waits for a successful rollout and exits
+// normally.
 func TestDeployWaitsForTheRollout(t *testing.T) {
 	gets := rolloutAPI(t, serviceJSON(8, 8, "True", ""))
 
@@ -692,8 +694,8 @@ func TestDeployWaitsForTheRollout(t *testing.T) {
 	}
 }
 
-// TestDeployRefusesWithoutConfirmation は、非対話環境で --auto-approve が無ければ
-// 何も適用せずに失敗することを確認する。
+// TestDeployRefusesWithoutConfirmation checks that in a non-interactive environment without
+// --auto-approve, deploy fails without applying anything.
 func TestDeployRefusesWithoutConfirmation(t *testing.T) {
 	gets := rolloutAPI(t, serviceJSON(8, 8, "True", ""))
 
@@ -706,19 +708,19 @@ func TestDeployRefusesWithoutConfirmation(t *testing.T) {
 	if !strings.Contains(err.Error(), "refusing to apply without confirmation") {
 		t.Errorf("deploy error = %v", err)
 	}
-	// 差分は見せたうえで拒否する。
+	// It refuses only after showing the diff.
 	if !strings.Contains(stdout, "image:") {
 		t.Errorf("deploy stdout = %q, want the diff to be shown before refusing", stdout)
 	}
-	// Plan の GET だけで、適用も待機もしていない。
+	// Only the Plan GET; nothing was applied or waited for.
 	if gets() != 1 {
 		t.Errorf("GET count = %d, want 1", gets())
 	}
 }
 
-// TestDeployNoWaitSkipsTheWait は --no-wait が適用の受理だけで戻ることを確認する。
+// TestDeployNoWaitSkipsTheWait checks that --no-wait returns as soon as the apply is accepted.
 func TestDeployNoWaitSkipsTheWait(t *testing.T) {
-	// 待てば失敗する状態にしておき、それでも成功することで「待っていない」と分かる。
+	// Set up a state that would fail if it waited; succeeding anyway shows that it did not wait.
 	gets := rolloutAPI(t, serviceJSON(8, 8, "False", "RevisionFailed"))
 
 	manifest := writeManifest(t, localManifest)
@@ -727,13 +729,13 @@ func TestDeployNoWaitSkipsTheWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy --no-wait error = %v", err)
 	}
-	// GET は Plan の 1 回だけ。ポーリングしていない。
+	// The only GET is the one for Plan. It did not poll.
 	if gets() != 1 {
 		t.Errorf("GET count = %d, want 1 (no polling with --no-wait)", gets())
 	}
 }
 
-// revisionsJSON はリビジョン一覧の API レスポンス。
+// revisionsJSON is the API response for the revision list.
 const revisionsJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "RevisionList",
@@ -751,7 +753,7 @@ const revisionsJSON = `{
   ]
 }`
 
-// startRevisionsAPI はサービス取得とリビジョン一覧の両方に応えるフェイク API を立てる。
+// startRevisionsAPI starts a fake API that answers both the service fetch and the revision list.
 func startRevisionsAPI(t *testing.T) {
 	t.Helper()
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -764,7 +766,7 @@ func startRevisionsAPI(t *testing.T) {
 	})
 }
 
-// TestRevisionsTextEndToEnd は revisions が新しい順の表を出すことを確認する。
+// TestRevisionsTextEndToEnd checks that revisions prints a table sorted newest first.
 func TestRevisionsTextEndToEnd(t *testing.T) {
 	startRevisionsAPI(t)
 
@@ -784,7 +786,7 @@ func TestRevisionsTextEndToEnd(t *testing.T) {
 	if !strings.HasPrefix(lines[0], "REVISION") {
 		t.Errorf("header = %q", lines[0])
 	}
-	// 新しい順。live のトラフィックが突き合わされている。
+	// Newest first, joined with the live traffic.
 	if !strings.HasPrefix(lines[1], "my-svc-00007-abc") || !strings.Contains(lines[1], "100%") {
 		t.Errorf("first row = %q, want the newest revision with its traffic", lines[1])
 	}
@@ -793,7 +795,7 @@ func TestRevisionsTextEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRevisionsJSONEndToEnd は --format json が配列を出すことを確認する。
+// TestRevisionsJSONEndToEnd checks that --format json prints an array.
 func TestRevisionsJSONEndToEnd(t *testing.T) {
 	startRevisionsAPI(t)
 
@@ -818,8 +820,8 @@ func TestRevisionsJSONEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRevisionsRejectsInvalidFormat は不正な --format をクライアント生成より前に
-// 弾くことを確認する。
+// TestRevisionsRejectsInvalidFormat checks that an invalid --format is rejected before the client
+// is created.
 func TestRevisionsRejectsInvalidFormat(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected API call to %s", r.URL.Path)
@@ -832,7 +834,7 @@ func TestRevisionsRejectsInvalidFormat(t *testing.T) {
 	}
 }
 
-// rollbackServiceJSON は latestRevision に 100% 振られている live サービス。
+// rollbackServiceJSON is a live service with 100% of traffic routed to latestRevision.
 const rollbackServiceJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -848,8 +850,8 @@ const rollbackServiceJSON = `{
   }
 }`
 
-// startRollbackAPI はサービス・リビジョン一覧・適用に応えるフェイク API を立て、
-// PUT の body を拾えるようにする。
+// startRollbackAPI starts a fake API that answers the service, the revision list and the apply,
+// and makes the PUT body available.
 func startRollbackAPI(t *testing.T) func() []byte {
 	t.Helper()
 	var mu sync.Mutex
@@ -877,7 +879,8 @@ func startRollbackAPI(t *testing.T) func() []byte {
 	}
 }
 
-// TestRollbackEndToEnd は、既定でひとつ前のリビジョンへ 100% 振り直すことを確認する。
+// TestRollbackEndToEnd checks that by default it reroutes 100% of traffic to the previous
+// revision.
 func TestRollbackEndToEnd(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -886,7 +889,7 @@ func TestRollbackEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rollback error = %v", err)
 	}
-	// 差分は stdout に出る。
+	// The diff goes to stdout.
 	if !strings.Contains(stdout, "my-svc-00006-def") {
 		t.Errorf("rollback stdout = %q, want the diff to name the target revision", stdout)
 	}
@@ -909,7 +912,7 @@ func TestRollbackEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRollbackToAnExplicitRevision は --revision の指定が使われることを確認する。
+// TestRollbackToAnExplicitRevision checks that the revision given with --revision is used.
 func TestRollbackToAnExplicitRevision(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -931,8 +934,8 @@ func TestRollbackToAnExplicitRevision(t *testing.T) {
 	}
 }
 
-// TestRollbackRejectsAnUnknownRevision は、このサービスに属さないリビジョンを
-// 適用前に弾くことを確認する。
+// TestRollbackRejectsAnUnknownRevision checks that a revision that does not belong to this
+// service is rejected before applying.
 func TestRollbackRejectsAnUnknownRevision(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -950,10 +953,10 @@ func TestRollbackRejectsAnUnknownRevision(t *testing.T) {
 	}
 }
 
-// startDeleteAPI はサービス取得と削除に応えるフェイク API を立てる。
-// vanish が true なら DELETE 後の GET は 404 を返す (実際に削除が反映された状態)。
-// false なら残り続けるので、待機しているかどうかを見分けられる。
-// 返り値は DELETE の回数と、DELETE 後の GET の回数。
+// startDeleteAPI starts a fake API that answers the service fetch and the delete.
+// When vanish is true, a GET after the DELETE returns 404 (the deletion has actually taken
+// effect). When false, the service stays, which tells whether the command waits or not.
+// It returns the number of DELETEs and the number of GETs after the DELETE.
 func startDeleteAPI(t *testing.T, vanish bool) (func() int, func() int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -991,9 +994,9 @@ func startDeleteAPI(t *testing.T, vanish bool) (func() int, func() int) {
 	return count(&deletes), count(&getsAfter)
 }
 
-// TestDeleteEndToEnd は、削除対象を stderr に示し、削除し、消えたことを確かめる
-// までを確認する。Cloud Run の削除は非同期なので、確かめずに戻ると
-// 「削除してから作り直す」ような手順が競合する。
+// TestDeleteEndToEnd checks the whole sequence: showing what will be deleted on stderr, deleting
+// it, and confirming it is gone. Deletion in Cloud Run is asynchronous, so returning without
+// confirming makes a procedure like "delete, then recreate" race.
 func TestDeleteEndToEnd(t *testing.T) {
 	deletes, getsAfter := startDeleteAPI(t, true)
 
@@ -1008,21 +1011,21 @@ func TestDeleteEndToEnd(t *testing.T) {
 	if getsAfter() < 1 {
 		t.Errorf("GET count after the delete = %d, want at least 1 (it must confirm the service is gone)", getsAfter())
 	}
-	// 消すものを取り違えないよう、project と region を必ず出す。
+	// Always show the project and region, so the wrong thing is not deleted by mistake.
 	for _, want := range []string{"About to delete:", "service: my-svc", "project: test-project", "region:  asia-northeast1"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("delete stderr should contain %q:\n%s", want, stderr)
 		}
 	}
-	// stdout はデータ専用。削除は出力するデータを持たない。
+	// stdout is for data only. A delete has no data to print.
 	if stdout != "" {
 		t.Errorf("delete stdout = %q, want empty", stdout)
 	}
 }
 
-// TestDeleteNoWaitSkipsTheWait は --no-wait が受理だけで戻ることを確認する。
+// TestDeleteNoWaitSkipsTheWait checks that --no-wait returns as soon as the request is accepted.
 func TestDeleteNoWaitSkipsTheWait(t *testing.T) {
-	// 待てば消えないので、成功することで「待っていない」と分かる。
+	// The service never disappears if it waits, so succeeding shows that it did not wait.
 	deletes, getsAfter := startDeleteAPI(t, false)
 
 	if _, _, err := executeRoot(t, "delete", "my-svc", "--auto-approve", "--no-wait",
@@ -1037,8 +1040,8 @@ func TestDeleteNoWaitSkipsTheWait(t *testing.T) {
 	}
 }
 
-// TestDeleteRefusesWithoutConfirmation は、非対話環境で --auto-approve が無ければ
-// 何も消さずに失敗することを確認する。
+// TestDeleteRefusesWithoutConfirmation checks that in a non-interactive environment without
+// --auto-approve, delete fails without deleting anything.
 func TestDeleteRefusesWithoutConfirmation(t *testing.T) {
 	deletes, _ := startDeleteAPI(t, true)
 
@@ -1055,8 +1058,8 @@ func TestDeleteRefusesWithoutConfirmation(t *testing.T) {
 	}
 }
 
-// TestDeleteDryRunDoesNotPrompt は --dry-run が確認も待機もせずに検証だけすることを
-// 確認する (非対話環境でも通る)。
+// TestDeleteDryRunDoesNotPrompt checks that --dry-run only validates, without confirming or
+// waiting (so it passes in a non-interactive environment too).
 func TestDeleteDryRunDoesNotPrompt(t *testing.T) {
 	deletes, getsAfter := startDeleteAPI(t, false)
 
@@ -1072,12 +1075,12 @@ func TestDeleteDryRunDoesNotPrompt(t *testing.T) {
 	}
 }
 
-// TestDeleteFailsWhenTheServiceIsMissing は、実在しないサービスでは確認を求めず
-// エラーになることを確認する。
+// TestDeleteFailsWhenTheServiceIsMissing checks that a service that does not exist results in an
+// error without asking for confirmation.
 func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
-	// カウンタはハンドラの goroutine から書かれるので必ず保護する。
-	// 保護しないと、退行して DELETE が飛んだ瞬間に race になるか、
-	// 古い 0 を読んで退行を見逃す。
+	// The counter is written from the handler's goroutine, so it must always be guarded.
+	// Unguarded, a regression that sends a DELETE either becomes a race the moment it happens,
+	// or the test reads a stale 0 and misses the regression.
 	var mu sync.Mutex
 	deletes := 0
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1104,9 +1107,9 @@ func TestDeleteFailsWhenTheServiceIsMissing(t *testing.T) {
 	}
 }
 
-// TestRefreshEndToEnd は、定義を変えずに新しいリビジョン名を付けて適用することを
-// 確認する。Cloud Run は spec.template が変わらないと新しいリビジョンを作らないので、
-// これが refresh の本体。
+// TestRefreshEndToEnd checks that the definition is applied unchanged except for a new revision
+// name. Cloud Run does not create a new revision unless spec.template changes, so this is the
+// core of refresh.
 func TestRefreshEndToEnd(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -1130,7 +1133,7 @@ func TestRefreshEndToEnd(t *testing.T) {
 	if meta["name"] != "my-svc-r260822190506" {
 		t.Errorf("spec.template.metadata.name = %v, want the refreshed revision name", meta["name"])
 	}
-	// 定義そのものは変えない。
+	// The definition itself is not changed.
 	tspec, _ := template["spec"].(map[string]any)
 	containers, _ := tspec["containers"].([]any)
 	first, _ := containers[0].(map[string]any)
@@ -1139,8 +1142,8 @@ func TestRefreshEndToEnd(t *testing.T) {
 	}
 }
 
-// TestRefreshGeneratesARevisionName は --revision-suffix 省略時に名前が生成される
-// ことを確認する。
+// TestRefreshGeneratesARevisionName checks that a name is generated when --revision-suffix is
+// omitted.
 func TestRefreshGeneratesARevisionName(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -1162,8 +1165,8 @@ func TestRefreshGeneratesARevisionName(t *testing.T) {
 	}
 }
 
-// TestRefreshRejectsAnInvalidRevisionName は、Cloud Run が拒否する名前を適用前に
-// 弾くことを確認する。
+// TestRefreshRejectsAnInvalidRevisionName checks that a name Cloud Run would reject is rejected
+// before applying.
 func TestRefreshRejectsAnInvalidRevisionName(t *testing.T) {
 	sentBody := startRollbackAPI(t)
 
@@ -1181,8 +1184,8 @@ func TestRefreshRejectsAnInvalidRevisionName(t *testing.T) {
 	}
 }
 
-// defaultedServiceJSON は Cloud Run が既定値を埋めたあとの定義。
-// localManifest (最小) には無いフィールドが入っている。
+// defaultedServiceJSON is the definition after Cloud Run has filled in the defaults.
+// It contains fields that localManifest (the minimal one) does not have.
 const defaultedServiceJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -1198,8 +1201,8 @@ const defaultedServiceJSON = `{
   "status": {"observedGeneration": 7, "conditions": [{"type": "Ready", "status": "True"}]}
 }`
 
-// TestDiffServerDefaults は --server-defaults がサーバ既定値ぶんの差分を消すことを
-// 確認する (issue #11)。
+// TestDiffServerDefaults checks that --server-defaults removes the part of the diff that comes
+// from server defaults (issue #11).
 func TestDiffServerDefaults(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1209,7 +1212,8 @@ func TestDiffServerDefaults(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 	target := []string{"--project", "test-project", "--region", "asia-northeast1"}
 
-	// 既定ではサーバに既定値を解決させるので、最小マニフェストでも差分は空。
+	// By default the server is asked to resolve the defaults, so even a minimal manifest has an
+	// empty diff.
 	resolved, _, err := executeRoot(t, append([]string{"diff", "my-svc", manifest}, target...)...)
 	if err != nil {
 		t.Fatalf("diff error = %v", err)
@@ -1218,7 +1222,8 @@ func TestDiffServerDefaults(t *testing.T) {
 		t.Errorf("diff = %q, want empty (server defaults are resolved by default)", resolved)
 	}
 
-	// --no-server-defaults ならマニフェストのまま比較するので、既定値が差分に出る。
+	// With --no-server-defaults the manifest is compared as written, so the defaults show up in
+	// the diff.
 	plain, _, err := executeRoot(t,
 		append([]string{"diff", "my-svc", manifest, "--no-server-defaults"}, target...)...)
 	if err != nil {
@@ -1229,9 +1234,9 @@ func TestDiffServerDefaults(t *testing.T) {
 	}
 }
 
-// unchangedServiceJSON は localManifest と同じ内容の live サービス。
-// 正規化すると desired と一致するので、deploy の差分はゼロになる。
-// ready / reason で Ready 条件を差し替える。
+// unchangedServiceJSON is a live service with the same contents as localManifest.
+// After normalization it matches desired, so deploy's diff is empty.
+// ready / reason replace the Ready condition.
 func unchangedServiceJSON(ready, reason string) string {
 	return fmt.Sprintf(`{
   "apiVersion": "serving.knative.dev/v1",
@@ -1242,8 +1247,8 @@ func unchangedServiceJSON(ready, reason string) string {
 }`, ready, reason)
 }
 
-// startUnchangedAPI は「マニフェストと同じ内容の live サービス」を返すフェイク API を
-// 立て、GET の回数を数える。
+// startUnchangedAPI starts a fake API that returns "a live service with the same contents as the
+// manifest", and counts the GETs.
 func startUnchangedAPI(t *testing.T, ready, reason string) func() int {
 	t.Helper()
 	var mu sync.Mutex
@@ -1269,9 +1274,9 @@ func startUnchangedAPI(t *testing.T, ready, reason string) func() int {
 	}
 }
 
-// TestDeployWithNoChangesStillChecksTheRollout は、差分がゼロでもサービスが健全か
-// 確認することを検証する。失敗したデプロイの後に同じマニフェストで再実行すると
-// 差分はゼロになるので、ここを素通りさせると壊れたまま成功扱いになる。
+// TestDeployWithNoChangesStillChecksTheRollout verifies that the service's health is checked even
+// when the diff is empty. Re-running with the same manifest after a failed deploy produces an
+// empty diff, so letting that case straight through would report success over a broken service.
 func TestDeployWithNoChangesStillChecksTheRollout(t *testing.T) {
 	gets := startUnchangedAPI(t, "False", "RevisionFailed")
 
@@ -1287,14 +1292,14 @@ func TestDeployWithNoChangesStillChecksTheRollout(t *testing.T) {
 	if !strings.Contains(stderr, "No changes.") {
 		t.Errorf("deploy stderr = %q, want it to report that there is nothing to apply", stderr)
 	}
-	// Plan の GET に加えて、健全性を見るためのポーリングが走っている。
+	// In addition to the Plan GET, polling to check health has run.
 	if gets() < 2 {
 		t.Errorf("GET count = %d, want the plan lookup plus at least one health poll", gets())
 	}
 }
 
-// TestDeployWithNoChangesSucceedsWhenHealthy は、健全なら差分ゼロで成功することを
-// 確認する (余計な失敗を作っていないこと)。
+// TestDeployWithNoChangesSucceedsWhenHealthy checks that an empty diff succeeds when the service
+// is healthy (no spurious failure is introduced).
 func TestDeployWithNoChangesSucceedsWhenHealthy(t *testing.T) {
 	startUnchangedAPI(t, "True", "")
 
@@ -1312,10 +1317,10 @@ func TestDeployWithNoChangesSucceedsWhenHealthy(t *testing.T) {
 	}
 }
 
-// TestDeployWithNoChangesSkipsTheCheckWithNoWait は --no-wait が健全性の確認も
-// 省くことを確認する。
+// TestDeployWithNoChangesSkipsTheCheckWithNoWait checks that --no-wait also skips the health
+// check.
 func TestDeployWithNoChangesSkipsTheCheckWithNoWait(t *testing.T) {
-	// 待てば失敗する状態にしておき、それでも成功することで「見ていない」と分かる。
+	// Set up a state that would fail if it waited; succeeding anyway shows that it did not look.
 	gets := startUnchangedAPI(t, "False", "RevisionFailed")
 
 	manifest := writeManifest(t, localManifest)
@@ -1328,8 +1333,8 @@ func TestDeployWithNoChangesSkipsTheCheckWithNoWait(t *testing.T) {
 	}
 }
 
-// TestExitCode は終了コードの割り当てを確認する。terraform plan の
-// -detailed-exitcode と同じで、0 = 差分なし / 1 = エラー / 2 = 差分あり。
+// TestExitCode checks how exit codes are assigned. It matches terraform plan's
+// -detailed-exitcode: 0 = no differences / 1 = error / 2 = differences.
 func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1350,8 +1355,8 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
-// TestDiffExitCodeReportsDifferences は --exit-code で差分があると 2 で終わることを
-// 確認する。これが無いと、ドリフト検知に diff を使ったつもりの CI が黙って通る。
+// TestDiffExitCodeReportsDifferences checks that with --exit-code, differences end with 2.
+// Without it, a CI job that thinks it is using diff for drift detection passes silently.
 func TestDiffExitCodeReportsDifferences(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if echoDryRun(w, r) {
@@ -1370,13 +1375,14 @@ func TestDiffExitCodeReportsDifferences(t *testing.T) {
 	if got := ExitCode(err); got != ExitCodeDiff {
 		t.Errorf("ExitCode() = %d, want %d", got, ExitCodeDiff)
 	}
-	// 差分そのものは今までどおり stdout に出る。
+	// The diff itself still goes to stdout as before.
 	if !strings.Contains(stdout, "image:") {
 		t.Errorf("diff stdout = %q, want the diff to still be printed", stdout)
 	}
 }
 
-// TestDiffExitCodeIsQuietWithoutDifferences は差分が無ければ 0 で終わることを確認する。
+// TestDiffExitCodeIsQuietWithoutDifferences checks that it ends with 0 when there are no
+// differences.
 func TestDiffExitCodeIsQuietWithoutDifferences(t *testing.T) {
 	startUnchangedAPI(t, "True", "")
 
@@ -1391,8 +1397,8 @@ func TestDiffExitCodeIsQuietWithoutDifferences(t *testing.T) {
 	}
 }
 
-// TestDiffWithoutExitCodeSucceedsDespiteDifferences は既定の挙動を変えていないことを
-// 確認する。
+// TestDiffWithoutExitCodeSucceedsDespiteDifferences checks that the default behaviour is
+// unchanged.
 func TestDiffWithoutExitCodeSucceedsDespiteDifferences(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if echoDryRun(w, r) {
@@ -1413,18 +1419,18 @@ func TestDiffWithoutExitCodeSucceedsDespiteDifferences(t *testing.T) {
 	}
 }
 
-// TestRuntimeErrorsDoNotPrintUsage は、実行時のエラーで usage 全文が出ないことを
-// 確認する。出ると、組み立てたエラー文がフラグ一覧に埋もれる。
+// TestRuntimeErrorsDoNotPrintUsage checks that a runtime error does not print the full usage.
+// If it did, the carefully built error message would be buried under the flag list.
 func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
-	// project も region も解決できないので、クライアント生成の前に失敗する。
+	// Neither project nor region can be resolved, so it fails before the client is created.
 	stdout, stderr, err := executeRoot(t, "diff", "my-svc", manifest)
 	if err == nil {
 		t.Fatal("diff error = nil, want the missing target to fail")
 	}
-	// cobra は usage を Println (= OutOrStderr) に出すので、SetOut を差し替えている
-	// テストでは stdout 側に入る。実バイナリでは stderr に出る。どちらに出ようと
-	// 出てはいけないので、両方を見る。
+	// cobra prints usage with Println (= OutOrStderr), so in a test that replaces SetOut it
+	// lands on stdout. In the real binary it goes to stderr. It must not appear on either,
+	// so look at both streams.
 	combined := stdout + stderr
 	if strings.Contains(combined, "Usage:") || strings.Contains(combined, "Flags:") {
 		t.Errorf("the usage block should not be printed for a runtime error:\nstdout=%q\nstderr=%q",
@@ -1432,7 +1438,7 @@ func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
 	}
 }
 
-// TestVersion は --version がバージョンを出すことを確認する。
+// TestVersion checks that --version prints the version.
 func TestVersion(t *testing.T) {
 	stdout, _, err := executeRoot(t, "--version")
 	if err != nil {

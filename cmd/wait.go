@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// deploy と wait で共有するロールアウト待機の既定値。
+// Defaults for waiting on a rollout, shared by deploy and wait.
 const (
 	defaultRolloutTimeout  = 10 * time.Minute
 	defaultRolloutInterval = 2 * time.Second
@@ -55,8 +55,8 @@ func runWait(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// waitForDeletion はサービスが実際に消えるまで待つ。Cloud Run の削除は非同期なので、
-// これが無いと delete の直後にまだ取得できてしまう。
+// waitForDeletion waits until the service is actually gone. Deletion in Cloud Run is asynchronous,
+// so without this the service can still be fetched right after delete.
 func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string,
 	timeout, interval time.Duration) error {
 	out := cmd.ErrOrStderr()
@@ -72,16 +72,17 @@ func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string
 	})
 }
 
-// waitForRollout はサービスが安定するまで待ち、状態が変わるたびに進捗を stderr へ出す。
-// wait (現状のまま待つ) と deploy (適用した世代のロールアウトを待つ) で共有する。
-// 成功時は何も出力しない (stdout はデータ専用という規約に従う)。
+// waitForRollout waits until the service settles, printing progress to stderr whenever the state
+// changes. It is shared by wait (waits on the current state) and deploy (waits for the rollout of
+// the generation it applied). On success it prints nothing (following the convention that stdout
+// is data-only).
 func waitForRollout(cmd *cobra.Command, client *cloudrun.Client, service string, opts cloudrun.WaitOptions) error {
 	out := cmd.ErrOrStderr()
 	opts.OnUpdate = func(message string) {
 		fmt.Fprintf(out, "waiting for %s: %s\n", service, message)
 	}
-	// 取得に失敗しても待機は続けるが、黙って再試行すると「止まっている」ように
-	// 見えるので知らせる。
+	// A failed read does not stop the wait, but retrying silently would look like being "stuck",
+	// so say so.
 	opts.OnRetry = func(err error) {
 		fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", service, err)
 	}

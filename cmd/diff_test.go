@@ -7,19 +7,19 @@ import (
 	"testing"
 )
 
-// readAll はリクエスト body を読む小さなヘルパ。
+// readAll is a small helper that reads the request body.
 func readAll(r *http.Request) ([]byte, error) { return io.ReadAll(r.Body) }
 
-// TestDiffOnAServiceThatDoesNotExistYet は、まだ作られていないサービスに対して
-// diff が動くことを確認する。README が勧める「マニフェストを書く → diff →
-// deploy」の初回で、以前はここが素の 404 で落ちていた。
+// TestDiffOnAServiceThatDoesNotExistYet checks that diff works against a service that has not
+// been created yet. This is the first run of the "write a manifest → diff → deploy" flow the
+// README recommends, and it used to fail here with a bare 404.
 func TestDiffOnAServiceThatDoesNotExistYet(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if echoDryRun(w, r) {
 			return
 		}
 		if r.Method == http.MethodPost {
-			// 未存在なので既定値の解決は Create の dry-run になる。
+			// The service does not exist, so resolving the defaults is a dry-run Create.
 			body, _ := readAll(r)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(body)
