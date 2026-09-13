@@ -1,5 +1,5 @@
-// Package config は clrnd の設定ファイル (YAML) を読み込む。
-// フラグや環境変数が未指定のときのフォールバック値を提供する。
+// Package config reads clrnd's config file (YAML).
+// It supplies the fallback values used when a flag or an environment variable is not given.
 package config
 
 import (
@@ -9,9 +9,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Config は設定ファイルの内容。フィールドは sigs.k8s.io/yaml が JSON タグで解釈する。
-// omitempty は読み込み (UnmarshalStrict) には影響せず、init が Config をマーシャルして
-// clrnd.yml を生成する際に空フィールドを出さないために付けている。
+// Config is the content of the config file. sigs.k8s.io/yaml interprets its fields through their
+// JSON tags. omitempty has no effect on reading (UnmarshalStrict); it is there so that empty fields
+// are left out when init marshals a Config to generate clrnd.yml.
 type Config struct {
 	Project  string    `json:"project,omitempty"`
 	Region   string    `json:"region,omitempty"`
@@ -20,13 +20,13 @@ type Config struct {
 	Tfstate  []Tfstate `json:"tfstate,omitempty"`
 }
 
-// Tfstate は名前付き Terraform state の宣言。Name 省略時は "default" 扱い。
+// Tfstate declares a named Terraform state. An omitted Name is treated as "default".
 type Tfstate struct {
 	Name     string `json:"name"`
 	Location string `json:"location"`
 }
 
-// Load は path の設定ファイルを厳密に読み込む。未知キー (打ち間違い) も検出する。
+// Load reads the config file at path strictly. It also detects unknown keys (typos).
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
