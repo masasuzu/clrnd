@@ -19,7 +19,7 @@ const (
 	testRegion  = "asia-northeast1"
 )
 
-// recordedRequest はフェイク API が受け取ったリクエストの記録。
+// recordedRequest is a record of a request the fake API received.
 type recordedRequest struct {
 	Method string
 	Path   string
@@ -27,12 +27,12 @@ type recordedRequest struct {
 	Body   []byte
 }
 
-// fakeAPI は Cloud Run Admin API の代わりに使う httptest サーバ。
-// ServeHTTP はサーバの goroutine で走るので、記録は mu で保護し、失敗は Errorf で
-// 報告する (FailNow 系はテスト本体の goroutine からしか呼べない)。
+// fakeAPI is an httptest server that stands in for the Cloud Run Admin API.
+// ServeHTTP runs on the server's goroutine, so the records are guarded by mu and failures are
+// reported with Errorf (the FailNow family may only be called from the test's own goroutine).
 type fakeAPI struct {
 	t *testing.T
-	// handler はリクエストごとの応答を決める。nil なら 404 を返す。
+	// handler decides the response to each request. When nil, it returns 404.
 	handler func(r *http.Request) (status int, body interface{})
 
 	mu       sync.Mutex
@@ -61,22 +61,22 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// recorded は記録済みリクエストのコピーを返す。
+// recorded returns a copy of the recorded requests.
 func (f *fakeAPI) recorded() []recordedRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]recordedRequest(nil), f.requests...)
 }
 
-// googleAPIError は Google API のエラー応答 JSON を組み立てる。
+// googleAPIError builds the JSON of a Google API error response.
 func googleAPIError(code int, message string) map[string]interface{} {
 	return map[string]interface{}{
 		"error": map[string]interface{}{"code": code, "message": message, "status": "NOT_FOUND"},
 	}
 }
 
-// newTestClient は httptest のフェイク API に向いた Client を返す。ADC は使わないので
-// 認証情報の無い環境でも動く。
+// newTestClient returns a Client pointed at the httptest fake API. It does not use ADC, so it
+// works in an environment with no credentials.
 func newTestClient(t *testing.T, handler func(r *http.Request) (int, interface{})) (*Client, *fakeAPI) {
 	t.Helper()
 	api := &fakeAPI{t: t, handler: handler}
@@ -91,7 +91,7 @@ func newTestClient(t *testing.T, handler func(r *http.Request) (int, interface{}
 	return c, api
 }
 
-// liveService はフェイク API が返す live サービス定義。
+// liveService is the live service definition the fake API returns.
 func liveService(image string) *run.Service {
 	return &run.Service{
 		ApiVersion: manifestAPIVersion,
@@ -99,7 +99,7 @@ func liveService(image string) *run.Service {
 		Metadata: &run.ObjectMeta{
 			Name:      "my-svc",
 			Namespace: testProject,
-			// サーバ管理フィールド。マニフェスト化の際に落とされる。
+			// Server-managed fields. They are dropped when converting to a manifest.
 			Uid:        "abc-123",
 			Generation: 7,
 		},
@@ -163,7 +163,7 @@ func TestGetService(t *testing.T) {
 }
 
 func TestGetServiceNotFound(t *testing.T) {
-	c, _ := newTestClient(t, nil) // 既定の handler は 404
+	c, _ := newTestClient(t, nil) // the default handler returns 404
 
 	_, err := c.GetService(context.Background(), "missing")
 	if err == nil {
@@ -178,7 +178,7 @@ func TestGetServiceNotFound(t *testing.T) {
 }
 
 func TestPlanCreatesWhenServiceIsMissing(t *testing.T) {
-	c, _ := newTestClient(t, nil) // GET は 404
+	c, _ := newTestClient(t, nil) // GET returns 404
 
 	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestPlanDiffsAgainstLiveService(t *testing.T) {
 		!strings.Contains(plan.Diff, "+      - image: gcr.io/project/image:tag") {
 		t.Errorf("Plan().Diff = %q, want the image change", plan.Diff)
 	}
-	// サーバ管理フィールド (uid/generation/status) は diff に出てはいけない。
+	// Server-managed fields (uid/generation/status) must not appear in the diff.
 	for _, field := range []string{"uid", "generation", "status"} {
 		if strings.Contains(plan.Diff, field+":") {
 			t.Errorf("Plan().Diff contains the server-managed field %q:\n%s", field, plan.Diff)
@@ -260,7 +260,7 @@ func TestApplyCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
-	// 適用後のサービスを返す (Wait が世代を知るために使う)。
+	// It returns the service as applied (Wait uses it to learn the generation).
 	if applied == nil || applied.Metadata == nil || applied.Metadata.Name != "my-svc" {
 		t.Errorf("Apply() = %+v, want the applied service", applied)
 	}
@@ -270,11 +270,11 @@ func TestApplyCreate(t *testing.T) {
 	if post.Path != wantPath {
 		t.Errorf("Create path = %q, want %q", post.Path, wantPath)
 	}
-	// dryRun が false のときは dryRun パラメータ自体を送らない。
+	// When dryRun is false, the dryRun parameter is not sent at all.
 	if strings.Contains(post.Query, "dryRun") {
 		t.Errorf("Create query = %q, want no dryRun parameter", post.Query)
 	}
-	// 送信 body の namespace はプロジェクトに揃えられている。
+	// The namespace in the sent body is set to the project.
 	if !strings.Contains(string(post.Body), `"namespace":"test-project"`) {
 		t.Errorf("Create body = %s, want namespace set to the project", post.Body)
 	}
@@ -354,7 +354,7 @@ func TestDeleteServiceDryRun(t *testing.T) {
 }
 
 func TestDeleteServicePropagatesErrors(t *testing.T) {
-	c, _ := newTestClient(t, nil) // 既定の handler は 404
+	c, _ := newTestClient(t, nil) // the default handler returns 404
 
 	err := c.DeleteService(context.Background(), "missing", false)
 	if err == nil || !strings.Contains(err.Error(), `failed to delete service "missing"`) {
@@ -362,7 +362,7 @@ func TestDeleteServicePropagatesErrors(t *testing.T) {
 	}
 }
 
-// lastRequest は指定メソッドで最後に受け取ったリクエストを返す。
+// lastRequest returns the last request received with the given method.
 func lastRequest(t *testing.T, api *fakeAPI, method string) recordedRequest {
 	t.Helper()
 	got := api.recorded()
@@ -375,10 +375,10 @@ func lastRequest(t *testing.T, api *fakeAPI, method string) recordedRequest {
 	return recordedRequest{}
 }
 
-// TestApplySendsTheResourceVersionItComparedAgainst は、更新の書き込みが「差分を取った
-// 相手」の resourceVersion を載せることを確認する。載せずに送ると Cloud Run は無条件の
-// 上書きとして受け付ける (実 API で確認済み) ので、並走した deploy が互いの変更を
-// 黙って消す。
+// TestApplySendsTheResourceVersionItComparedAgainst checks that an update write carries the
+// resourceVersion of "the service the diff was computed against". Sent without it, Cloud Run
+// accepts the write as an unconditional overwrite (verified against the real API), so concurrent
+// deploys silently erase each other's changes.
 func TestApplySendsTheResourceVersionItComparedAgainst(t *testing.T) {
 	const liveRV = "AAZZrzudm44"
 	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
@@ -408,9 +408,9 @@ func TestApplySendsTheResourceVersionItComparedAgainst(t *testing.T) {
 	}
 }
 
-// TestApplyExplainsAConcurrentChange は、409 を「差分を取ってから他の変更が入った」と
-// 説明することを確認する。API の文面 (version 'X' was specified but current version is
-// 'Y') だけでは、利用者が何をすべきか分からない。
+// TestApplyExplainsAConcurrentChange checks that a 409 is explained as "another change landed
+// after the diff was computed". The API's wording alone (version 'X' was specified but current
+// version is 'Y') does not tell the user what to do.
 func TestApplyExplainsAConcurrentChange(t *testing.T) {
 	c, _ := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		if r.Method == http.MethodPut {
@@ -431,15 +431,16 @@ func TestApplyExplainsAConcurrentChange(t *testing.T) {
 	if !strings.Contains(err.Error(), "changed after the diff was computed") {
 		t.Errorf("Apply() error = %v, want it to explain the concurrent change", err)
 	}
-	// 元の API エラーも残す (どのバージョンで衝突したかは調査に要る)。
+	// The original API error is kept too (which version the conflict was on is needed to
+	// investigate).
 	if !strings.Contains(err.Error(), "current version is '2'") {
 		t.Errorf("Apply() error = %v, want it to keep the API message", err)
 	}
 }
 
-// TestPlanCreateSendsNoResourceVersion は、新規作成に resourceVersion を載せないことを
-// 確認する。Cloud Run は形式の合わない resourceVersion に 400 を返すので、無い相手に
-// 何かを載せると作成そのものが壊れる。
+// TestPlanCreateSendsNoResourceVersion checks that a create carries no resourceVersion. Cloud
+// Run returns 400 for a malformed resourceVersion, so putting anything there for a service that
+// does not exist breaks the create itself.
 func TestPlanCreateSendsNoResourceVersion(t *testing.T) {
 	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
 		if r.Method == http.MethodGet {

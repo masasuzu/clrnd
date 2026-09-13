@@ -7,21 +7,22 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// TrafficRequest は traffic コマンドの指定。Revision と Latest はどちらか一方だけ。
+// TrafficRequest is what the traffic command was asked to do. Exactly one of Revision and Latest.
 type TrafficRequest struct {
-	// Revision は送り先のリビジョン名。
+	// Revision is the name of the revision to send traffic to.
 	Revision string
-	// Latest は「最新のリビジョン」を送り先にする指定 (latestRevision: true)。
-	// リビジョン名を固定しないので、以降の deploy が作る版へ自動的に追従する。
+	// Latest sends traffic to "the latest revision" (latestRevision: true).
+	// It does not pin a revision name, so it automatically follows the versions later deploys
+	// create.
 	Latest bool
-	// Percent は送り先に向ける割合 (1..100)。100 未満なら残りは現在いちばん多く
-	// 受けているリビジョンに残す。
+	// Percent is the share to send to the target (1..100). Below 100, the remainder stays on the
+	// revision currently receiving the most.
 	Percent int64
 }
 
-// ValidateTrafficRequest は指定の組み合わせを検証する。API アクセスを伴わないので、
-// クライアントを作る前 (= 認証情報を探す前) に呼べる。フラグの間違いが認証エラーの
-// 後ろに隠れないようにするため、cmd 側はこれを先に通す。
+// ValidateTrafficRequest checks the combination of options. It needs no API access, so it can be
+// called before building the client (= before looking for credentials). cmd runs this first so
+// that a flag mistake is not hidden behind an authentication error.
 func ValidateTrafficRequest(req TrafficRequest) error {
 	switch {
 	case req.Latest && req.Revision != "":
@@ -34,18 +35,19 @@ func ValidateTrafficRequest(req TrafficRequest) error {
 	return nil
 }
 
-// ShiftTrafficTarget は live サービスのトラフィック配分だけを書き換えた定義を返す
-// (名前が Target で終わるのは RollbackTarget / RefreshTarget と同じく「適用する
-// desired を組み立てる純粋な関数」であることを示すため)。
-// 引数は書き換えず、変更が必要な Spec だけを浅くコピーする。
+// ShiftTrafficTarget returns the live service's definition with only its traffic split rewritten
+// (the name ends in Target, like RollbackTarget / RefreshTarget, to show that it is "a pure
+// function that builds the desired definition to apply").
+// It does not modify its argument; it shallow-copies only the Spec that has to change.
 //
-// spec.template には触らないので新しいリビジョンは作られない。カナリア (--percent 10)
-// も、rollback 後に最新へ戻す操作 (--to-latest) も、この 1 つの経路で表現できる。
+// spec.template is not touched, so no new revision is created. A canary (--percent 10) and
+// returning to the latest after a rollback (--to-latest) can both be expressed through this one
+// path.
 //
-// 残りの割合は「いま最も多く受けているリビジョン」に寄せる。カナリアの実際の使い方
-// (安定版 90% / 新版 10%) がその形であり、結果が常に 2 つのリビジョンの分割になるので
-// 実行前に何が起きるか読める。既存の配分を比例で保つ方式は、丸め誤差の扱いが要るうえ
-// 何が残るのか予想しにくい。
+// The remaining share goes to "the revision currently receiving the most". That is the shape a
+// canary actually takes in practice (stable 90% / new 10%), and the result is always a split
+// between two revisions, so what will happen can be read before running it. Keeping the existing
+// split proportionally would need rounding errors handled, and it is hard to predict what is left.
 func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, error) {
 	if live == nil || live.Spec == nil {
 		return nil, errors.New("the live service has no spec to update")
@@ -57,8 +59,8 @@ func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, er
 	status := newStatus(live)
 
 	target := &run.TrafficTarget{Percent: req.Percent}
-	// 残りの受け皿を選ぶときに、送り先そのものを候補から外すための名前。
-	// --to-latest では「いま最新の Ready なリビジョン」がそれにあたる。
+	// The name used to exclude the target itself from the candidates when choosing where the
+	// remainder goes. With --to-latest, that is "the current latest Ready revision".
 	self := req.Revision
 	if req.Latest {
 		target.LatestRevision = true
@@ -76,8 +78,8 @@ func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, er
 		traffic = append(traffic, &run.TrafficTarget{RevisionName: rest, Percent: 100 - req.Percent})
 	}
 
-	// タグ付きの経路は割合 0 で残す。タグ URL でのアクセス手段を、割合の変更で
-	// 失わせない (rollback と同じ扱い)。
+	// Tagged routes are kept at 0%. Changing the split must not take away access through the tag
+	// URL (the same treatment as rollback).
 	for _, t := range live.Spec.Traffic {
 		if t == nil || t.Tag == "" {
 			continue
@@ -94,13 +96,14 @@ func ShiftTrafficTarget(live *run.Service, req TrafficRequest) (*run.Service, er
 	return &out, nil
 }
 
-// remainderRevision は残りの割合を預けるリビジョンを選ぶ。いま最も多く受けている
-// リビジョンで、それが送り先自身なら分割する相手がいないのでエラーにする。
+// remainderRevision chooses the revision that keeps the remaining share: the revision currently
+// receiving the most. If that is the target itself, there is nothing to split against, so it is
+// an error.
 //
-// 「送り先を *除いた* 中で最大」を選んではいけない。カナリア中 (安定版 90% / 旧版 10%)
-// に安定版を送り先として --percent 10 を撃つと、安定版が 10% へ落ちて旧版が 90% を
-// 持つ、という誰も望まない配分になる。送り先が既に本番を持っているなら、それは
-// 「分割の相手がいない」状況であって、二番手を繰り上げる状況ではない。
+// Do not choose "the largest *excluding* the target". Mid-canary (stable 90% / old 10%), running
+// --percent 10 with the stable revision as the target would drop the stable revision to 10% and
+// give the old one 90%, a split nobody wants. When the target already carries production, that is
+// a case of "nothing to split against", not a case for promoting the runner-up.
 func remainderRevision(s *Status, target string, percent int64) (string, error) {
 	name, share := largestShare(s)
 	switch name {
@@ -117,9 +120,9 @@ func remainderRevision(s *Status, target string, percent int64) (string, error) 
 	return name, nil
 }
 
-// largestShare はいま最も多くトラフィックを受けているリビジョンと、その割合を返す。
-// 同率のときは名前の昇順で決める (実行のたびに結果が変わらないようにするため)。
-// どのリビジョンも受けていなければ空文字列。
+// largestShare returns the revision currently receiving the most traffic, and its share.
+// Ties are broken by name in ascending order (so the result does not change from run to run).
+// If no revision is receiving any, the name is the empty string.
 func largestShare(s *Status) (string, int64) {
 	shares := make(map[string]int64)
 	if s != nil {
@@ -143,9 +146,9 @@ func largestShare(s *Status) (string, int64) {
 	return best, bestShare
 }
 
-// pinnedTraffic は live サービスの *いまの* 配分を、リビジョン名で固定した spec.traffic
-// として返す。deploy --no-traffic のためのもので、latestRevision: true のままだと
-// これから作るリビジョンへ全量が移ってしまうため、具体的な名前に置き換える。
+// pinnedTraffic returns the live service's *current* split as a spec.traffic pinned by revision
+// name. It exists for deploy --no-traffic: left as latestRevision: true, all the traffic would
+// move to the revision about to be created, so it is replaced with concrete names.
 func pinnedTraffic(live *run.Service) []*run.TrafficTarget {
 	status := newStatus(live)
 	var out []*run.TrafficTarget
@@ -162,8 +165,8 @@ func pinnedTraffic(live *run.Service) []*run.TrafficTarget {
 	return out
 }
 
-// HasTraffic はマニフェストが spec.traffic を明示しているかを返す。--no-traffic が
-// それを置き換えることを警告するために使う (パースだけで API は使わない)。
+// HasTraffic reports whether the manifest sets spec.traffic explicitly. It is used to warn that
+// --no-traffic replaces it (it only parses and does not use the API).
 func HasTraffic(manifest []byte) (bool, error) {
 	svc, err := parseManifest(manifest)
 	if err != nil {

@@ -27,7 +27,8 @@ func TestParseImageRef(t *testing.T) {
 			wantName: "projects/cloudrun/locations/us/repositories/container/packages/hello/tags/latest",
 		},
 		{
-			// API が返す名前もこの形。"/" 以外をエスケープすると 404 になる (実 API で確認済み)。
+			// The names the API returns are in this form too. Escaping anything other than "/"
+			// gives a 404 (verified against the real API).
 			name:     "a nested image path is escaped with %2F",
 			image:    "us-docker.pkg.dev/cloudrun/container/team/app:v2",
 			wantAR:   true,
@@ -40,7 +41,7 @@ func TestParseImageRef(t *testing.T) {
 			wantName: "projects/p/locations/us/repositories/r/dockerImages/img@sha256:abc123",
 		},
 		{
-			// ダイジェストを先に切らないと、sha256: の ":" をタグと取り違える。
+			// Unless the digest is cut off first, the ":" in sha256: is mistaken for a tag.
 			name:     "a digest wins over what looks like a tag",
 			image:    "us-docker.pkg.dev/p/r/img@sha256:abc",
 			wantAR:   true,
@@ -69,9 +70,9 @@ func TestParseImageRef(t *testing.T) {
 	}
 }
 
-// TestParseImageRefDoesNotTreatAPathAsAHost は、最初の要素にドットもコロンも無ければ
-// ホストとみなさないことを確認する。取り違えると "team/app" の "team" をレジストリとして
-// 扱ってしまう。
+// TestParseImageRefDoesNotTreatAPathAsAHost checks that the first element is not taken as a host
+// when it has neither a dot nor a colon. Getting this wrong treats the "team" of "team/app" as a
+// registry.
 func TestParseImageRefDoesNotTreatAPathAsAHost(t *testing.T) {
 	got := parseImageRef("library/nginx:1.27")
 	if got.Host != "" {
@@ -92,7 +93,7 @@ func TestContainerImages(t *testing.T) {
 						nil,
 						{Image: ""},
 						{Image: "gcr.io/p/b:v1"},
-						{Image: "gcr.io/p/a:v1"}, // 重複
+						{Image: "gcr.io/p/a:v1"}, // duplicate
 					},
 				},
 			},

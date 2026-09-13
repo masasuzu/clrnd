@@ -8,14 +8,15 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// conditionReady は「サービス全体が使える状態か」を表す条件の型名。
+// conditionReady is the type name of the condition that says "the service as a whole is usable".
 const conditionReady = "Ready"
 
-// statusLabelWidth は Text() のラベル列の幅 (最長の "Latest created:" に合わせる)。
+// statusLabelWidth is the width of the label column in Text() (sized to the longest label,
+// "Latest created:").
 const statusLabelWidth = 17
 
-// Status はサービスの現在状態。API のレスポンスから読み取り専用の情報だけを取り出した
-// もので、JSON 出力の構造でもある。
+// Status is the current state of a service. It holds only the read-only information taken from
+// the API response, and it is also the structure of the JSON output.
 type Status struct {
 	Service               string          `json:"service"`
 	URL                   string          `json:"url,omitempty"`
@@ -27,7 +28,7 @@ type Status struct {
 	Conditions            []Condition     `json:"conditions,omitempty"`
 }
 
-// Condition は status.conditions の 1 件。
+// Condition is a single entry of status.conditions.
 type Condition struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
@@ -36,7 +37,7 @@ type Condition struct {
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
 
-// TrafficTarget は status.traffic の 1 件 (実際に配分されているトラフィック)。
+// TrafficTarget is a single entry of status.traffic (the traffic actually being routed).
 type TrafficTarget struct {
 	RevisionName string `json:"revisionName,omitempty"`
 	Tag          string `json:"tag,omitempty"`
@@ -45,7 +46,7 @@ type TrafficTarget struct {
 	Latest       bool   `json:"latestRevision,omitempty"`
 }
 
-// Status は指定したサービスの現在状態を取得する。読み取りのみで変更はしない。
+// Status fetches the current state of the given service. It only reads and changes nothing.
 func (c *Client) Status(ctx context.Context, service string) (*Status, error) {
 	obj, err := c.GetService(ctx, service)
 	if err != nil {
@@ -54,8 +55,8 @@ func (c *Client) Status(ctx context.Context, service string) (*Status, error) {
 	return newStatus(obj), nil
 }
 
-// newStatus は API のレスポンスを Status に変換する。API アクセスを伴わない純粋な処理
-// なので、整形の検証はこの関数だけで完結できる。
+// newStatus converts an API response into a Status. It is pure, with no API access, so the
+// formatting can be tested entirely through this function.
 func newStatus(obj *run.Service) *Status {
 	s := &Status{}
 	if obj == nil {
@@ -101,8 +102,8 @@ func newStatus(obj *run.Service) *Status {
 	return s
 }
 
-// Ready は Ready 条件を返す。存在しなければ nil。wait (サービスの安定待ち) でも
-// 同じ判定を使えるようにエクスポートしている。
+// Ready returns the Ready condition, or nil if there is none. It is exported so that wait
+// (waiting for the service to settle) can use the same check.
 func (s *Status) Ready() *Condition {
 	for i := range s.Conditions {
 		if s.Conditions[i].Type == conditionReady {
@@ -112,7 +113,7 @@ func (s *Status) Ready() *Condition {
 	return nil
 }
 
-// Text は人間向けの整形出力を返す。末尾は改行で終わる。
+// Text returns the human-readable formatted output. It ends with a newline.
 func (s *Status) Text() string {
 	var b strings.Builder
 	line := func(label, value string) {
@@ -125,7 +126,8 @@ func (s *Status) Text() string {
 	line("Service", s.Service)
 	line("URL", s.URL)
 
-	// Ready は理由があれば添える。メッセージは長いので独立した行に出す。
+	// Ready is shown with its reason when there is one. The message is long, so it gets its own
+	// line.
 	if c := s.Ready(); c != nil {
 		status := c.Status
 		if c.Reason != "" {
@@ -146,7 +148,7 @@ func (s *Status) Text() string {
 		for _, t := range s.Traffic {
 			name := t.RevisionName
 			if name == "" {
-				// latestRevision 指定で、まだ解決前のリビジョンを指している場合。
+				// Set via latestRevision and pointing at a revision not resolved yet.
 				name = "(latest)"
 			}
 			tag := ""

@@ -57,7 +57,8 @@ func TestParseImageOverride(t *testing.T) {
 	}
 }
 
-// TestApplyImageOverridesSingleContainer は、コンテナが 1 つなら名前を省けることを確認する。
+// TestApplyImageOverridesSingleContainer checks that the name can be omitted when there is only
+// one container.
 func TestApplyImageOverridesSingleContainer(t *testing.T) {
 	got, err := ApplyImageOverrides([]byte(validManifest), []string{"gcr.io/p/app:v2"})
 	if err != nil {
@@ -71,15 +72,15 @@ func TestApplyImageOverridesSingleContainer(t *testing.T) {
 	if len(containers) != 1 || containers[0].Image != "gcr.io/p/app:v2" {
 		t.Errorf("containers = %+v, want the image replaced", containers)
 	}
-	// 差し替え以外は保たれている。
+	// Everything other than the replacement is preserved.
 	if svc.Metadata == nil || svc.Metadata.Name != "my-svc" {
 		t.Errorf("metadata = %+v, want the rest of the manifest kept", svc.Metadata)
 	}
 }
 
-// TestApplyImageOverridesNeedsANameWithSidecars は、コンテナが複数あるときに名前を
-// 省いた指定を拒否することを確認する。黙って先頭を書き換えると、サイドカーを持つ
-// サービスで意図しないコンテナが差し替わる。
+// TestApplyImageOverridesNeedsANameWithSidecars checks that an override with the name omitted is
+// refused when there is more than one container. Silently rewriting the first one replaces the
+// wrong container in a service that has sidecars.
 func TestApplyImageOverridesNeedsANameWithSidecars(t *testing.T) {
 	_, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"gcr.io/p/app:v2"})
 	if err == nil {
@@ -92,7 +93,7 @@ func TestApplyImageOverridesNeedsANameWithSidecars(t *testing.T) {
 	}
 }
 
-// TestApplyImageOverridesByName は、名前指定でそのコンテナだけが変わることを確認する。
+// TestApplyImageOverridesByName checks that naming a container changes only that container.
 func TestApplyImageOverridesByName(t *testing.T) {
 	got, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"proxy=gcr.io/p/proxy:v2"})
 	if err != nil {
@@ -114,8 +115,9 @@ func TestApplyImageOverridesByName(t *testing.T) {
 	}
 }
 
-// TestApplyImageOverridesRejectsAnUnknownContainer は、存在しないコンテナ名を弾くことを
-// 確認する。通すと「指定したのに効いていない」まま deploy が進む。
+// TestApplyImageOverridesRejectsAnUnknownContainer checks that a container name that does not
+// exist is rejected. Letting it through means the deploy proceeds with "specified, yet not taking
+// effect".
 func TestApplyImageOverridesRejectsAnUnknownContainer(t *testing.T) {
 	_, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"sidecar=gcr.io/p/x:v2"})
 	if err == nil || !strings.Contains(err.Error(), "does not define") {
@@ -123,8 +125,8 @@ func TestApplyImageOverridesRejectsAnUnknownContainer(t *testing.T) {
 	}
 }
 
-// TestApplyImageOverridesWithoutSpecsIsAPassthrough は、指定が無ければマニフェストを
-// そのまま返すことを確認する (整形し直さない)。
+// TestApplyImageOverridesWithoutSpecsIsAPassthrough checks that, with no overrides given, the
+// manifest is returned as is (not reformatted).
 func TestApplyImageOverridesWithoutSpecsIsAPassthrough(t *testing.T) {
 	got, err := ApplyImageOverrides([]byte(validManifest), nil)
 	if err != nil {
@@ -135,9 +137,9 @@ func TestApplyImageOverridesWithoutSpecsIsAPassthrough(t *testing.T) {
 	}
 }
 
-// TestApplyImageOverridesRejectsANullContainer は、null のコンテナを含むマニフェストで
-// 落ちない (panic しない) ことを確認する。Validate はこれを弾くが、差し替えはその前に
-// 走るので、ここで見ないと nil に代入して panic する。
+// TestApplyImageOverridesRejectsANullContainer checks that a manifest containing a null container
+// does not crash it (no panic). Validate rejects this, but the override runs before it, so
+// without a check here it assigns to nil and panics.
 func TestApplyImageOverridesRejectsANullContainer(t *testing.T) {
 	const manifest = `apiVersion: serving.knative.dev/v1
 kind: Service
@@ -153,7 +155,8 @@ spec:
 	if err == nil {
 		t.Fatal("ApplyImageOverrides() error = nil, want the null container rejected")
 	}
-	// Validate と同じ言い方にする (--image の有無で説明が変わらないように)。
+	// Use the same wording as Validate (so the explanation does not change with or without
+	// --image).
 	if !strings.Contains(err.Error(), "containers[0] must not be null") {
 		t.Errorf("error = %v, want the same message Validate gives", err)
 	}

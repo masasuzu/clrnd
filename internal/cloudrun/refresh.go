@@ -9,7 +9,7 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// リビジョン名に対する Cloud Run の制約。実 API のエラーで確認したもの:
+// Cloud Run's constraints on revision names, as confirmed from real API errors:
 //   - "The revision name must be prefixed by the name of the enclosing Service with a trailing -"
 //   - "only lowercase, digits, and hyphens; must begin with letter, and may not end with
 //     hyphen; must be less than 64 characters."
@@ -17,21 +17,24 @@ const maxRevisionNameLen = 63
 
 var revisionNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*[a-z0-9]$`)
 
-// RefreshSuffix は refresh が既定で使うリビジョン名のサフィックスを返す。
-// 秒までの UTC タイムスタンプにするのは、人が見て「いつ流したか」が分かり、
-// かつ連続実行でも衝突しないため (同名リビジョンは再作成できない)。
+// RefreshSuffix returns the revision name suffix refresh uses by default.
+// It is a UTC timestamp down to the second so that a person can tell "when it was rolled out",
+// and so that consecutive runs do not collide (a revision with the same name cannot be created
+// again).
 func RefreshSuffix(now time.Time) string {
 	return "r" + now.UTC().Format("060102150405")
 }
 
-// RefreshTarget は live サービスに新しいリビジョン名を付けた定義を返す。
-// 引数は書き換えず、変更が必要な Spec / Template / Metadata の経路だけを浅くコピーする。
+// RefreshTarget returns the live service's definition with a new revision name.
+// It does not modify its argument; it shallow-copies only the Spec / Template / Metadata chain
+// that has to change.
 //
-// clrnd は原則としてリビジョン名を管理しない (init は落とし、diff は無視する) が、
-// refresh だけは例外。Cloud Run は spec.template が変わらないと新しいリビジョンを
-// 作らないため、「定義を変えずに流し直す」にはリビジョン名を明示するしかない。
-// ここで付けた名前は、次に「変更を伴う」deploy (リビジョン名を持たないマニフェスト) で消える。
-// 定義が同一なら差分ゼロで何も適用されず、名前は残ったままになる。
+// clrnd does not manage revision names as a rule (init drops them, diff ignores them), but
+// refresh is the exception. Cloud Run does not create a new revision unless spec.template
+// changes, so "roll out again without changing the definition" can only be done by naming the
+// revision explicitly. The name set here disappears with the next deploy that "carries a change"
+// (from a manifest without a revision name). If the definition is identical, the diff is empty,
+// nothing is applied, and the name stays.
 func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, error) {
 	if live == nil || live.Spec == nil || live.Spec.Template == nil {
 		return nil, errors.New("the live service has no spec.template to refresh")
@@ -44,15 +47,15 @@ func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, err
 	if err := validateRevisionName(name); err != nil {
 		return nil, err
 	}
-	// 同じ名前では新しいリビジョンが作られない。差分がゼロになって
-	// "No changes." で成功してしまい、流し直したつもりが何も起きない。
+	// The same name does not create a new revision. The diff would be empty and the command would
+	// succeed with "No changes.", so nothing happens even though a rollout was intended.
 	if revisionName(live) == name {
 		return nil, fmt.Errorf(
 			"revision %q is already the current template revision, so refreshing would do nothing; "+
 				"wait a second or pass a different --revision-suffix", name)
 	}
-	// トラフィックが特定のリビジョンへ固定されていると、新しいリビジョンは作られるが
-	// 何も配信しない。rollback の直後がこの状態になる。refresh の目的を果たせないので断る。
+	// When traffic is pinned to specific revisions, a new revision is created but serves nothing.
+	// This is the state right after a rollback. refresh cannot do its job there, so refuse.
 	if !servesLatestRevision(live) {
 		return nil, fmt.Errorf(
 			"refresh would create a revision that receives no traffic: this service pins traffic to " +
@@ -75,15 +78,15 @@ func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, err
 	return &out, nil
 }
 
-// servesLatestRevision は「最新リビジョンへトラフィックが向くか」を返す。
-// spec.traffic が未指定なら Cloud Run の既定 (latestRevision に 100%) と同じなので真。
-// rollback はトラフィックを特定のリビジョンへ固定するため、その後は偽になる。
+// servesLatestRevision reports whether traffic goes to the latest revision.
+// An unset spec.traffic is the same as Cloud Run's default (100% to latestRevision), so it is
+// true. rollback pins traffic to a specific revision, so it is false after that.
 func servesLatestRevision(live *run.Service) bool {
 	if len(live.Spec.Traffic) == 0 {
 		return true
 	}
 	for _, t := range live.Spec.Traffic {
-		// 割合 0 のタグ専用エントリは配信しないので数えない。
+		// A tag-only entry at 0% serves nothing, so it does not count.
 		if t != nil && t.LatestRevision && t.Percent > 0 {
 			return true
 		}
@@ -91,8 +94,8 @@ func servesLatestRevision(live *run.Service) bool {
 	return false
 }
 
-// validateRevisionName は Cloud Run が拒否する名前を手元で弾く。サーバに投げても
-// 同じ結果になるが、何が悪いのかを先に、分かる言葉で伝えるため。
+// validateRevisionName rejects locally the names Cloud Run would reject. Sending them to the
+// server gives the same result, but this says what is wrong up front, in understandable terms.
 func validateRevisionName(name string) error {
 	if len(name) > maxRevisionNameLen {
 		return fmt.Errorf(

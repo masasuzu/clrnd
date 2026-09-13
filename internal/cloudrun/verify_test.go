@@ -18,7 +18,7 @@ func TestSecretResourceName(t *testing.T) {
 	aliases := map[string]string{
 		"db_pass":    "projects/other-proj/secrets/db-password",
 		"with_ver":   "projects/other-proj/secrets/api-key/versions/3",
-		"short_only": "shorthand", // 異常系: projects/ 接頭辞なし
+		"short_only": "shorthand", // error case: no projects/ prefix
 	}
 	tests := []struct {
 		name    string
@@ -82,7 +82,7 @@ func TestSecretNames(t *testing.T) {
 						Env: []*run.EnvVar{
 							{Name: "A", Value: "plain"},
 							{Name: "B", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "s1", Key: "latest"}}},
-							{Name: "C", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "s1", Key: "1"}}}, // 重複
+							{Name: "C", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "s1", Key: "1"}}}, // duplicate
 						},
 					}},
 					Volumes: []*run.Volume{
@@ -99,9 +99,9 @@ func TestSecretNames(t *testing.T) {
 	}
 }
 
-// --- VerifyRemote のリモート経路 ---
+// --- VerifyRemote's remote path ---
 
-// verifyManifest は実行サービスアカウントとシークレットを参照するマニフェスト。
+// verifyManifest is a manifest that references a runtime service account and a secret.
 const verifyManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -120,9 +120,9 @@ spec:
               key: latest
 `
 
-// startVerifyAPI は IAM と Secret Manager の両方に応えるフェイク API を立て、
-// 受け取ったリクエストパスを記録する。両サービスとも同じ endpoint 指定を使うので、
-// 1 つのサーバでパスによって振り分ける。
+// startVerifyAPI starts a fake API that answers IAM and Secret Manager, and records the request
+// paths it receives. Each of the services uses the same endpoint option, so a single server routes
+// them by path.
 func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string, []option.ClientOption) {
 	t.Helper()
 	var mu sync.Mutex
@@ -155,9 +155,10 @@ func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string
 	}
 }
 
-// TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects は、実行サービスアカウントを
-// プロジェクト非依存で引くことを確認する。Cloud Run は別プロジェクトの SA を実行 SA に
-// できるので、検証対象のプロジェクトで固定すると正当な構成が 404 = Missing になる。
+// TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects checks that the runtime service account
+// is looked up independently of the project. Cloud Run can use a service account from another
+// project as the runtime service account, so pinning the project being verified turns a valid
+// setup into a 404 = Missing.
 func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
@@ -202,9 +203,9 @@ func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteTreatsOtherFailuresAsUnchecked は、権限不足などを Missing ではなく
-// Unchecked に振り分けることを確認する。これを失敗にすると、ambient な project/region を
-// 持つだけの CI のオフライン lint を壊してしまう。
+// TestVerifyRemoteTreatsOtherFailuresAsUnchecked checks that insufficient permissions and the like
+// are sorted into Unchecked rather than Missing. Making them a failure would break the offline lint
+// of a CI that merely has an ambient project/region.
 func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
@@ -220,8 +221,8 @@ func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteSkipsWhatTheManifestDoesNotReference は、参照が無ければ API を
-// 叩かないことを確認する。
+// TestVerifyRemoteSkipsWhatTheManifestDoesNotReference checks that the API is not called when
+// nothing is referenced.
 func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
@@ -237,8 +238,9 @@ func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	}
 }
 
-// arManifest は Artifact Registry のイメージ (タグ指定と入れ子パスのダイジェスト指定) を
-// 参照するマニフェスト。SA もシークレットも持たないので、確認されるのはイメージだけ。
+// arManifest is a manifest that references Artifact Registry images (one by tag, and one by digest
+// with a nested path). It has neither a service account nor a secret, so only the images are
+// checked.
 const arManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -251,10 +253,10 @@ spec:
       - image: us-docker.pkg.dev/img-project/repo/team/side@sha256:abc123
 `
 
-// TestVerifyRemoteChecksArtifactRegistryImages は、イメージの実在確認が
-// タグ指定とダイジェスト指定でそれぞれ正しいリソースを引くことを確認する。
-// ロケーションもプロジェクトもイメージ参照から取るので、別プロジェクトのイメージが
-// そのまま通る (実行 SA と同じ扱い)。
+// TestVerifyRemoteChecksArtifactRegistryImages checks that the image existence check looks up the
+// right resource for a tag reference and for a digest reference respectively.
+// Both the location and the project come from the image reference, so an image in another project
+// goes through as is (treated the same as the runtime service account).
 func TestVerifyRemoteChecksArtifactRegistryImages(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
@@ -278,7 +280,7 @@ func TestVerifyRemoteChecksArtifactRegistryImages(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteReportsAMissingImage は、404 だけを Missing にすることを確認する。
+// TestVerifyRemoteReportsAMissingImage checks that only a 404 becomes Missing.
 func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(path string) int {
 		if strings.Contains(path, "/packages/") {
@@ -299,9 +301,9 @@ func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked は、403 を Missing にしないことを
-// 確認する。実 API では存在しない (またはアクセスできない) プロジェクトが 403 を返すので、
-// ここを Missing にすると正当な構成の verify を落とす。
+// TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked checks that a 403 is not made Missing. On
+// the real API a project that does not exist (or cannot be accessed) returns 403, so making it
+// Missing here fails verify on a valid setup.
 func TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
@@ -317,13 +319,13 @@ func TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteSkipsRegistriesItCannotCheck は、確認できないレジストリについては
-// 何も言わないことを確認する。ここを警告にすると、Docker Hub のイメージを使っている
-// だけで毎回 warning が出て、警告そのものが読み飛ばされるようになる。
+// TestVerifyRemoteSkipsRegistriesItCannotCheck checks that nothing is said about registries that
+// cannot be checked. Making this a warning would print a warning on every run just for using a
+// Docker Hub image, and people would start skipping over the warnings themselves.
 func TestVerifyRemoteSkipsRegistriesItCannotCheck(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	// validManifest のイメージは gcr.io。
+	// validManifest's image is on gcr.io.
 	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
@@ -347,10 +349,10 @@ func containsPath(paths []string, want string) bool {
 	return false
 }
 
-// --- VPC コネクタ / Cloud SQL / シークレットのバージョン ---
+// --- VPC connector / Cloud SQL / secret versions ---
 
-// verifyRefsManifest は VPC コネクタ (短縮名) と Cloud SQL を参照するマニフェスト。
-// シークレットは版を明示している。
+// verifyRefsManifest is a manifest that references a VPC connector (by short name) and Cloud SQL.
+// Its secret specifies the version explicitly.
 const verifyRefsManifest = `apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -372,7 +374,7 @@ spec:
               key: "3"
 `
 
-// pathsMatching は記録されたリクエストのうち、部分文字列を含むものを返す。
+// pathsMatching returns the recorded requests that contain the substring.
 func pathsMatching(paths []string, substr string) []string {
 	var out []string
 	for _, p := range paths {
@@ -383,9 +385,9 @@ func pathsMatching(paths []string, substr string) []string {
 	return out
 }
 
-// TestVerifyRemoteChecksTheVPCConnector は、短縮名のコネクタがデプロイ先の
-// プロジェクトとリージョンで完全なリソース名に補われることを確認する。コネクタは
-// リージョナルなリソースなので、ここだけリージョンが要る。
+// TestVerifyRemoteChecksTheVPCConnector checks that a connector given by short name is completed
+// into a full resource name using the deploy target's project and region. A connector is a
+// regional resource, so this is the only place the region is needed.
 func TestVerifyRemoteChecksTheVPCConnector(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
@@ -404,9 +406,9 @@ func TestVerifyRemoteChecksTheVPCConnector(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteKeepsAFullyQualifiedConnector は、完全なリソース名で書かれている
-// 場合にそれをそのまま使うことを確認する (別プロジェクト・別リージョンのコネクタを
-// デプロイ先の値で上書きしない)。
+// TestVerifyRemoteKeepsAFullyQualifiedConnector checks that, when written as a full resource name,
+// it is used as written (a connector in another project or region is not overwritten with the
+// deploy target's values).
 func TestVerifyRemoteKeepsAFullyQualifiedConnector(t *testing.T) {
 	manifest := strings.Replace(verifyRefsManifest, "vpc-access-connector: my-connector",
 		"vpc-access-connector: projects/other-project/locations/us-central1/connectors/shared", 1)
@@ -422,11 +424,12 @@ func TestVerifyRemoteKeepsAFullyQualifiedConnector(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteReportsMissingReferences は、404 が返る参照が Missing になることを
-// 確認する。どれもデプロイして初めて落ちる種類の参照。
+// TestVerifyRemoteReportsMissingReferences checks that references that come back 404 become
+// Missing. Each of them is the kind of reference that only fails once you deploy.
 func TestVerifyRemoteReportsMissingReferences(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(path string) int {
-		// シークレット本体は在るが、指定された版だけが無い状況を作る。
+		// Set up a situation where the secret itself exists but only the specified version does
+		// not.
 		if strings.Contains(path, "/versions/") ||
 			strings.Contains(path, "/connectors/") ||
 			strings.Contains(path, "/instances/") {
@@ -453,16 +456,16 @@ func TestVerifyRemoteReportsMissingReferences(t *testing.T) {
 			t.Errorf("Missing = %v, want it to contain %q", res.Missing, want)
 		}
 	}
-	// Cloud SQL は接続名のプロジェクトで引く (デプロイ先で固定しない)。
+	// Cloud SQL is looked up in the connection name's project (not pinned to the deploy target).
 	if got := pathsMatching(recorded(), "/instances/"); len(got) != 1 ||
 		!strings.Contains(got[0], "other-project") {
 		t.Errorf("Cloud SQL lookups = %v, want the project from the connection name", got)
 	}
 }
 
-// TestVerifyRemoteSkipsVersionsOfAMissingSecret は、シークレット自体が無い場合に
-// その版を問い合わせないことを確認する。両方並べても分かることは増えず、本当の原因が
-// 埋もれる。
+// TestVerifyRemoteSkipsVersionsOfAMissingSecret checks that, when the secret itself does not
+// exist, its version is not queried. Listing the two side by side tells nothing more, and buries
+// the real cause.
 func TestVerifyRemoteSkipsVersionsOfAMissingSecret(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(path string) int {
 		if strings.Contains(path, "/secrets/") {
@@ -486,8 +489,8 @@ func TestVerifyRemoteSkipsVersionsOfAMissingSecret(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteReportsAMalformedCloudSQLConnection は、接続名の形が違うものを
-// 「無い」ではなく「確かめられない」に倒すことを確認する。
+// TestVerifyRemoteReportsAMalformedCloudSQLConnection checks that a connection name of the wrong
+// shape falls on the side of "could not be checked" rather than "does not exist".
 func TestVerifyRemoteReportsAMalformedCloudSQLConnection(t *testing.T) {
 	manifest := strings.Replace(verifyRefsManifest,
 		"cloudsql-instances: other-project:asia-northeast1:main-db",
@@ -509,9 +512,8 @@ func TestVerifyRemoteReportsAMalformedCloudSQLConnection(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteSkipsUnreferencedAPIs は、アノテーションが無いマニフェストで
-// VPC / Cloud SQL の API を触らないことを確認する。使っていない API の有効化を
-// verify のために要求しない。
+// TestVerifyRemoteSkipsUnreferencedAPIs checks that, for a manifest without the annotations, the
+// VPC / Cloud SQL APIs are not touched. verify does not require enabling APIs that are not in use.
 func TestVerifyRemoteSkipsUnreferencedAPIs(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
@@ -526,9 +528,9 @@ func TestVerifyRemoteSkipsUnreferencedAPIs(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteReportsADestroyedSecretVersion は、破棄・無効化された版を実在しない
-// 版と同じ扱いにすることを確認する。Secret Manager は get ではこれらも 200 で返す
-// (読めなくなるのは access の方) ので、状態を見ないと素通りする。
+// TestVerifyRemoteReportsADestroyedSecretVersion checks that destroyed and disabled versions are
+// treated the same as versions that do not exist. Secret Manager returns these with a 200 on get
+// too (it is access that stops working), so without looking at the state they slip through.
 func TestVerifyRemoteReportsADestroyedSecretVersion(t *testing.T) {
 	for _, state := range []string{"DESTROYED", "DISABLED"} {
 		t.Run(state, func(t *testing.T) {
@@ -558,10 +560,10 @@ func TestVerifyRemoteReportsADestroyedSecretVersion(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteReadsTheVersionFromTheSecretPath は、版が name に埋まっている形
-// (projects/<p>/secrets/<s>/versions/<v>) でもその版を引くことを確認する。
-// secretResourceName はこの形を明示的に扱うので、版の取り出しだけ食い違うと
-// 「常に latest を見ている」状態になる。
+// TestVerifyRemoteReadsTheVersionFromTheSecretPath checks that the version is looked up even when
+// it is embedded in the name (projects/<p>/secrets/<s>/versions/<v>).
+// secretResourceName handles this form explicitly, so if only the version extraction disagreed,
+// it would end up "always looking at latest".
 func TestVerifyRemoteReadsTheVersionFromTheSecretPath(t *testing.T) {
 	manifest := strings.Replace(verifyManifest,
 		"              name: api-token\n              key: latest",
@@ -577,9 +579,10 @@ func TestVerifyRemoteReadsTheVersionFromTheSecretPath(t *testing.T) {
 	}
 }
 
-// TestVerifyRemoteHandlesADomainScopedCloudSQLProject は、ドメインスコープの
-// プロジェクト (example.com:my-project) を含む接続名を扱えることを確認する。
-// 左から 3 つに切ると、正当な値が毎回「形が違う」警告になる。
+// TestVerifyRemoteHandlesADomainScopedCloudSQLProject checks that a connection name containing a
+// domain-scoped project (example.com:my-project) is handled.
+// Splitting it into three from the left turns a valid value into a "wrong shape" warning every
+// time.
 func TestVerifyRemoteHandlesADomainScopedCloudSQLProject(t *testing.T) {
 	manifest := strings.Replace(verifyRefsManifest,
 		"cloudsql-instances: other-project:asia-northeast1:main-db",

@@ -8,17 +8,17 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// ImageOverride は --image の指定 1 件。Container が空なら「マニフェストに 1 つしかない
-// コンテナ」を指す。
+// ImageOverride is a single --image value. An empty Container means "the only container in the
+// manifest".
 type ImageOverride struct {
 	Container string
 	Image     string
 }
 
-// ParseImageOverride は --image の値を解釈する。形は "<image>" か "<container>=<image>"。
+// ParseImageOverride parses an --image value. The form is "<image>" or "<container>=<image>".
 //
-// 最初の "=" で切って曖昧さは無い: コンテナ名にもイメージ参照 (host/path:tag@digest) にも
-// "=" は現れない。
+// Splitting at the first "=" is unambiguous: "=" appears in neither a container name nor an
+// image reference (host/path:tag@digest).
 func ParseImageOverride(spec string) (ImageOverride, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -37,13 +37,14 @@ func ParseImageOverride(spec string) (ImageOverride, error) {
 	return ImageOverride{Container: name, Image: image}, nil
 }
 
-// ApplyImageOverrides はマニフェストの containers[].image を差し替えたものを返す。
-// 指定が無ければマニフェストをそのまま返す (指定が無いときに整形し直さないため)。
+// ApplyImageOverrides returns the manifest with containers[].image replaced.
+// With no overrides it returns the manifest unchanged (so nothing is reformatted when the flag is
+// not used).
 //
-// 差し替えは「マニフェストが唯一の入力」という原則の例外なので、当てられる範囲を狭く
-// 保つ: 名前を省略できるのはコンテナが 1 つのときだけで、複数あるサービスでは
-// どのコンテナかを明示させる。黙って先頭を書き換えると、サイドカーを持つサービスで
-// 意図しないコンテナが差し替わる。
+// An override is an exception to the principle that "the manifest is the only input", so its
+// reach is kept narrow: the container name may be omitted only when there is one container, and a
+// service with several has to say which container. Silently rewriting the first one would, on a
+// service with a sidecar, replace a container that was never meant to change.
 func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	if len(specs) == 0 {
 		return manifest, nil
@@ -65,9 +66,10 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	if len(containers) == 0 {
 		return nil, fmt.Errorf("--image needs a container to apply to, but the manifest defines none")
 	}
-	// null のコンテナ (containers: の下に裸の "-" があるマニフェスト) は Validate が
-	// 弾くが、差し替えはその前に走る。ここで見ないと nil に代入して panic する。
-	// メッセージは Validate と揃える: --image の有無で違う説明が出ないようにする。
+	// A null container (a manifest with a bare "-" under containers:) is rejected by Validate,
+	// but the override runs before that. Without checking here, it would assign to nil and panic.
+	// The message matches Validate's, so the explanation does not depend on whether --image was
+	// passed.
 	for i, c := range containers {
 		if c == nil {
 			return nil, fmt.Errorf("spec.template.spec.containers[%d] must not be null", i)
@@ -89,7 +91,8 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	return out, nil
 }
 
-// findContainer は名前でコンテナを探す。name が空ならコンテナが 1 つの場合だけ成功する。
+// findContainer looks a container up by name. An empty name succeeds only when there is exactly
+// one container.
 func findContainer(containers []*run.Container, name string) (*run.Container, error) {
 	if name == "" {
 		if len(containers) != 1 {
@@ -108,7 +111,8 @@ func findContainer(containers []*run.Container, name string) (*run.Container, er
 		name, strings.Join(containerNames(containers), ", "))
 }
 
-// containerNames はエラーに載せるコンテナ名の一覧。名前の無いコンテナは "<unnamed>"。
+// containerNames lists the container names to put in an error. A container with no name is
+// "<unnamed>".
 func containerNames(containers []*run.Container) []string {
 	out := make([]string, 0, len(containers))
 	for _, c := range containers {

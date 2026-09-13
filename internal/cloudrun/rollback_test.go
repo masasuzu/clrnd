@@ -7,13 +7,13 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// rev はテスト用の Revision を組み立てる (ListRevisions が返す形)。
+// rev builds a Revision for tests (in the shape ListRevisions returns).
 func rev(name, ready string, percent int64) Revision {
 	return Revision{Name: name, Ready: ready, Percent: percent}
 }
 
 func TestSelectRollbackRevision(t *testing.T) {
-	// 新しい順。00007 がいまトラフィックを受けている。
+	// Newest first. 00007 is currently receiving traffic.
 	revisions := Revisions{
 		rev("my-svc-00008-ghi", conditionFalse, 0),
 		rev("my-svc-00007-abc", conditionTrue, 100),
@@ -40,7 +40,8 @@ func TestSelectRollbackRevision(t *testing.T) {
 			want:      "my-svc-00005-jkl",
 		},
 		{
-			// 明示指定は Ready でなくても選ぶ (警告は cmd 側)。
+			// An explicitly requested revision is chosen even when it is not Ready (the
+			// warning is cmd's job).
 			name:      "explicit revision may be not ready",
 			revisions: revisions,
 			requested: "my-svc-00008-ghi",
@@ -99,14 +100,15 @@ func TestSelectRollbackRevision(t *testing.T) {
 	}
 }
 
-// TestSelectRollbackRevisionDuringACanary は、トラフィックが分割されている最中に
-// 「安定版」へ戻すことを確認する。割合の最も大きいものを現行とみなすと、安定版を
-// 現行と誤認してその 1 つ前まで戻り、既知の良い版を飛び越してしまう。
+// TestSelectRollbackRevisionDuringACanary checks that, while traffic is split, it rolls back to
+// "the stable revision". Taking the one with the largest share as the current revision mistakes
+// the stable revision for the current one, rolls back to the one before it, and skips past the
+// known-good version.
 func TestSelectRollbackRevisionDuringACanary(t *testing.T) {
 	revisions := Revisions{
-		rev("my-svc-00003", conditionTrue, 10), // 新しいカナリア
-		rev("my-svc-00002", conditionTrue, 90), // 安定版
-		rev("my-svc-00001", conditionTrue, 0),  // 2 世代前
+		rev("my-svc-00003", conditionTrue, 10), // the new canary
+		rev("my-svc-00002", conditionTrue, 90), // the stable revision
+		rev("my-svc-00001", conditionTrue, 0),  // two generations back
 	}
 	got, err := SelectRollbackRevision(revisions, "")
 	if err != nil {
@@ -118,14 +120,13 @@ func TestSelectRollbackRevisionDuringACanary(t *testing.T) {
 	}
 }
 
-// TestSelectRollbackRevisionUsesTheNewestServingRevision は、古い版の方が割合が
-// 大きくても、現行は「トラフィックを受けている中で最も新しいもの」であることを
-// 確認する。
+// TestSelectRollbackRevisionUsesTheNewestServingRevision checks that, even when an older revision
+// has a larger share, the current revision is "the newest of those receiving traffic".
 func TestSelectRollbackRevisionUsesTheNewestServingRevision(t *testing.T) {
 	revisions := Revisions{
-		rev("my-svc-00004", conditionTrue, 0),  // 配信していない
-		rev("my-svc-00003", conditionTrue, 1),  // 最も新しい配信版
-		rev("my-svc-00002", conditionTrue, 99), // 割合は最大だが古い
+		rev("my-svc-00004", conditionTrue, 0),  // not serving
+		rev("my-svc-00003", conditionTrue, 1),  // the newest serving revision
+		rev("my-svc-00002", conditionTrue, 99), // the largest share, but older
 		rev("my-svc-00001", conditionTrue, 0),
 	}
 	got, err := SelectRollbackRevision(revisions, "")
@@ -167,15 +168,15 @@ func TestRollbackTarget(t *testing.T) {
 	if got.Spec.Traffic[0].LatestRevision {
 		t.Error("Traffic[0].LatestRevision = true, want the traffic pinned to a revision")
 	}
-	// タグ付きの経路は残す (割合は 0)。
+	// Tagged routes are kept (with a 0 share).
 	if got.Spec.Traffic[1].Tag != "previous" || got.Spec.Traffic[1].Percent != 0 {
 		t.Errorf("Traffic[1] = %+v, want the tag kept at 0%%", got.Spec.Traffic[1])
 	}
-	// テンプレートには触らない (新しいリビジョンを作らせない)。
+	// The template is not touched (so no new revision is created).
 	if got.Spec.Template != live.Spec.Template {
 		t.Error("RollbackTarget must not touch spec.template")
 	}
-	// 引数は書き換えない。
+	// The argument is not mutated.
 	if len(live.Spec.Traffic) != 2 || !live.Spec.Traffic[0].LatestRevision {
 		t.Errorf("RollbackTarget mutated its argument: %+v", live.Spec.Traffic)
 	}

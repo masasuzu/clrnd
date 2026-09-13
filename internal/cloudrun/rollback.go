@@ -7,23 +7,24 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// SelectRollbackRevision は戻し先のリビジョンを決める。revisions は ListRevisions が
-// 返す「新しい順」であることを前提にする。
+// SelectRollbackRevision decides which revision to roll back to. It assumes revisions is in the
+// "newest first" order ListRevisions returns.
 //
-// requested が指定されていればそれを (このサービスのものか確認したうえで) 返す。
-// 省略時は、いまトラフィックを受けているリビジョンより 1 つ古い Ready なリビジョンを選ぶ。
-// トラフィックを失った古いリビジョンも Ready=True (Reason=Retired) のままなので、
-// これで「直前に動いていた版」が選べる。
+// If requested is given, it returns that revision (after confirming it belongs to this service).
+// Otherwise it picks the first Ready revision older than the one currently receiving traffic.
+// An old revision that has lost its traffic stays Ready=True (Reason=Retired), so this finds
+// "the version that was running just before".
 //
-// 「いまトラフィックを受けているリビジョン」は *最も新しいもの* を指す。最も割合の
-// 大きいものではない。カナリア中 (新 10% / 安定 90%) に割合で選ぶと、安定版を現行と
-// 誤認してその 1 つ前まで戻してしまい、既知の良い版を飛び越すことになる。
+// "The revision currently receiving traffic" means the *newest* one, not the one with the largest
+// share. Mid-canary (new 10% / stable 90%), choosing by share mistakes the stable version for the
+// current one and rolls back to the one before it, skipping past the known-good version.
 func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, error) {
 	if requested != "" {
 		return FindRevision(revisions, requested)
 	}
 
-	// revisions は新しい順なので、最初に見つかった「割合を持つもの」が最新の配信版。
+	// revisions is newest first, so the first one found "with a share" is the newest serving
+	// version.
 	current := -1
 	for i, r := range revisions {
 		if r.Percent > 0 {
@@ -44,9 +45,9 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 		revisions[current].Name)
 }
 
-// FindRevision は一覧から名前の一致するリビジョンを返す。見つからなければエラー。
-// 「このサービスのリビジョンか」の確認でもある: 打ち間違えた名前へトラフィックを
-// 振り向けると、どのリビジョンにも届かない配分ができてしまう。
+// FindRevision returns the revision in the list whose name matches. It is an error if none does.
+// It is also the check that "this is a revision of this service": sending traffic to a mistyped
+// name would produce a split that reaches no revision at all.
 func FindRevision(revisions Revisions, name string) (*Revision, error) {
 	for i := range revisions {
 		if revisions[i].Name == name {
@@ -56,12 +57,13 @@ func FindRevision(revisions Revisions, name string) (*Revision, error) {
 	return nil, fmt.Errorf("revision %q does not belong to this service", name)
 }
 
-// RollbackTarget は live サービスのトラフィックを revision へ 100% 振り向けた新しい
-// サービス定義を返す。引数は書き換えず、変更が必要な Spec だけを浅くコピーする。
+// RollbackTarget returns a new service definition with 100% of the live service's traffic sent
+// to revision. It does not modify its argument; it shallow-copies only the Spec that has to
+// change.
 //
-// spec.template には触らないので新しいリビジョンは作られない。タグ付きの経路は
-// 割合 0 で残す (タグ URL でのアクセス手段を rollback で失わせない)。タグの無い
-// 既存の配分 (latestRevision を含む) は戻し先に集約されるため落とす。
+// spec.template is not touched, so no new revision is created. Tagged routes are kept at 0% (a
+// rollback must not take away access through the tag URL). Existing untagged entries (including
+// latestRevision) are dropped, because their traffic is consolidated onto the target.
 func RollbackTarget(live *run.Service, revision string) (*run.Service, error) {
 	if live == nil || live.Spec == nil {
 		return nil, errors.New("the live service has no spec to roll back")

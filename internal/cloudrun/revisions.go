@@ -11,58 +11,62 @@ import (
 	run "google.golang.org/api/run/v1"
 )
 
-// serviceLabel はリビジョンが属するサービスを示すラベル。List の絞り込みに使う。
+// serviceLabel is the label naming the service a revision belongs to. Used to filter the List.
 const serviceLabel = "serving.knative.dev/service"
 
-// listRevisionsPageLimit は 1 回の List で取る件数。Continue トークンで全件たどる。
+// listRevisionsPageLimit is how many items a single List fetches. The Continue token walks the
+// whole list.
 const listRevisionsPageLimit = 100
 
-// listRevisionsMaxPages はページ送りの上限。1 サービスあたり 100 * 1000 件を超える
-// リビジョンは現実には存在しないので、ここに当たるのはサーバが同じトークンを返し続けた
-// ような異常時に限る。上限が無いと items が際限なく伸び、--timeout の無い ctx では
-// 止める手段が無くなる。上限に当たった場合は打ち切った一覧を返さずエラーにする
-// (理由は ListRevisions のコメントを参照)。
+// listRevisionsMaxPages is the upper bound on paging. No real service has more than 100 * 1000
+// revisions, so hitting this only happens when something is wrong, such as the server returning
+// the same token over and over. Without a bound, items grows without limit, and a ctx with no
+// --timeout has no way to stop it. When the bound is hit, it returns an error rather than the
+// truncated list (see the ListRevisions comment for why).
 const listRevisionsMaxPages = 1000
 
-// Revision はサービスに属するリビジョン 1 件の要約。JSON 出力の構造でもある。
+// Revision is a summary of a single revision belonging to a service. It is also the structure of
+// the JSON output.
 type Revision struct {
 	Name string `json:"name"`
-	// Image は最初のコンテナのイメージ。Images[0] と同じ値で、JSON の後方互換の
-	// ために残している (jq '.[].image' を書いている利用者を黙って壊さない)。
-	// 新しく書くなら Images を見ること。
+	// Image is the first container's image. It holds the same value as Images[0] and is kept for
+	// JSON backward compatibility (so users who wrote jq '.[].image' are not silently broken).
+	// New code should read Images.
 	Image string `json:"image,omitempty"`
-	// Images はこのリビジョンの全コンテナのイメージ。マニフェストに書かれた順で、
-	// サイドカーがあれば複数入る。
+	// Images are the images of every container in this revision, in the order written in the
+	// manifest; there are several when there is a sidecar.
 	Images []string `json:"images,omitempty"`
-	// Created は API が返す作成時刻の文字列 (RFC3339)。
+	// Created is the creation time string the API returns (RFC3339).
 	Created string `json:"created,omitempty"`
-	// Ready は Ready 条件の Status (True/False/Unknown)。条件が無ければ空。
+	// Ready is the Status of the Ready condition (True/False/Unknown). Empty if there is no
+	// condition.
 	Ready  string `json:"ready,omitempty"`
 	Reason string `json:"reason,omitempty"`
-	// Percent は現在このリビジョンに向いているトラフィックの合計。
+	// Percent is the total traffic currently going to this revision.
 	Percent int64 `json:"percent"`
-	// Tags はこのリビジョンに付いたトラフィックタグ。
+	// Tags are the traffic tags attached to this revision.
 	Tags []string `json:"tags,omitempty"`
-	// Pinned は spec.traffic がこのリビジョンを名指ししているか。status.traffic に
-	// 割合が現れる前 (ロールアウト中や、まだ解決されていないエントリがある間) でも
-	// 保護できるようにするための印。表示用の情報ではないので JSON には出さない。
+	// Pinned is whether spec.traffic names this revision. It is a marker that lets the revision be
+	// protected even before a share shows up in status.traffic (during a rollout, or while some
+	// entry is still unresolved). It is not display information, so it is not in the JSON.
 	Pinned bool `json:"-"`
 }
 
-// IsReady はリビジョンが Ready かを返す。トラフィックを失った古いリビジョンも
-// Ready=True (Reason=Retired) のままなので、これは「使える版か」の判定になる。
+// IsReady reports whether the revision is Ready. An old revision that has lost its traffic stays
+// Ready=True (Reason=Retired), so this decides "is this a usable version".
 func (r Revision) IsReady() bool { return r.Ready == conditionTrue }
 
-// Revisions はリビジョン一覧。表示のために型を付けている。
+// Revisions is a list of revisions. It has its own type for display.
 type Revisions []Revision
 
-// ListRevisions はサービスに属するリビジョンを新しい順に返す。
-// トラフィック配分は Service 側にしか無いので、両方を引いて突き合わせる。
+// ListRevisions returns the revisions belonging to a service, newest first.
+// The traffic split exists only on the Service, so it fetches both and joins them.
 //
-// ページ送りが正常に終わらなかった場合 (同じ Continue トークンが返る、上限ページ数に
-// 達してもトークンが残る) は、そこまでの一覧ではなくエラーを返す。不完全な一覧を
-// 完全なものとして扱うと、rollback が現行のリビジョンや直前の Ready なリビジョンを
-// 見落として誤った版へ戻しうる。表示だけの revisions でも、黙って欠けるより落ちたほうがよい。
+// If paging does not end normally (the same Continue token comes back, or a token remains after
+// the page limit is reached), it returns an error rather than the list read so far. Treating an
+// incomplete list as complete can make rollback miss the current revision or the previous Ready
+// revision and roll back to the wrong version. Even for revisions, which only displays, failing is
+// better than silently missing entries.
 func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, error) {
 	svc, err := c.GetService(ctx, service)
 	if err != nil {
@@ -91,8 +95,9 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 			items = append(items, resp.Items...)
 			break
 		}
-		// 同じトークンが返ってきたら、次のページも同じ応答になる。追い続けても進まないので
-		// 止めるが、ここまでの一覧は「同じページを 2 回読んだもの」で重複も欠落もありうる。
+		// If the same token comes back, the next page will be the same response. Following it
+		// makes no progress, so stop — but the list so far "has read the same page twice" and
+		// can hold both duplicates and gaps.
 		if resp.Metadata.Continue == token {
 			return nil, fmt.Errorf("failed to list revisions of service %q: pagination did not advance "+
 				"(the API returned the same continue token twice)", service)
@@ -104,9 +109,9 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 	return newRevisions(items, newStatus(svc), pinnedRevisionNames(svc)), nil
 }
 
-// pinnedRevisionNames は spec.traffic が名指ししているリビジョンを集める。
-// status 側は配信が落ち着くまで名前が入らないことがあるので、削除の保護は宣言 (spec)
-// も見て決める。
+// pinnedRevisionNames collects the revisions spec.traffic names.
+// The status side sometimes has no names until serving settles, so protection from deletion also
+// looks at the declaration (spec).
 func pinnedRevisionNames(svc *run.Service) map[string]bool {
 	out := make(map[string]bool)
 	if svc == nil || svc.Spec == nil {
@@ -123,14 +128,14 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 		followsLatest = followsLatest || t.LatestRevision
 	}
 
-	// latestRevision: true は名前を書かないので、上のループでは何も保護されない。
-	// ロールアウト中は新しいリビジョンが一覧に現れていても status.traffic にはまだ
-	// 割合が出ないため、そのままだと --keep 0 で「これから配信する版」を消せてしまう。
-	// 宣言がどのリビジョンに解決されうるかを status から補う。
+	// latestRevision: true writes no name, so the loop above protects nothing for it.
+	// During a rollout the new revision can already be in the list while status.traffic shows no
+	// share for it yet, so left as is, --keep 0 could delete "the version about to serve".
+	// Fill in from status which revisions the declaration can resolve to.
 	if followsLatest && svc.Status != nil {
 		for _, name := range []string{
-			svc.Status.LatestReadyRevisionName,   // いま latestRevision が指している版
-			svc.Status.LatestCreatedRevisionName, // 収束後に指すことになる版
+			svc.Status.LatestReadyRevisionName,   // the revision latestRevision points to now
+			svc.Status.LatestCreatedRevisionName, // the revision it will point to once converged
 		} {
 			if name != "" {
 				out[name] = true
@@ -140,8 +145,8 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 	return out
 }
 
-// newRevisions は API のレスポンスを Revisions に変換する。API アクセスを伴わない
-// 純粋な処理なので、整形や並び順の検証はこの関数だけで完結できる。
+// newRevisions converts an API response into Revisions. It is pure, with no API access, so the
+// formatting and ordering can be tested entirely through this function.
 func newRevisions(items []*run.Revision, status *Status, pinned map[string]bool) Revisions {
 	traffic := trafficByRevision(status)
 
@@ -174,8 +179,8 @@ func newRevisions(items []*run.Revision, status *Status, pinned map[string]bool)
 	return out
 }
 
-// revisionTraffic は 1 リビジョンに向いたトラフィックの合計。同じリビジョンが
-// 割合用とタグ用で複数エントリに現れることがあるのでまとめる。
+// revisionTraffic is the total traffic going to one revision. The same revision can appear in
+// more than one entry (one for a share, one for a tag), so they are combined.
 type revisionTraffic struct {
 	percent int64
 	tags    []string
@@ -200,9 +205,9 @@ func trafficByRevision(s *Status) map[string]revisionTraffic {
 	return out
 }
 
-// revisionImages はリビジョンのコンテナイメージを nil セーフに、spec の順で取り出す。
-// Cloud Run のサービスはサイドカーを持てるので、最初の 1 つだけを返すと
-// 「表示されていないイメージが動いている」状態になる。
+// revisionImages extracts a revision's container images nil-safely, in spec order.
+// Cloud Run services can have sidecars, so returning only the first one would leave "an image
+// that is running but not shown".
 func revisionImages(r *run.Revision) []string {
 	if r == nil || r.Spec == nil {
 		return nil
@@ -216,7 +221,7 @@ func revisionImages(r *run.Revision) []string {
 	return images
 }
 
-// revisionReady はリビジョンの Ready 条件を nil セーフに取り出す。
+// revisionReady extracts a revision's Ready condition nil-safely.
 func revisionReady(r *run.Revision) *run.GoogleCloudRunV1Condition {
 	if r == nil || r.Status == nil {
 		return nil
@@ -229,8 +234,9 @@ func revisionReady(r *run.Revision) *run.GoogleCloudRunV1Condition {
 	return nil
 }
 
-// sortRevisionsNewestFirst は作成時刻の新しい順に並べる。時刻が読めない場合は
-// リビジョン名の降順にする (Cloud Run の採番は連番なので新しいものが後ろ)。
+// sortRevisionsNewestFirst sorts by creation time, newest first. When the time cannot be parsed,
+// it sorts by revision name in descending order (Cloud Run numbers revisions sequentially, so
+// newer ones sort later).
 func sortRevisionsNewestFirst(rs Revisions) {
 	sort.SliceStable(rs, func(i, j int) bool {
 		ti, oki := time.Parse(time.RFC3339, rs[i].Created)
@@ -239,7 +245,7 @@ func sortRevisionsNewestFirst(rs Revisions) {
 		case oki == nil && okj == nil && !ti.Equal(tj):
 			return ti.After(tj)
 		case (oki == nil) != (okj == nil):
-			// 時刻が読めたものを先に出す。
+			// Put the ones whose time could be parsed first.
 			return oki == nil
 		default:
 			return rs[i].Name > rs[j].Name
@@ -247,7 +253,7 @@ func sortRevisionsNewestFirst(rs Revisions) {
 	})
 }
 
-// Text は人間向けの表を返す。末尾は改行で終わる。空なら空文字列。
+// Text returns a human-readable table. It ends with a newline. Empty if there are no revisions.
 func (rs Revisions) Text() string {
 	if len(rs) == 0 {
 		return ""
@@ -261,12 +267,12 @@ func (rs Revisions) Text() string {
 			dash(r.Name), dash(readyLabel(r)), r.Percent,
 			dash(strings.Join(r.Tags, ",")), dash(r.Created), dash(strings.Join(r.Images, ",")))
 	}
-	// tabwriter は Flush で初めて書き出す。失敗はビルダー相手では起きない。
+	// tabwriter only writes on Flush. Writing to a builder cannot fail.
 	_ = w.Flush()
 	return b.String()
 }
 
-// readyLabel は READY 列の表示を組み立てる。理由があれば添える。
+// readyLabel builds what the READY column shows, with the reason appended when there is one.
 func readyLabel(r Revision) string {
 	if r.Ready == "" {
 		return ""
@@ -277,7 +283,7 @@ func readyLabel(r Revision) string {
 	return fmt.Sprintf("%s (%s)", r.Ready, r.Reason)
 }
 
-// dash は空欄を "-" にする。列がずれて読みにくくならないようにするため。
+// dash turns an empty cell into "-", so the columns do not shift and become hard to read.
 func dash(s string) string {
 	if s == "" {
 		return "-"
@@ -285,13 +291,13 @@ func dash(s string) string {
 	return s
 }
 
-// revisionName は namespaces API のリビジョンのリソース名を組み立てる。
+// revisionName builds a revision's resource name for the namespaces API.
 func (c *Client) revisionName(revision string) string {
 	return fmt.Sprintf("namespaces/%s/revisions/%s", c.project, revision)
 }
 
-// DeleteRevision はリビジョンを 1 件削除する。Cloud Run は古いリビジョンを自動では
-// 消さないので、掃除はこちらから呼ぶしかない。
+// DeleteRevision deletes a single revision. Cloud Run does not delete old revisions on its own, so
+// cleaning up can only be done by calling this.
 func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
 	if _, err := c.api.Namespaces.Revisions.Delete(c.revisionName(revision)).Context(ctx).Do(); err != nil {
 		return fmt.Errorf("failed to delete revision %q: %w", revision, err)
@@ -299,20 +305,22 @@ func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
 	return nil
 }
 
-// SelectPrunableRevisions は削除してよいリビジョンを新しい順の一覧から選ぶ。
-// revisions は ListRevisions が返す「新しい順」であることを前提にする。
+// SelectPrunableRevisions chooses, from a newest-first list, the revisions that may be deleted.
+// It assumes revisions is in the "newest first" order ListRevisions returns.
 //
-// 規則は次のとおりで、どれも「消して困るものを消さない」ためにある。
-//   - 新しい方から keep 件はそのまま残す (保護されているかどうかに関わらず数える。
-//     数え方を変えると、--keep 3 と指定したのに 4 件残ったり、保護されたリビジョンの
-//     数だけ古い版が余計に消えたりして、指定した数と結果が一致しなくなる)
-//   - それより古くても、トラフィックが向いているもの、spec.traffic が名指ししているもの、
-//     タグが付いているものは残す。配信中の版を消せばサービスが落ちるし、タグは URL の
-//     入口なので消せば経路が消える。spec も見るのは、status 側の割合はロールアウトが
-//     落ち着くまで現れないことがあり、その隙に「どれも 0%」に見えてしまうため
+// The rules are as follows, and each exists so that nothing whose loss would hurt is deleted.
+//   - The newest keep entries are left as they are (counted whether or not they are protected.
+//     Counting any other way would make the result disagree with the number given: --keep 3
+//     could leave 4, or as many extra old versions as there are protected revisions could be
+//     deleted)
+//   - Even when older than that, anything receiving traffic, named by spec.traffic, or carrying a
+//     tag is kept. Deleting a serving version takes the service down, and a tag is the entry point
+//     of a URL, so deleting it removes that route. spec is consulted too because the share on the
+//     status side can be absent until a rollout settles, and in that window everything looks
+//     like "0%"
 //
-// keep が負の場合は呼び出し側で弾くこと (ここで 0 に丸めると、計算を誤った CI が
-// 保護対象以外を全部消してしまう)。
+// A negative keep must be rejected by the caller (clamping it to 0 here would let a CI job that
+// miscomputed it delete everything that is not protected).
 func SelectPrunableRevisions(revisions Revisions, keep int) Revisions {
 	if keep < 0 {
 		keep = 0

@@ -14,27 +14,28 @@ import (
 	vpcaccess "google.golang.org/api/vpcaccess/v1"
 )
 
-// RemoteCheck はリモート実在チェックの結果。Missing は実在しないと確定したリソースの説明
-// (verify を失敗させる)。Unchecked は権限不足・API 未到達・認証なしなどで確認できなかった
-// ものの説明 (verify を失敗させず、警告として扱う)。後者を失敗にすると、ambient な
-// project/region を持つだけの CI のオフライン lint を壊してしまうため区別する。
+// RemoteCheck is the result of the remote existence checks. Missing describes resources confirmed
+// not to exist (fails verify). Unchecked describes what could not be confirmed because of missing
+// permissions, an unreachable API, no credentials and so on (does not fail verify; treated as a
+// warning). The two are kept apart because failing on the latter would break the offline lint of
+// a CI job that merely has an ambient project/region.
 type RemoteCheck struct {
 	Missing   []string
 	Unchecked []string
 }
 
-// VerifyRemote はマニフェストが参照するリソースが実在するかを API で確認する。Validate
-// (ローカルなスキーマ検証) を補完するもので、サービスアカウント・Secret Manager の
-// シークレットとその版・VPC コネクタ・Cloud SQL インスタンス・コンテナイメージの実在を
-// ADC で確認する。404 (実在しない) のみを Missing として返し、それ以外のエラー
-// (クライアント初期化失敗・権限不足・API 無効など) は Unchecked に振り分ける。
+// VerifyRemote checks through the API that the resources the manifest references exist. It
+// complements Validate (local schema validation), confirming with ADC the existence of the
+// service account, Secret Manager secrets and their versions, the VPC connector, Cloud SQL
+// instances and container images. Only a 404 (does not exist) is returned as Missing; every other
+// error (client initialization failure, missing permission, API disabled, etc.) goes to Unchecked.
 //
-// region を使うのは VPC コネクタの短縮名を完全なリソース名に補うときだけ。コネクタは
-// リージョナルなリソースで、名前だけでは引けない。イメージのロケーションは参照 (ホスト名)
-// 自体に入っており、Cloud SQL のプロジェクトは接続名に入っており、IAM も Secret Manager も
-// リージョンを取らないので、それ以外に使い道は無い。
+// region is used only to expand a short VPC connector name into a full resource name. A connector
+// is a regional resource and cannot be looked up by name alone. The image location is in the
+// reference (host name) itself, the Cloud SQL project is in the connection name, and neither IAM
+// nor Secret Manager takes a region, so there is no other use for it.
 //
-// opts は NewClient と同じくテストからフェイク API を差し込むための拡張点。
+// opts, as with NewClient, is the extension point tests use to inject a fake API.
 func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 	opts ...option.ClientOption) (*RemoteCheck, error) {
 	svc, err := parseManifest(manifest)
@@ -51,9 +52,9 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 		if err != nil {
 			res.Unchecked = append(res.Unchecked, fmt.Sprintf("service account %q: %v", sa, err))
 		} else {
-			// プロジェクト部分はワイルドカード。Cloud Run は別プロジェクトの
-			// サービスアカウントを実行 SA にできるので、検証対象のプロジェクトで
-			// 固定すると、正当な構成なのに 404 = Missing として verify を失敗させる。
+			// The project part is a wildcard. Cloud Run can run as a service account from another
+			// project, so pinning it to the project being verified would make a valid setup a
+			// 404 = Missing and fail verify.
 			name := fmt.Sprintf("projects/-/serviceAccounts/%s", sa)
 			if _, err := iamSvc.Projects.ServiceAccounts.Get(name).Context(ctx).Do(); err != nil {
 				if isNotFound(err) {
@@ -73,19 +74,19 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 	return res, nil
 }
 
-// vpcConnectorAnnotation / cloudSQLAnnotation は、マニフェストが Cloud Run 以外の
-// リソースを参照するアノテーション。どれも「デプロイして初めて落ちる」種類の
-// 参照なので、サービスアカウントや Secret と同じ枠で存在を確認する。
+// vpcConnectorAnnotation / cloudSQLAnnotation are annotations through which the manifest
+// references resources outside Cloud Run. Each is the kind of reference that "fails only once
+// deployed", so its existence is checked in the same way as the service account and secrets.
 const (
 	vpcConnectorAnnotation = "run.googleapis.com/vpc-access-connector"
 	cloudSQLAnnotation     = "run.googleapis.com/cloudsql-instances"
 )
 
-// checkVPCConnector は VPC コネクタの実在を確認する。
+// checkVPCConnector checks that the VPC connector exists.
 //
-// アノテーションの値は短縮名 (コネクタ名だけ) と完全なリソース名の両方を取りうる。
-// 短縮名の場合はデプロイ先のプロジェクトとリージョンで補う: コネクタはリージョナルな
-// リソースなので、ここだけは region が要る。
+// The annotation value can be either a short name (just the connector name) or a full resource
+// name. A short name is completed with the deploy target's project and region: a connector is a
+// regional resource, so this is the one place region is needed.
 func checkVPCConnector(ctx context.Context, res *RemoteCheck, svc *run.Service,
 	project, region string, opts ...option.ClientOption) {
 	connector := templateAnnotation(svc, vpcConnectorAnnotation)
@@ -116,9 +117,9 @@ func checkVPCConnector(ctx context.Context, res *RemoteCheck, svc *run.Service,
 	}
 }
 
-// checkCloudSQL は接続先の Cloud SQL インスタンスの実在を確認する。値は
-// "<project>:<region>:<instance>" のカンマ区切り。プロジェクトは接続名から取るので、
-// 別プロジェクトのインスタンスを誤って Missing にしない。
+// checkCloudSQL checks that the Cloud SQL instances connected to exist. The value is a
+// comma-separated list of "<project>:<region>:<instance>". The project is taken from the
+// connection name, so an instance in another project is not wrongly reported as Missing.
 func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts ...option.ClientOption) {
 	raw := templateAnnotation(svc, cloudSQLAnnotation)
 	if raw == "" {
@@ -131,12 +132,13 @@ func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts
 		if conn == "" {
 			continue
 		}
-		// 形が違うものは「無い」ではなく「確かめられない」。Cloud Run 側が受け取る
-		// 形式は決まっているが、誤判定して verify を落とすより黙らないほうを選ぶ。
+		// A value in the wrong shape is "could not confirm", not "does not exist". The format
+		// Cloud Run accepts is fixed, but speaking up is preferred over misjudging it and failing
+		// verify.
 		//
-		// 右から切るのは、ドメインスコープのプロジェクト (example.com:my-project) が
-		// それ自体に ":" を含むため。左から 3 分割すると、正当な接続名が毎回
-		// 「形が違う」警告になる。
+		// It is split from the right because a domain-scoped project (example.com:my-project)
+		// itself contains ":". Splitting into 3 from the left would turn a valid connection name
+		// into a "wrong shape" warning every time.
 		project, instance, ok := splitConnectionName(conn)
 		if !ok {
 			res.Unchecked = append(res.Unchecked,
@@ -161,9 +163,9 @@ func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts
 	}
 }
 
-// splitConnectionName は <project>:<region>:<instance> をプロジェクトとインスタンスに
-// 分ける。ドメインスコープのプロジェクト (example.com:my-project:<region>:<instance>) も
-// 扱えるよう、右の 2 つを region / instance として切り、残りをプロジェクトとする。
+// splitConnectionName splits <project>:<region>:<instance> into the project and the instance.
+// So that a domain-scoped project (example.com:my-project:<region>:<instance>) is handled too, it
+// cuts off the two rightmost parts as region / instance and treats the rest as the project.
 func splitConnectionName(conn string) (project, instance string, ok bool) {
 	parts := strings.Split(conn, ":")
 	if len(parts) < 3 {
@@ -178,14 +180,14 @@ func splitConnectionName(conn string) (project, instance string, ok bool) {
 	return project, instance, true
 }
 
-// checkSecrets はシークレットの実在と、参照している *バージョン* の実在を確認する。
+// checkSecrets checks that the secrets exist, and that the *versions* they reference exist.
 //
-// バージョンを別に見るのは、存在するシークレットの消えた版 (あるいは打ち間違えた番号)
-// がデプロイして初めて落ちるため。"latest" もそのまま解決できる。
+// Versions are checked separately because a deleted version of an existing secret (or a mistyped
+// number) fails only once deployed. "latest" resolves as is too.
 //
-// シークレット自体が見つからなかった場合、その版は問い合わせない。「secret X does not
-// exist」と「secret X has no version latest」を両方並べても分かることは増えず、
-// 本当の原因が埋もれるだけになる。
+// When the secret itself was not found, its versions are not queried. Listing "secret X does not
+// exist" alongside "secret X has no version latest" tells you nothing more; it only buries the
+// real cause.
 func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secrets []string,
 	project string, opts ...option.ClientOption) {
 	if len(secrets) == 0 {
@@ -225,9 +227,9 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secre
 					fmt.Sprintf("secret %q version %q: %v", s, version, err))
 				continue
 			}
-			// 破棄・無効化された版も get は 200 で返す (読めなくなるのは access の方)。
-			// 状態を見ないと「消えた版を指したまま素通り」になり、この検査を足した
-			// 意味がなくなる。
+			// get returns 200 for destroyed and disabled versions too (it is access that stops
+			// working). Without looking at the state, "a reference to a gone version passes
+			// straight through", and adding this check would have been pointless.
 			if state := got.State; state != "" && state != secretVersionEnabled {
 				res.Missing = append(res.Missing,
 					fmt.Sprintf("secret %q version %q is %s, so it cannot be read", s, version, state))
@@ -236,7 +238,7 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secre
 	}
 }
 
-// versionsBySecret はシークレットごとの参照バージョンを重複なく集める。
+// versionsBySecret collects, per secret, the referenced versions without duplicates.
 func versionsBySecret(svc *run.Service) map[string][]string {
 	out := make(map[string][]string)
 	seen := make(map[secretVersionRef]bool)
@@ -250,19 +252,19 @@ func versionsBySecret(svc *run.Service) map[string][]string {
 	return out
 }
 
-// secretVersionEnabled は読み出せるバージョンの状態。これ以外 (DISABLED / DESTROYED) は
-// 参照できないので、実在しない版と同じ扱いにする。
+// secretVersionEnabled is the state of a version that can be read. Any other state (DISABLED /
+// DESTROYED) cannot be referenced, so it is treated the same as a version that does not exist.
 const secretVersionEnabled = "ENABLED"
 
-// secretVersionRef はシークレットとそのバージョンの組。
+// secretVersionRef is a pair of a secret and one of its versions.
 type secretVersionRef struct {
 	Secret  string
 	Version string
 }
 
-// secretVersionRefs はマニフェストが参照する (シークレット, バージョン) の組を重複なく
-// 集める。env の secretKeyRef.key と、secret ボリュームの items[].key がバージョンにあたる。
-// バージョンの指定が無いものは Cloud Run と同じく "latest" として扱う。
+// secretVersionRefs collects the (secret, version) pairs the manifest references, without
+// duplicates. The version is the secretKeyRef.key of an env entry and the items[].key of a secret
+// volume. One with no version given is treated as "latest", as Cloud Run does.
 func secretVersionRefs(svc *run.Service) []secretVersionRef {
 	spec := templateSpec(svc)
 	if spec == nil {
@@ -275,9 +277,9 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 		if secret == "" {
 			return
 		}
-		// 版は key に入るのが普通だが、name が
-		// projects/<p>/secrets/<s>/versions/<v> の形なら中に埋まっている
-		// (secretResourceName はこの形を明示的に扱う)。key が無ければそちらを使う。
+		// The version normally goes in key, but when name has the form
+		// projects/<p>/secrets/<s>/versions/<v> it is embedded there
+		// (secretResourceName handles this form explicitly). If there is no key, use that one.
 		if version == "" {
 			version = versionFromSecretPath(secret)
 		}
@@ -318,8 +320,8 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 	return out
 }
 
-// versionFromSecretPath は projects/<p>/secrets/<s>/versions/<v> 形式の名前から版を返す。
-// その形でなければ空文字列。
+// versionFromSecretPath returns the version from a name of the form
+// projects/<p>/secrets/<s>/versions/<v>. The empty string if the name is not in that form.
 func versionFromSecretPath(name string) string {
 	const marker = "/versions/"
 	if i := strings.Index(name, marker); i >= 0 {
@@ -328,7 +330,7 @@ func versionFromSecretPath(name string) string {
 	return ""
 }
 
-// templateAnnotation は spec.template.metadata のアノテーションを nil セーフに読む。
+// templateAnnotation reads an annotation of spec.template.metadata nil-safely.
 func templateAnnotation(svc *run.Service, key string) string {
 	meta := templateMeta(svc)
 	if meta == nil {
@@ -337,19 +339,20 @@ func templateAnnotation(svc *run.Service, key string) string {
 	return strings.TrimSpace(meta.Annotations[key])
 }
 
-// checkImages は containers[].image の実在を Artifact Registry で確認し、結果を res に足す。
+// checkImages checks through Artifact Registry that containers[].image exists, and adds the
+// results to res.
 //
-// 確認できるのは Artifact Registry のイメージだけ。gcr.io には相当する API が無く、
-// Docker Hub その他は端から範囲外なので、**黙って飛ばす**。ここを Unchecked に入れると
-// Docker Hub のイメージを使っているだけで毎回 warning が出て、警告そのものが読み飛ばされる
-// ようになる。Unchecked は「確認しに行って決められなかった」ときのために取っておく。
-// 何を確認できるかは README と verify の --help に書いてある。
+// Only Artifact Registry images can be checked. gcr.io has no equivalent API, and Docker Hub and
+// the rest are out of scope from the start, so they are **skipped silently**. Putting them in
+// Unchecked would print a warning on every run merely for using a Docker Hub image, and the
+// warnings themselves would come to be skimmed over. Unchecked is reserved for "went to check and
+// could not decide". What can be checked is written in the README and in verify's --help.
 //
-// 「確認できない = 存在しない」に倒さないことがこの関数の要件 (#23 と同じ壊れ方をする)。
-// 実 API で確かめた挙動:
-//   - リポジトリ / パッケージ / タグ / ダイジェストのいずれが無くても 404
-//   - 存在しない (またはアクセスできない) プロジェクトは 403 なので Missing にならない
-//   - 公開イメージ (us-docker.pkg.dev/cloudrun/container/hello) は通常の ADC で引ける
+// Not falling back to "could not check = does not exist" is a requirement of this function (it
+// would break the same way as #23). Behaviour confirmed against the real API:
+//   - a missing repository / package / tag / digest is a 404, whichever one it is
+//   - a project that does not exist (or cannot be accessed) is a 403, so it does not become Missing
+//   - a public image (us-docker.pkg.dev/cloudrun/container/hello) can be read with ordinary ADC
 func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ...option.ClientOption) {
 	var refs []imageRef
 	for _, img := range images {
@@ -361,8 +364,8 @@ func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ..
 		return
 	}
 
-	// クライアントの生成は確認対象があるときだけ。イメージが全部 gcr.io のマニフェストで
-	// Artifact Registry API の有効化を要求したくない。
+	// The client is created only when there is something to check. A manifest whose images are
+	// all on gcr.io should not be required to enable the Artifact Registry API.
 	arSvc, err := artifactregistry.NewService(ctx, opts...)
 	if err != nil {
 		for _, ref := range refs {
@@ -388,7 +391,7 @@ func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ..
 	}
 }
 
-// serviceAccountName はマニフェストの実行サービスアカウントを nil セーフに取り出す。
+// serviceAccountName extracts the manifest's runtime service account nil-safely.
 func serviceAccountName(svc *run.Service) string {
 	spec := templateSpec(svc)
 	if spec == nil {
@@ -397,8 +400,8 @@ func serviceAccountName(svc *run.Service) string {
 	return spec.ServiceAccountName
 }
 
-// secretNames はマニフェストが参照する Secret Manager シークレット名を重複なく集める。
-// env の secretKeyRef と secret ボリュームの両方を見る。
+// secretNames collects, without duplicates, the Secret Manager secret names the manifest
+// references. It looks at env secretKeyRef as well as secret volumes.
 func secretNames(svc *run.Service) []string {
 	spec := templateSpec(svc)
 	if spec == nil {
@@ -432,14 +435,14 @@ func secretNames(svc *run.Service) []string {
 	return out
 }
 
-// secretAliasAnnotation は別プロジェクトのシークレット参照のエイリアス定義を持つ
-// アノテーションキー。値は "<alias>:projects/<p>/secrets/<s>" をカンマ区切りで並べたもの。
+// secretAliasAnnotation is the annotation key holding alias definitions for references to secrets
+// in another project. The value is a comma-separated list of "<alias>:projects/<p>/secrets/<s>".
 const secretAliasAnnotation = "run.googleapis.com/secrets"
 
-// secretAliases は spec.template.metadata の run.googleapis.com/secrets アノテーションを
-// パースし、エイリアス名 -> 実体パス (projects/<p>/secrets/<s>) のマップを返す。
-// 別プロジェクトのシークレットは secretKeyRef.name にエイリアスだけが入り、実体パスは
-// このアノテーションにあるため、これを引かないと存在チェックが誤判定する。
+// secretAliases parses the run.googleapis.com/secrets annotation of spec.template.metadata and
+// returns a map of alias name -> actual path (projects/<p>/secrets/<s>).
+// For a secret in another project, secretKeyRef.name holds only the alias and the actual path is
+// in this annotation, so without looking it up the existence check misjudges.
 func secretAliases(svc *run.Service) map[string]string {
 	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Metadata == nil {
 		return nil
@@ -451,7 +454,7 @@ func secretAliases(svc *run.Service) map[string]string {
 	out := make(map[string]string)
 	for _, entry := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(entry)
-		// "<alias>:projects/<p>/secrets/<s>" を最初の ":" で分割する (実体パスに ":" は無い)。
+		// Split "<alias>:projects/<p>/secrets/<s>" at the first ":" (the actual path has no ":").
 		if i := strings.Index(entry, ":"); i > 0 {
 			out[entry[:i]] = entry[i+1:]
 		}
@@ -459,10 +462,10 @@ func secretAliases(svc *run.Service) map[string]string {
 	return out
 }
 
-// secretResourceName はシークレット名を Secret Manager の resource 名に整える。
-// 既に projects/.../secrets/... 形式ならそのまま (末尾の /versions/... は落とす)。
-// 別プロジェクトのエイリアスは aliases から実体パスへ解決する。それ以外は同一プロジェクト
-// のシークレットとみなす。
+// secretResourceName turns a secret name into a Secret Manager resource name.
+// A name already in projects/.../secrets/... form is kept as is (a trailing /versions/... is
+// dropped). An alias for another project is resolved to the actual path through aliases. Anything
+// else is taken to be a secret in the same project.
 func secretResourceName(project, name string, aliases map[string]string) string {
 	if strings.HasPrefix(name, "projects/") {
 		if i := strings.Index(name, "/versions/"); i >= 0 {
