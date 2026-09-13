@@ -1,5 +1,5 @@
-// Package render はマニフェストを text/template として評価し、Terraform state の値で
-// プレースホルダーを埋める。ecspresso の tfstate 連携と同様の仕組み。
+// Package render evaluates a manifest as a text/template and fills its placeholders with values
+// from Terraform state. The mechanism is the same as ecspresso's tfstate integration.
 package render
 
 import (
@@ -17,33 +17,34 @@ import (
 	"github.com/fujiwara/tfstate-lookup/tfstate"
 )
 
-// DefaultStateName は {{ tfstate "addr" }} (名前省略) のときに使う state 名。
+// DefaultStateName is the state name used for {{ tfstate "addr" }} (the name omitted).
 const DefaultStateName = "default"
 
-// validName は名前付き state の名前として認める文字列。名前はそのまま {{ <name>tfstate }} の
-// テンプレート関数名のプレフィックスになるため、Go 識別子として有効な文字列 (先頭は英字か _、
-// 以降は英数字か _) に限る。不正な名前のまま登録すると text/template が panic する。
+// validName matches the strings accepted as the name of a named state. The name becomes, as is,
+// the prefix of the template function name {{ <name>tfstate }}, so it is limited to strings that
+// are valid Go identifiers (an ASCII letter or _ first, then ASCII letters, digits or _).
+// Registering an invalid name as it is makes text/template panic.
 var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// IsValidName は name が名前付き state の名前 (= テンプレート関数名のプレフィックス) として
-// 有効かを返す。フラグ経路・config 経路の双方でこの制約を共有する。
+// IsValidName reports whether name is valid as the name of a named state (= the prefix of the
+// template function name). The flag path and the config path share this constraint.
 func IsValidName(name string) bool {
 	return validName.MatchString(name)
 }
 
-// Source は名前付きの Terraform state の場所を表す。Location はローカルパスまたは
-// gs://, s3:// などの URL。
+// Source is the location of a named Terraform state. Location is a local path or a URL such as
+// gs:// or s3://.
 type Source struct {
 	Name     string
 	Location string
 }
 
-// Render はマニフェストを text/template として評価する。テンプレート内で tfstate 関数が
-// 実際に使われた state だけが (初回参照時に) 読み込まれる。
+// Render evaluates a manifest as a text/template. Only the states that a tfstate function in the
+// template actually uses are read (on their first reference).
 //
-// state ごとに関数を登録する (ecspresso の func_prefix と同じ方式)。
-// デフォルト state は {{ tfstate "addr" }} / {{ tfstatef "fmt" args }}、名前付き state は
-// 名前をそのままプレフィックスにした {{ <name>tfstate "addr" }} / {{ <name>tfstatef ... }}。
+// Functions are registered per state (the same approach as ecspresso's func_prefix).
+// The default state gets {{ tfstate "addr" }} / {{ tfstatef "fmt" args }}; a named state gets
+// {{ <name>tfstate "addr" }} / {{ <name>tfstatef ... }}, with the name used verbatim as the prefix.
 func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, error) {
 	funcs := template.FuncMap{
 		"env":         envFunc,
@@ -52,9 +53,9 @@ func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, err
 	}
 
 	for _, s := range sources {
-		// デフォルト state はプレフィックス無し、それ以外は名前をそのままプレフィックスに使う。
-		// 名前はテンプレート関数名 (<name>tfstate) になるため、Go 識別子として不正だと
-		// template.Funcs が panic する。ここで弾いて分かりやすいエラーにする。
+		// The default state has no prefix; any other state uses its name verbatim as the prefix.
+		// The name becomes a template function name (<name>tfstate), so a name that is not a
+		// valid Go identifier makes template.Funcs panic. Reject it here with a clear error.
 		prefix := ""
 		if s.Name != DefaultStateName {
 			if !IsValidName(s.Name) {
@@ -83,8 +84,9 @@ func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, err
 	return buf.Bytes(), nil
 }
 
-// envFunc は環境変数 name の値を返す (ecspresso 互換の {{ env "NAME" "default" }})。
-// 未設定または空文字の場合は default を返す。default 省略時は空文字。
+// envFunc returns the value of the environment variable name (ecspresso-compatible
+// {{ env "NAME" "default" }}). When the variable is unset or empty it returns default, and when
+// default is omitted, the empty string.
 func envFunc(name string, def ...string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -95,8 +97,9 @@ func envFunc(name string, def ...string) string {
 	return ""
 }
 
-// mustEnvFunc は環境変数 name の値を返す (ecspresso 互換の {{ must_env "NAME" }})。
-// 変数が未定義の場合はエラー。空文字でも「定義済み」なら許容する。
+// mustEnvFunc returns the value of the environment variable name (ecspresso-compatible
+// {{ must_env "NAME" }}). It is an error when the variable is not defined. An empty value is
+// accepted as long as the variable is "defined".
 func mustEnvFunc(name string) (string, error) {
 	if v, ok := os.LookupEnv(name); ok {
 		return v, nil
@@ -104,35 +107,36 @@ func mustEnvFunc(name string) (string, error) {
 	return "", fmt.Errorf("environment variable %q is not defined", name)
 }
 
-// jsonEscapeFunc は値を JSON 文字列としてエスケープした中身を返す
-// (ecspresso 互換の {{ ... | json_escape }})。前後の " は付けない: 使う側が
-// '{"key": "{{ ... | json_escape }}"}' のように引用符を書くため。
+// jsonEscapeFunc returns the value escaped as the body of a JSON string
+// (ecspresso-compatible {{ ... | json_escape }}). It does not add the surrounding ": the caller
+// writes the quotes, as in '{"key": "{{ ... | json_escape }}"}'.
 //
-// Cloud Run のマニフェストでは、アノテーションや env[].value に JSON をそのまま
-// 埋める場面がある。tfstate や環境変数から来た値に " や改行が入っていると、
-// エスケープ無しでは壊れた JSON/YAML になる。
+// Cloud Run manifests sometimes embed JSON as is in an annotation or in env[].value. When a
+// value that comes from tfstate or an environment variable contains " or a newline, leaving it
+// unescaped produces broken JSON/YAML.
 func jsonEscapeFunc(v interface{}) (string, error) {
 	text := fmt.Sprint(v)
-	// json.Marshal は不正な UTF-8 をエラーにせず U+FFFD に置き換える。黙って化けた値を
-	// デプロイするより、ここで断る (シークレット由来のバイト列で起きうる)。
+	// json.Marshal does not treat invalid UTF-8 as an error; it replaces it with U+FFFD. Rather
+	// than silently deploying a mangled value, refuse here (it can happen with bytes that come
+	// from a secret).
 	if !utf8.ValidString(text) {
 		return "", fmt.Errorf("json_escape: the value is not valid UTF-8")
 	}
 
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	// & < > を \u0026 のような形にしない。JSON としては同じだが、値をそのまま読む相手
-	// (JSON として再パースされない env[].value やアノテーション) には化けて見える。
+	// Do not turn & < > into a form like \u0026. As JSON it is equivalent, but a reader that takes
+	// the value as is (an env[].value or annotation not re-parsed as JSON) sees it garbled.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(text); err != nil {
 		return "", fmt.Errorf("failed to escape %v as JSON: %w", v, err)
 	}
-	// Encode は末尾に改行を足し、前後に " を付ける。どちらも落とす。
+	// Encode adds a trailing newline and the surrounding ". Drop the newline and the quotes.
 	encoded := strings.TrimRight(buf.String(), "\n")
 	return encoded[1 : len(encoded)-1], nil
 }
 
-// stateLoader は state を遅延・一度きりで読み込み、属性を引く。
+// stateLoader reads a state lazily and only once, and looks attributes up in it.
 type stateLoader struct {
 	ctx  context.Context
 	loc  string
@@ -142,13 +146,13 @@ type stateLoader struct {
 }
 
 func (l *stateLoader) lookup(addr string) (string, error) {
-	// ecspresso 互換: アドレス中の ' を " に置換し、YAML 内でのエスケープを不要にする
-	// (例: aws_s3_bucket.main['id'] と書ける)。tfstate-lookup の nameFunc と同挙動。
+	// ecspresso-compatible: replace ' in the address with " so no escaping is needed in YAML
+	// (e.g. you can write aws_s3_bucket.main['id']). Same behaviour as tfstate-lookup's nameFunc.
 	if strings.Contains(addr, "'") {
 		addr = strings.ReplaceAll(addr, "'", "\"")
 	}
 	l.once.Do(func() {
-		// スキーム付きは URL、そうでなければローカルファイルとして読む。
+		// A location with a scheme is read as a URL; anything else as a local file.
 		if strings.Contains(l.loc, "://") {
 			l.st, l.err = tfstate.ReadURL(l.ctx, l.loc)
 		} else {

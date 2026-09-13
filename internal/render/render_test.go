@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Terraform state v4 のミニマルなフィクスチャ。output と resource 属性を含む。
+// A minimal Terraform state v4 fixture. It contains outputs and resource attributes.
 const tfstateFixture = `{
   "version": 4,
   "terraform_version": "1.7.0",
@@ -66,7 +66,7 @@ dbHost: '{{ tfstate "google_sql_database_instance.main.private_ip_address" }}'`)
 
 func TestRenderResolvesNamedState(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
-	// 名前付き state は名前をプレフィックスにした関数 ({{ <name>tfstate }}) になる。
+	// A named state becomes functions prefixed with its name ({{ <name>tfstate }}).
 	manifest := []byte(`image: '{{ network_tfstate "output.image_url" }}'`)
 
 	out, err := Render(context.Background(), manifest, []Source{{Name: "network_", Location: path}})
@@ -103,8 +103,8 @@ b: '{{ prod_tfstatef "output.%s" "service_account" }}'`)
 
 func TestRenderSingleQuoteAddr(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
-	// アドレス中の ' は " に置換される (ecspresso 互換)。ここでは置換しても
-	// 同じアドレスに解決されることだけ確認する。
+	// A ' in the address is replaced with " (ecspresso-compatible). This only checks that the
+	// address still resolves to the same one with the replacement applied.
 	manifest := []byte(`x: '{{ tfstate "output.image_url" }}'`)
 	out, err := Render(context.Background(), manifest, []Source{{Name: "default", Location: path}})
 	if err != nil {
@@ -117,8 +117,9 @@ func TestRenderSingleQuoteAddr(t *testing.T) {
 
 func TestRenderRejectsInvalidName(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
-	// 名前は関数名 (<name>tfstate) になるため、Go 識別子として不正な名前は panic ではなく
-	// クリーンなエラーで弾く (config 経路から不正名が来ても落ちないこと)。
+	// The name becomes a function name (<name>tfstate), so a name that is not a valid Go
+	// identifier is rejected with a clean error rather than a panic (an invalid name coming
+	// through the config path must not crash).
 	for _, name := range []string{"net-prod", "1state", "has space"} {
 		manifest := []byte("kind: Service\n")
 		_, err := Render(context.Background(), manifest, []Source{{Name: name, Location: path}})
@@ -129,7 +130,7 @@ func TestRenderRejectsInvalidName(t *testing.T) {
 }
 
 func TestRenderNoPlaceholdersNeedsNoState(t *testing.T) {
-	// state を一切渡さなくても、プレースホルダーが無ければ成功する (遅延ロード)。
+	// With no placeholders, rendering succeeds even when no state is passed at all (lazy loading).
 	manifest := []byte("kind: Service\nmetadata:\n  name: svc\n")
 	out, err := Render(context.Background(), manifest, nil)
 	if err != nil {
@@ -233,8 +234,8 @@ func TestRenderErrors(t *testing.T) {
 	}
 }
 
-// TestRenderJSONEscape は、JSON に埋める値のエスケープを確認する。ecspresso にある
-// 関数で、アノテーションや env[].value に JSON を書くときに要る。
+// TestRenderJSONEscape checks the escaping of a value embedded in JSON. The function comes from
+// ecspresso and is needed when writing JSON in an annotation or env[].value.
 func TestRenderJSONEscape(t *testing.T) {
 	t.Setenv("CONFIG_JSON", `he said "hi"`+"\n\tdone\\")
 
@@ -249,8 +250,8 @@ func TestRenderJSONEscape(t *testing.T) {
 	}
 }
 
-// TestRenderJSONEscapeAcceptsNonStrings は、文字列以外を渡しても壊れないことを
-// 確認する (tfstate は数値や真偽値も返しうる)。
+// TestRenderJSONEscapeAcceptsNonStrings checks that passing something other than a string does
+// not break it (tfstate can also return numbers and booleans).
 func TestRenderJSONEscapeAcceptsNonStrings(t *testing.T) {
 	got, err := Render(context.Background(), []byte(`n: "{{ 42 | json_escape }}"`), nil)
 	if err != nil {
@@ -261,9 +262,9 @@ func TestRenderJSONEscapeAcceptsNonStrings(t *testing.T) {
 	}
 }
 
-// TestRenderJSONEscapeKeepsHTMLCharactersLiteral は、& < > を & のような形に
-// しないことを確認する。JSON としては同じだが、値をそのまま読む相手 (JSON として
-// 再パースされないアノテーションや env[].value) には化けて見える。
+// TestRenderJSONEscapeKeepsHTMLCharactersLiteral checks that & < > are not turned into a form
+// like \u0026. As JSON it is equivalent, but a reader that takes the value as is (an annotation or
+// env[].value not re-parsed as JSON) sees it garbled.
 func TestRenderJSONEscapeKeepsHTMLCharactersLiteral(t *testing.T) {
 	t.Setenv("QUERY", "a=1&b<2>3")
 
@@ -276,9 +277,9 @@ func TestRenderJSONEscapeKeepsHTMLCharactersLiteral(t *testing.T) {
 	}
 }
 
-// TestRenderJSONEscapeRejectsInvalidUTF8 は、不正な UTF-8 を黙って置き換えないことを
-// 確認する。json.Marshal はエラーにせず U+FFFD に潰すので、そのままだと化けた値が
-// デプロイされる。
+// TestRenderJSONEscapeRejectsInvalidUTF8 checks that invalid UTF-8 is not silently replaced.
+// json.Marshal does not return an error but squashes it to U+FFFD, so left as is, a mangled
+// value would be deployed.
 func TestRenderJSONEscapeRejectsInvalidUTF8(t *testing.T) {
 	t.Setenv("BROKEN", string([]byte{0xff, 0xfe}))
 
@@ -291,13 +292,13 @@ func TestRenderJSONEscapeRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
-// TestRenderJSONEscapeInABlockScalar は、README が勧める書き方 (>- のブロックスカラー)
-// を、アポストロフィを含む値で通しで確認する。
+// TestRenderJSONEscapeInABlockScalar checks the form the README recommends (a >- block scalar)
+// end to end, with a value that contains an apostrophe.
 //
-// json_escape は JSON 用のエスケープなので ' は対象外で、'...' の YAML スカラーに
-// 埋めると値によっては YAML が壊れる (この template を '...' に変えると、実際に
-// このテストは YAML のパースで落ちる)。展開結果を YAML として読み、取り出した文字列を
-// さらに JSON としてパースすることで、YAML 層と JSON 層の両方を見る。
+// json_escape escapes for JSON, so ' is not covered, and embedding the value in a '...' YAML
+// scalar breaks the YAML for some values (change this template to '...' and this test really does
+// fail while parsing the YAML). By reading the rendered output as YAML and then parsing the
+// extracted string as JSON, it checks the YAML layer and the JSON layer alike.
 func TestRenderJSONEscapeInABlockScalar(t *testing.T) {
 	const raw = `it's "quoted" & has
 a newline`
@@ -311,7 +312,7 @@ a newline`
 		t.Fatalf("Render() error = %v", err)
 	}
 
-	// YAML 層: ドキュメントとして読めること。
+	// YAML layer: the output can be read as a document.
 	var doc struct {
 		Note string `json:"note"`
 	}
@@ -319,7 +320,7 @@ a newline`
 		t.Fatalf("the rendered manifest is not valid YAML: %v\n%s", err, rendered)
 	}
 
-	// JSON 層: 取り出した文字列が JSON として読め、元の値に戻ること。
+	// JSON layer: the extracted string can be read as JSON and gives back the original value.
 	var payload struct {
 		Text string `json:"text"`
 	}
