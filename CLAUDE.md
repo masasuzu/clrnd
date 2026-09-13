@@ -426,6 +426,10 @@ revision-name conflicts, asynchronous rollout failures).
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
+- Commit messages (subject and body), issue titles and bodies, PR titles and descriptions, and
+  review comments and replies are written in **English**. Older history is in Japanese; leave it as
+  it is rather than rewriting or translating it. The PR title matters in particular, because the
+  squash merge turns it into the commit subject on `main`.
 - **Do not write a count unless the number itself matters.** "provides twelve subcommands",
   "three things to know", "refuses two cases", "CI's third job" all summarize a list, so every one
   of them has to be edited whenever the list changes, and nothing checks that it was: README said
