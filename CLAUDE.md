@@ -424,8 +424,10 @@ revision-name conflicts, asynchronous rollout failures).
 
 ## Conventions
 
-- All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
-  Code comments are in Japanese — keep that split.
+- Everything written in the repository is in **English**: user-facing strings (cobra
+  `Short`/`Long`, flag usage, error messages), code comments in Go, shell and YAML alike, test
+  names and failure messages, and documentation. Comments written before this rule were in
+  Japanese; if you come across one that is left, translate it rather than editing it in Japanese.
 - Commit messages (subject and body), issue titles and bodies, PR titles and descriptions, and
   review comments and replies are written in **English**. Older history is in Japanese; leave it as
   it is rather than rewriting or translating it. The PR title matters in particular, because the
