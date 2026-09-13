@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 #
-# 固定したツールのバージョンが、書かれているすべての場所で一致しているかを確かめる。
+# Check that each pinned tool version agrees in every place it is written down.
 #
-# Dependabot が見るのはアクションの SHA と go.mod だけで、アクションに渡す version
-# 入力や go run ...@vX、自前で入れる ShellCheck の版までは追ってくれない。つまり
-# これらは手で上げるしかなく、手で上げる以上どこかを直し忘れる。issue #73 がまさに
-# それで、CI は latest を走らせているのにドキュメントは v2.6.2 と書いていた。
-# 「ローカルと CI で同じ検査を回している」という前提が静かに崩れるので、ここで落とす。
+# Dependabot only looks at action SHAs and go.mod; it does not follow a version input handed
+# to an action, a go run ...@vX, or the ShellCheck release we install ourselves. Those can
+# only be bumped by hand, and anything bumped by hand eventually gets missed somewhere.
+# Issue #73 was exactly that: CI was running latest while the docs said v2.6.2. The
+# assumption that "local runs and CI run the same checks" breaks silently, so fail here.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
 status=0
 
-# pin <ラベル> <値>... : すべて同じでなければエラーにする。空文字は「抽出できなかった」
-# ことを意味するので、これも失敗として扱う (書式を変えて検査が素通りするのを防ぐ)。
+# pin <label> <value>... : error unless every value is the same. An empty string means "could
+# not be extracted", so that is a failure too (changing the spelling must not let the check
+# pass silently).
 pin() {
   local label=$1 first=$2 value
   shift
@@ -28,20 +29,20 @@ pin() {
   printf 'ok  %-14s %s\n' "$label" "$first"
 }
 
-# version_in <ファイル> <grep -E の式> : 最初にマッチした行から x.y.z を取り出す。
+# version_in <file> <grep -E pattern> : extract x.y.z from the first matching line.
 version_in() {
   grep -hoE "$2" "$1" | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true
 }
 
-# golangci-lint: CI (action の version 入力) と、README / CLAUDE.md の go run。
+# golangci-lint: CI (the action's version input) and the go run in README / CLAUDE.md.
 pin golangci-lint \
   "$(grep -A8 'golangci-lint-action@' .github/workflows/verify.yml |
     grep -hoE 'version: v?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in README.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in CLAUDE.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+')"
 
-# GoReleaser: PR のクロスビルド (verify.yml) と実際のリリース (release.yml) が同じ版で
-# なければ、PR で通した設定と本番でビルドする GoReleaser が食い違う。
+# GoReleaser: unless the PR cross-build (verify.yml) and the actual release (release.yml) use
+# the same version, the config a PR validated and the GoReleaser that builds the release differ.
 pin goreleaser \
   "$(grep -A8 'goreleaser-action@' .github/workflows/verify.yml |
     grep -hoE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')" \
@@ -49,7 +50,7 @@ pin goreleaser \
     grep -hoE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in README.md 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+')"
 
-# actionlint と ShellCheck: CI とローカル再現手順 (README) が同じ版を指しているか。
+# actionlint and ShellCheck: do CI and the local reproduction steps (README) name the same version?
 pin actionlint \
   "$(version_in .github/workflows/verify.yml 'actionlint@v[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in README.md 'actionlint@v[0-9]+\.[0-9]+\.[0-9]+')"

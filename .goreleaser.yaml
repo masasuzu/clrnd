@@ -5,9 +5,9 @@ project_name: clrnd
 
 before:
   hooks:
-    # tidy はリリースの最中に go.mod/go.sum を書き換え、モジュールグラフを
-    # 引き直す。CI が検証した依存の集合とリリースされたバイナリの依存が
-    # 一致する保証が無くなるので、取得だけにする。
+    # tidy rewrites go.mod/go.sum in the middle of a release and re-resolves the module
+    # graph. There would be no guarantee that the dependencies CI verified match those of
+    # the released binary, so only download.
     - go mod download
 
 builds:
@@ -24,12 +24,12 @@ builds:
       - amd64
       - arm64
     flags:
-      # 絶対パスをバイナリに埋め込まない (再現性)。
+      # Do not embed absolute paths in the binary (reproducibility).
       - -trimpath
     ldflags:
       - -s -w
       - -X github.com/masasuzu/clrnd/cmd.version={{ .Version }}
-    # ビルド時刻ではなくコミット時刻を使う (再現性)。
+    # Use the commit time rather than the build time (reproducibility).
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
@@ -45,14 +45,15 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-# checksums.txt に keyless で署名する。成果物と同じ場所から配られる
-# チェックサムだけでは、配布元が乗っ取られたときに何の保証にもならない。
+# Sign checksums.txt keylessly. Checksums served from the same place as the artifacts
+# guarantee nothing on their own once the distribution point is compromised.
 #
-# cosign v3 は新しい bundle 形式が既定 (--new-bundle-format=true) で、
-# --output-signature / --output-certificate は警告を出したうえで無視される。
-# その状態で --bundle を渡さないと空パスへ書こうとして落ちる:
+# cosign v3 defaults to the new bundle format (--new-bundle-format=true), and
+# --output-signature / --output-certificate are ignored with a warning.
+# Without --bundle it then tries to write to an empty path and fails:
 #   Error: signing dist/checksums.txt: create bundle file: open : no such file or directory
-# 署名と証明書は 1 つの .bundle にまとめて出す。検証方法は README にある。
+# The signature and certificate go out together in a single .bundle. README explains how to
+# verify it.
 signs:
   - cmd: cosign
     signature: "${artifact}.bundle"

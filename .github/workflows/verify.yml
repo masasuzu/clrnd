@@ -1,6 +1,6 @@
-# CI とリリースの両方から呼ばれる検査。タグからのリリースが通常 CI を通らずに公開
-# されるのを防ぐため、検査の定義はここ 1 か所に置き、release.yml からも呼ぶ。
-# 直接 push/pull_request では起動しない (呼び出し専用)。
+# Checks called from CI and from the release. To stop a release from a tag being published
+# without going through regular CI, the checks are defined only here, and release.yml calls
+# them too. This workflow is never triggered by push/pull_request directly (call-only).
 name: verify
 
 on:
@@ -9,15 +9,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # 無制限だと、ハングした 1 ジョブが既定の 6 時間まで runner を占有する。
+    # Without a limit, a single hung job holds the runner for the default 6 hours.
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # このワークフローは pull request のコードをビルド・実行する。認証用の
-          # extraheader を .git/config に残すと、そのコードから読める。ビルドに
-          # git の認証は要らないので置かない (release.yml も同じ設定)。
+          # This workflow builds and runs code from a pull request. An auth
+          # extraheader left in .git/config would be readable by that code. The build
+          # needs no git authentication, so do not leave one (release.yml does the same).
           persist-credentials: false
 
       - name: Set up Go
@@ -34,8 +34,8 @@ jobs:
             exit 1
           fi
 
-      # go.mod/go.sum が tidy でない PR を落とす。手で依存を足したときや、
-      # 依存を消したのに require が残ったときに気づけるのはここだけ。
+      # Fail a PR whose go.mod/go.sum are not tidy. This is the only place that notices a
+      # dependency added by hand, or a require left behind after a dependency was removed.
       - name: Check go.mod is tidy
         run: go mod tidy -diff
 
@@ -52,21 +52,23 @@ jobs:
       # gojq, so most of the dependency tree is indirect. This is the only thing
       # that looks at it, and it covers stdlib advisories too.
       #
-      # GOTOOLCHAIN=local で go.mod が指定する Go に対して走らせる。govulncheck-action は
-      # 既定で最新の stable を入れてしまい、そちらは常に綺麗なので、リリースが実際に使う
-      # ツールチェーン (setup-go が go.mod から入れるもの) の stdlib 脆弱性を見逃す。
-      # 実際 go.mod が go1.25.8 のまま到達可能な 15 件を抱えていたのを、v0.3.0 の
-      # リリース前確認で初めて見つけた。ここで見えていなければならない。
+      # GOTOOLCHAIN=local runs it against the Go that go.mod specifies. govulncheck-action
+      # installs the latest stable by default, which is always clean, so it misses stdlib
+      # vulnerabilities in the toolchain the release actually uses (the one setup-go installs
+      # from go.mod). In practice go.mod was still on go1.25.8 and carried 15 reachable
+      # vulnerabilities, first found during the pre-release check for v0.3.0. They must be
+      # visible here.
       - name: Vulnerability check
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
         env:
           GOTOOLCHAIN: local
 
-  # リリースが作る組み合わせ (linux/darwin/windows x amd64/arm64) を、タグを打つ前に
-  # コンパイルできるか確かめる。通常の Build は runner (linux/amd64) の 1 通りしか見ない
-  # ので、Windows 固有のコンパイルエラーや .goreleaser.yaml の壊れがタグ push まで
-  # 分からなかった。matrix を手で書くと .goreleaser.yaml とずれるため、GoReleaser 自身に
-  # 同じ設定でビルドさせる。--snapshot なのでリリースの作成も署名も provenance も無い。
+  # Check, before a tag is pushed, that the combinations the release builds
+  # (linux/darwin/windows x amd64/arm64) compile. The ordinary Build only covers the runner's own
+  # target (linux/amd64), so a Windows-only compile error or a broken .goreleaser.yaml went
+  # unnoticed until the tag push. A hand-written matrix would drift from .goreleaser.yaml, so
+  # GoReleaser itself builds with the same config. With --snapshot there is no release, no
+  # signing and no provenance.
   release-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -74,7 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # GoReleaser は履歴を見るので shallow clone にしない。
+          # GoReleaser reads the history, so do not make a shallow clone.
           fetch-depth: 0
           persist-credentials: false
 
@@ -83,8 +85,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # release.yml と同じバージョンを入れる。ここだけ上げると、PR で通った設定が
-      # リリース本番で別の GoReleaser に食わされることになる。
+      # Install the same version as release.yml. Bumping only this one means the config a PR
+      # passed gets fed to a different GoReleaser in the real release.
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -104,9 +106,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # このワークフローは pull request のコードをビルド・実行する。認証用の
-          # extraheader を .git/config に残すと、そのコードから読める。ビルドに
-          # git の認証は要らないので置かない (release.yml も同じ設定)。
+          # This workflow builds and runs code from a pull request. An auth
+          # extraheader left in .git/config would be readable by that code. The build
+          # needs no git authentication, so do not leave one (release.yml does the same).
           persist-credentials: false
 
       - name: Set up Go
@@ -114,18 +116,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # アクションを SHA で固定しても、アクションが取ってくる lint 本体は固定されない。
-      # 指定が無いと latest が入るので、ローカル (README / CLAUDE.md の go run ...@v2.13.1)
-      # と CI が別のバージョンを走らせ、CI の結果が上流のリリースで勝手に変わる。
-      # ここを上げるときは README と CLAUDE.md の実行例も一緒に上げること。
+      # Pinning the action by SHA does not pin the linter the action downloads. Without a
+      # version it installs latest, so local runs (the go run ...@v2.13.1 in README / CLAUDE.md)
+      # and CI run different versions, and CI results change on their own with upstream releases.
+      # When bumping this, bump the examples in README and CLAUDE.md along with it.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.1
 
-      # runner にも shellcheck は入っているがバージョンが固定できない。落ちたり通ったり
-      # する検査にしないため、版とハッシュを指定して自前で入れる。actionlint も
-      # PATH のこれを使って run: ブロックを検査する。
+      # The runner ships a shellcheck too, but its version cannot be pinned. So that the check
+      # does not flip between failing and passing, install it ourselves with a pinned version
+      # and hash. actionlint also uses this one from PATH to check run: blocks.
       - name: Install ShellCheck
         env:
           SHELLCHECK_VERSION: v0.11.0
@@ -139,23 +141,23 @@ jobs:
           rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
           shellcheck --version
 
-      # E2E は go test に含まれないので、壊れていても Go 側の検査では気づけない。
-      # 構文 (bash -n) と静的解析 (shellcheck) はタダで回せる。
+      # The E2E test is not part of go test, so the Go-side checks cannot notice it breaking.
+      # A syntax check (bash -n) and static analysis (shellcheck) cost nothing to run.
       - name: Check the shell scripts
         run: |
-          # bash -n は最初のファイルしか見ない (以降は位置引数になる) ので 1 つずつ回す。
+          # bash -n only reads the first file (the rest become positional args), so run it per file.
           for script in test/e2e/run.sh .github/scripts/*.sh; do
             bash -n "$script"
           done
           shellcheck test/e2e/run.sh .github/scripts/*.sh
 
-      # Dependabot はアクションの SHA と go.mod しか追わない。version 入力や
-      # go run ...@vX、自前で入れる ShellCheck の版は手で上げるしかないので、
-      # 上げ忘れ (書いてある場所どうしのずれ) をここで落とす。
+      # Dependabot only follows action SHAs and go.mod. A version input, a
+      # go run ...@vX, or the ShellCheck release we install ourselves can only be bumped by hand,
+      # so a missed bump (the places that write it down disagreeing) fails here.
       - name: Check the pinned tool versions agree
         run: ./.github/scripts/check-tool-pins.sh
 
-      # workflow 自体の式やアクションの入力ミスは、push するまで分からない。
-      # actionlint は run: ブロックを PATH の shellcheck にも通す。
+      # Mistakes in the workflows' own expressions or in action inputs are invisible until pushed.
+      # actionlint also runs run: blocks through the shellcheck on PATH.
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
