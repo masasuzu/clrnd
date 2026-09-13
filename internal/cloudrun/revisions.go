@@ -302,7 +302,7 @@ func (c *Client) DeleteRevision(ctx context.Context, revision string) error {
 // SelectPrunableRevisions は削除してよいリビジョンを新しい順の一覧から選ぶ。
 // revisions は ListRevisions が返す「新しい順」であることを前提にする。
 //
-// 規則は 2 つだけで、どちらも「消して困るものを消さない」ためにある。
+// 規則は次のとおりで、どれも「消して困るものを消さない」ためにある。
 //   - 新しい方から keep 件はそのまま残す (保護されているかどうかに関わらず数える。
 //     数え方を変えると、--keep 3 と指定したのに 4 件残ったり、保護されたリビジョンの
 //     数だけ古い版が余計に消えたりして、指定した数と結果が一致しなくなる)

@@ -14,7 +14,7 @@ const privateFileMode os.FileMode = 0o600
 // writeFilePrivate は data を path へ書き、書き終わったファイルの権限を必ず
 // privateFileMode にする。
 //
-// os.WriteFile では足りない理由が 2 つある。perm は新規作成時にしか適用されないので、
+// os.WriteFile では足りない。perm は新規作成時にしか適用されないので、
 // 既存の出力先が 0644 なら秘密を書いても 0644 のまま残る。そして既存ファイルは書き込み
 // 前に truncate されるので、途中で失敗すると以前の正常な内容まで失う。
 // 同じディレクトリの一時ファイルへ書ききってから rename することで、どちらも避ける。
