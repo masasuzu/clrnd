@@ -525,6 +525,16 @@ revision-name conflicts, asynchronous rollout failures).
   the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
   it) requires the tag's commit to be an ancestor of `main` — passing checks alone would otherwise
   let a branch that never reached main produce a signed, attested release.
+  The job's last step publishes a signed [packslip](https://packslip.dev) manifest
+  (`packslip.sigstore.json`), which mise's `packslip:` backend reads instead of guessing from file
+  names; a manifest cannot be added to a past release, which is why it goes out with every one.
+  It uses `attest: link`, so it only points at the provenance the step before it registered: its
+  `artifacts` globs must match that step's `subject-path`, or the links resolve to nothing. The
+  step only runs on a tag, but its output can be checked beforehand by running `packslip create`
+  (signed with a throwaway `packslip keygen` key and `--no-log`) and `packslip show` over the
+  archives from `goreleaser release --snapshot`. Linux archives come out as `libc: gnu` — packslip
+  has no way to drop libc short of `portable`, which drops os/arch too — so a musl host cannot
+  install through `packslip:` even though the binary is static; `github:` still works there.
 - `--image` (`ApplyImageOverrides` in
   [internal/cloudrun/imageoverride.go](internal/cloudrun/imageoverride.go)) is the **one** field a
   flag may override, because the image tag is the one part of a manifest that legitimately changes
