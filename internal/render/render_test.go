@@ -11,7 +11,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// A minimal Terraform state v4 fixture. It contains outputs and resource attributes.
+// A minimal Terraform state v4 fixture. It contains outputs, resource attributes, and a resource
+// created with for_each, whose instances are addressed by key.
 const tfstateFixture = `{
   "version": 4,
   "terraform_version": "1.7.0",
@@ -27,6 +28,16 @@ const tfstateFixture = `{
       "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
       "instances": [
         { "attributes": { "private_ip_address": "10.1.2.3" } }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_sql_database_instance",
+      "name": "replica",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        { "index_key": "primary", "attributes": { "private_ip_address": "10.1.2.4" } },
+        { "index_key": "secondary", "attributes": { "private_ip_address": "10.1.2.5" } }
       ]
     }
   ]
@@ -103,15 +114,17 @@ b: '{{ prod_tfstatef "output.%s" "service_account" }}'`)
 
 func TestRenderSingleQuoteAddr(t *testing.T) {
 	path := writeFixture(t, tfstateFixture)
-	// A ' in the address is replaced with " (ecspresso-compatible). This only checks that the
-	// address still resolves to the same one with the replacement applied.
-	manifest := []byte(`x: '{{ tfstate "output.image_url" }}'`)
+	// A ' in the address is replaced with " (ecspresso-compatible), so a for_each key can be
+	// written inside the template's double-quoted string without escaping. The address has to
+	// contain a ' for the replacement to run at all, and the key picks one instance out of
+	// several, so resolving to the wrong one (or to nothing) fails the test.
+	manifest := []byte(`x: {{ tfstate "google_sql_database_instance.replica['primary'].private_ip_address" }}`)
 	out, err := Render(context.Background(), manifest, []Source{{Name: "default", Location: path}})
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	if !strings.Contains(string(out), "asia-northeast1-docker.pkg.dev/p/r/app:v1") {
-		t.Errorf("got %s", out)
+	if got, want := string(out), "x: 10.1.2.4"; got != want {
+		t.Errorf("Render() = %q, want %q", got, want)
 	}
 }
 
