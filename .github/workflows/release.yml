@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write      # リリースの作成と成果物のアップロード
-      id-token: write      # cosign の keyless 署名と provenance
+      id-token: write      # cosign と packslip の keyless 署名、provenance
       attestations: write  # provenance の登録
     steps:
       - name: Checkout
@@ -109,3 +109,25 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.zip
+
+      # どの成果物がどのプラットフォーム向けで、実行ファイルが中のどこにあるかを
+      # 署名付きで記したマニフェスト (packslip.sigstore.json) をリリースに添える。
+      # mise の packslip: バックエンドはファイル名を推測せずにこれを読んで検証する。
+      # 付くのはこのタグで起動した回のリリースだけで、過去のリリースには自動では付かない。
+      # 過去のリリースに付けるなら、tag: と download: を指定した別の実行が要る。
+      #
+      # attest: link は直前のステップが登録した provenance を digest で参照するだけで、
+      # 自分では attest しない (既定の true だと同じ成果物に二重に登録される)。
+      # そのかわり attest されていない成果物のリンクは何も指さなくなるので、
+      # artifacts の glob は直前のステップの subject-path と揃えておくこと。
+      #
+      # Linux の成果物は libc: gnu と記述される。packslip は Linux の成果物から libc を
+      # 外す手段を os/arch ごと消す portable しか持たないため。CGO_ENABLED=0 の静的
+      # バイナリなので musl でも動くが、mise は musl のホストで gnu のビルドを選ばない。
+      # Alpine などでは packslip: では入らず、github: なら入る。
+      - name: Publish packslip
+        uses: jdx/packslip@74c75db7d611b36dd5a157999ec16cf823ccf80c # v1.2.0
+        with:
+          artifacts: dist/*.tar.gz dist/*.zip
+          bin: clrnd
+          attest: link
