@@ -31,8 +31,8 @@ func defaultedService() *run.Service {
 }
 
 // defaultingAPI mimics a server that fills in defaults. It returns the definition with the
-// defaults in it for a dryRun=all PUT, and returns the same thing for a GET too. It records the
-// body of a PUT that is not a dryRun.
+// defaults in it for every request: a dryRun=all PUT, a real PUT and a GET alike. Every request is
+// recorded (method, path, query and body), so a test can check what was sent.
 func defaultingAPI(t *testing.T) (*Client, func() []recordedRequest) {
 	t.Helper()
 	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
@@ -51,7 +51,7 @@ func TestPlanWithoutResolveDefaultsShowsThem(t *testing.T) {
 	// It is a minimal manifest, so whatever the server filled in becomes a diff as is (issue #11).
 	for _, want := range []string{"containerConcurrency", "timeoutSeconds", "latestRevision"} {
 		if !strings.Contains(plan.Diff, want) {
-			t.Errorf("Plan().Diff should contain %q without --server-defaults:\n%s", want, plan.Diff)
+			t.Errorf("Plan().Diff should contain %q without resolving server defaults:\n%s", want, plan.Diff)
 		}
 	}
 }
@@ -133,10 +133,10 @@ func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 	}
 }
 
-// TestCompareManifestValidatesBeforeTheDryRun checks that, with --server-defaults, a service name
-// mismatch is rejected before anything is sent to the API. A dry run returns 400 when the service
-// name in the path and metadata.name in the body do not match, so sending it produces a confusing
-// error that gets misread as "permission is required".
+// TestCompareManifestValidatesBeforeTheDryRun checks that, when server defaults are resolved, a
+// service name mismatch is rejected before anything is sent to the API. A dry run returns 400 when
+// the service name in the path and metadata.name in the body do not match, so sending it produces
+// a confusing error that gets misread as "permission is required".
 func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
@@ -157,7 +157,8 @@ func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
 
 // TestCompareManifestSetsTheNamespace checks that the definition sent to the dry run goes through
 // the same pre-processing as deploy (setting the namespace to the target). Without it, for a
-// manifest that carries a namespace, only diff --server-defaults gets rejected by the API.
+// manifest that carries a namespace, only diff (whose dry run resolves the server defaults) gets
+// rejected by the API.
 func TestCompareManifestSetsTheNamespace(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 

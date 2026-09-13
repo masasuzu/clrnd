@@ -30,8 +30,9 @@ const liveServiceJSON = `{
   "status": {"latestReadyRevisionName": "my-svc-00007-abc"}
 }`
 
-// liveServiceWithRevisionJSON is a live service definition. Cloud Run always fills in
-// spec.template.metadata.name (the server-assigned revision name) when it is fetched.
+// liveServiceWithRevisionJSON is a live service definition that pins a revision name in
+// spec.template.metadata.name. Cloud Run returns that field only when a client set it (gcloud run
+// deploy --revision-suffix, Terraform, refresh); a name it generated itself is never returned.
 const liveServiceWithRevisionJSON = `{
   "apiVersion": "serving.knative.dev/v1",
   "kind": "Service",
@@ -75,8 +76,8 @@ spec:
 `
 
 // echoDryRun answers a dry-run write by returning the body it was sent unchanged. It simulates "a
-// server that adds no defaults", so going through --server-defaults leaves desired unchanged and
-// the diff stays exactly the manifest. It returns true when it has responded.
+// server that adds no defaults", so resolving server defaults through it leaves desired unchanged
+// and the diff stays exactly the manifest. It returns true when it has responded.
 func echoDryRun(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPut || !strings.Contains(r.URL.RawQuery, "dryRun=all") {
 		return false
@@ -354,8 +355,8 @@ func TestInitScaffoldsWithoutRevisionName(t *testing.T) {
 }
 
 // TestDiffIsEmptyRightAfterInit checks that the diff right after init is empty.
-// Live always has a revision name and init drops it, so unless the live revision name is ignored
-// in the comparison, a "diff that never goes away" keeps showing up.
+// When live pins a revision name, init drops it, so unless the live revision name is ignored in
+// the comparison, a "diff that never goes away" keeps showing up.
 func TestDiffIsEmptyRightAfterInit(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -652,9 +653,9 @@ func TestWaitFailsWhenTheRolloutFails(t *testing.T) {
 	}
 }
 
-// TestDeployFailsWhenTheRolloutFails is the heart of this PR. deploy used to exit 0 as soon as
-// ReplaceService was accepted, so even when a revision failed to start, CI treated it as a
-// success.
+// TestDeployFailsWhenTheRolloutFails checks that deploy fails when the rollout fails. deploy
+// used to exit 0 as soon as ReplaceService was accepted, so even when a revision failed to
+// start, CI treated it as a success.
 func TestDeployFailsWhenTheRolloutFails(t *testing.T) {
 	gets := rolloutAPI(t, serviceJSON(8, 8, "False", "ConflictingRevisionName"))
 
@@ -1201,8 +1202,8 @@ const defaultedServiceJSON = `{
   "status": {"observedGeneration": 7, "conditions": [{"type": "Ready", "status": "True"}]}
 }`
 
-// TestDiffServerDefaults checks that --server-defaults removes the part of the diff that comes
-// from server defaults (issue #11).
+// TestDiffServerDefaults checks that resolving server defaults (the default, which
+// --no-server-defaults turns off) removes the part of the diff that comes from them (issue #11).
 func TestDiffServerDefaults(t *testing.T) {
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -28,7 +28,8 @@ const (
 type WaitOptions struct {
 	// Timeout is the upper bound on the whole wait. 0 means 10 minutes.
 	Timeout time.Duration
-	// Interval is the first polling interval. 0 means 2 seconds. It then grows up to 15 seconds.
+	// Interval is the first polling interval. 0 means 2 seconds. It then grows up to 15 seconds; an
+	// interval given above that is kept as it is.
 	Interval time.Duration
 	// Generation means "wait until this generation or later is observed". Used right after a
 	// deploy to look only at the rollout of the generation it applied. 0 means any generation.

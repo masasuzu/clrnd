@@ -48,9 +48,9 @@ jobs:
           echo "$TAG ($SHA) is on main"
 
   # A tag push does not trigger regular CI (ci.yml's push.branches: [main]), so the same
-  # checks are called here. Without this, even a tag on a commit whose tests fail, or on a
-  # commit that is not in main, could publish an official release carrying signatures and
-  # provenance. A signature only guarantees "this was built from that commit".
+  # checks are called here. Without this, even a tag on a commit whose tests fail could publish
+  # an official release carrying signatures and provenance (a commit that is not in main is
+  # stopped earlier, by guard). A signature only guarantees "this was built from that commit".
   # The called workflow's checkout sees the same ref (the tag) as this workflow, so the
   # SHA that was checked and the SHA GoReleaser builds are the same.
   verify:

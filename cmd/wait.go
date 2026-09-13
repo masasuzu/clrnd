@@ -8,7 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Defaults for waiting on a rollout, shared by deploy and wait.
+// Defaults for --timeout / --interval, shared by every command that waits for a rollout or a
+// deletion.
 const (
 	defaultRolloutTimeout  = 10 * time.Minute
 	defaultRolloutInterval = 2 * time.Second
@@ -73,7 +74,7 @@ func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string
 }
 
 // waitForRollout waits until the service settles, printing progress to stderr whenever the state
-// changes. It is shared by wait (waits on the current state) and deploy (waits for the rollout of
+// changes. It is shared by wait (waits on the current state) and applyPlan (waits for the rollout of
 // the generation it applied). On success it prints nothing (following the convention that stdout
 // is data-only).
 func waitForRollout(cmd *cobra.Command, client *cloudrun.Client, service string, opts cloudrun.WaitOptions) error {

@@ -147,9 +147,9 @@ func (c *Client) PlanService(ctx context.Context, service string, desired *run.S
 	// For an update, put the resourceVersion of the state just read onto desired to make the write
 	// a compare-and-swap. Sent without it, Cloud Run accepts the write as an unconditional
 	// overwrite (confirmed against the real API), so concurrent deploys silently erase each
-	// other's changes. The write is made against exactly what the diff was computed from, so even
-	// when the definition passed in was fetched before this GET (the live of rollback/refresh), it
-	// is brought up to date here.
+	// other's changes. A definition that was itself read from live before this GET (rollback,
+	// refresh, traffic) already carries the version of that read, and setResourceVersion keeps it:
+	// a change made in between then fails with a 409 instead of being overwritten.
 	setResourceVersion(desired, current)
 
 	// Resolve defaults only on the desired definition used for the diff. plan.desired (what is sent
@@ -179,14 +179,15 @@ func (c *Client) CompareManifest(ctx context.Context, service string, manifest [
 	if err != nil {
 		return "", err
 	}
-	// Run the same validation as deploy. Doing it only with --server-defaults would let diff alone
-	// accept input deploy rejects (metadata.name differing from the service name, etc.) and render
-	// "a diff that looks as if the name could be changed".
+	// Run the same validation as deploy, whether or not server defaults are resolved. Doing it only
+	// on the dry-run path would let diff --no-server-defaults accept input deploy rejects
+	// (metadata.name differing from the service name, etc.) and render "a diff that looks as if the
+	// name could be changed".
 	if err := validate(desired, service); err != nil {
 		return "", err
 	}
-	// Match the target. The --server-defaults dry run gets the same validation as a real write, so
-	// unless the same pre-processing as deploy is applied, diff alone gets rejected.
+	// Match the target. The dry run that resolves server defaults gets the same validation as a
+	// real write, so unless the same pre-processing as deploy is applied, diff alone gets rejected.
 	c.setNamespace(desired)
 
 	current, err := c.GetService(ctx, service)
@@ -395,7 +396,8 @@ func isRetryable(err error) bool {
 	case gerr.Code >= 500:
 		return true
 	case gerr.Code >= 400:
-		// 400/401/403/404/409 and the like. A permanent failure.
+		// 400/401/404/409 and the like, and a 403 that is not a rate limit (handled above). A
+		// permanent failure.
 		return false
 	}
 	return true
@@ -575,9 +577,11 @@ func WithoutRevisionName(svc *run.Service) *run.Service {
 // alignRevisionName, when desired does not specify a revision name, returns the current used for
 // the comparison with its revision name dropped. It does not modify its arguments.
 //
-// Cloud Run always fills in the actual revision name when the service is fetched, so unless the
-// local side specifies one, treating it the same as a server-managed field is correct. Otherwise a
-// manifest that does not write a revision name would keep showing a diff that never goes away.
+// A name Cloud Run generated is never returned on read; the field is present only when a client
+// set it (gcloud run deploy --revision-suffix, Terraform's template.metadata.name, a manifest that
+// pins one, or refresh). Unless the local side specifies one, treating such a live name the same as
+// a server-managed field is correct. Otherwise a manifest that does not write a revision name would
+// keep showing a diff that never goes away against a service one of those tools last wrote.
 // When the local side sets one explicitly, it is kept on both sides and shown as a diff.
 func alignRevisionName(current, desired *run.Service) *run.Service {
 	if current == nil || revisionName(desired) != "" {

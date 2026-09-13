@@ -73,10 +73,11 @@ func TestShiftTrafficTargetToLatestFollowsTheNewest(t *testing.T) {
 	}
 }
 
-// TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision checks that, even with
-// --to-latest, the remainder goes to a revision other than the latest (using the latest itself
-// to take the remainder would just point two entries at the same revision, which is no split).
-func TestShiftTrafficTargetToLatestSplitsAgainstTheStableRevision(t *testing.T) {
+// TestShiftTrafficTargetToLatestRefusesWhenOnlyTheLatestServes checks that --to-latest with a
+// --percent below 100 is refused when the latest revision is the only one serving. The remainder
+// would have to stay on the latest itself, which points two entries at the same revision and is
+// no split, so the error points at --percent 100 instead.
+func TestShiftTrafficTargetToLatestRefusesWhenOnlyTheLatestServes(t *testing.T) {
 	live := serviceWithTraffic(
 		nil,
 		[]*run.TrafficTarget{

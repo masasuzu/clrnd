@@ -120,9 +120,9 @@ spec:
               key: latest
 `
 
-// startVerifyAPI starts a fake API that answers IAM and Secret Manager, and records the request
-// paths it receives. Each of the services uses the same endpoint option, so a single server routes
-// them by path.
+// startVerifyAPI starts a fake API that answers every API VerifyRemote calls, with the status that
+// status returns for each path, and records the request paths it receives. Each of those clients
+// uses the same endpoint option, so a single server routes them by path.
 func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string, []option.ClientOption) {
 	t.Helper()
 	var mu sync.Mutex
