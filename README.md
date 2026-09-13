@@ -7,10 +7,43 @@ and `refresh`.
 
 ## Installation
 
-Download a binary for your platform from the
-[releases page](https://github.com/masasuzu/clrnd/releases) — linux, macOS and Windows, on amd64
-and arm64. Each release ships a `checksums.txt`, a keyless cosign signature over it
-(`checksums.txt.bundle`), an SBOM per archive, and a build provenance attestation.
+Prebuilt binaries are published for linux, macOS and Windows, on amd64 and arm64. Every release
+also ships a `checksums.txt`, a keyless cosign signature over it (`checksums.txt.bundle`), an SBOM
+per archive, and a build provenance attestation.
+
+### Version managers
+
+[mise](https://mise.jdx.dev) installs `clrnd` straight from this repository's GitHub releases —
+there is no plugin to add and no registry entry to wait for:
+
+```sh
+mise use -g github:masasuzu/clrnd
+```
+
+mise checks the release's GitHub build provenance attestation when one is available, and this
+repository publishes one for every archive, so this path carries the same guarantee as the `cosign`
+verification below without running it by hand.
+
+Run it inside a project, without `-g`, to record `clrnd` in that project's `mise.toml` so everyone
+working on it installs the same tool. Name a version to pin one — without `@<version>` mise writes
+`latest` and re-resolves it on every install:
+
+```sh
+mise use github:masasuzu/clrnd@<version>
+```
+
+```toml
+[tools]
+"github:masasuzu/clrnd" = "<version>"
+```
+
+With a Go toolchain, `mise use -g go:github.com/masasuzu/clrnd@latest` builds from source instead of
+downloading an archive.
+
+### Prebuilt binaries
+
+Download the archive for your platform from the
+[releases page](https://github.com/masasuzu/clrnd/releases), then verify it:
 
 ```sh
 # Verify the checksums were signed by this repository's release workflow
@@ -30,19 +63,23 @@ install clrnd /usr/local/bin/
 clrnd --version
 ```
 
-With a Go toolchain (**Go 1.26.7 or newer**, matching `go.mod`):
+### With a Go toolchain
+
+Needs **Go 1.26.7 or newer**, matching `go.mod`:
 
 ```sh
 go install github.com/masasuzu/clrnd@latest
 ```
 
-Or build from source:
+### From source
 
 ```sh
 git clone https://github.com/masasuzu/clrnd.git
 cd clrnd
 go build -o clrnd .
 ```
+
+### Shell completion
 
 `clrnd completion bash|zsh|fish|powershell` prints a shell completion script (cobra's built-in);
 `clrnd completion <shell> --help` explains where your shell wants it installed.
