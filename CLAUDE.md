@@ -7,7 +7,7 @@ This file provides shared guidance to Claude Code and OpenAI Codex when working 
 `clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
 manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
 `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`, `delete`, and `refresh` subcommands.
-All twelve are implemented: the ecspresso-shaped set Cloud Run's model allows, plus `traffic`,
+All of them are implemented: the ecspresso-shaped set Cloud Run's model allows, plus `traffic`,
 which has no ecspresso counterpart because splitting traffic between revisions is Cloud Run's own
 model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
@@ -52,7 +52,7 @@ revision-name conflicts, asynchronous rollout failures).
   `*cobra.Command` var, following the standard cobra layout.
 - Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional and
   `resolveService`/`resolveManifest` fill them from the config file when absent (positional →
-  config); args fill service first, then manifest. Only the three commands that take **both** a
+  config); args fill service first, then manifest. Only the commands that take **both** a
   service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy`.
   Every other command uses `MaximumNArgs(1)`: `init`, `status`,
   `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
@@ -213,7 +213,7 @@ revision-name conflicts, asynchronous rollout failures).
   `serviceAccountName`, `timeoutSeconds`, `spec.traffic`, several annotations and labels), so a
   hand-written minimal manifest never diffs clean (issue #11). A `dryRun=all` write returns the
   service *with those defaults applied* — verified against the real API — so `resolveDefaults` sends
-  the desired definition through one and compares that instead. Two rules matter: it is **on by
+  the desired definition through one and compares that instead. What matters: it is **on by
   default** (like `kubectl diff`), which means `diff` now needs permission to update the service —
   `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
   `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
@@ -275,7 +275,7 @@ revision-name conflicts, asynchronous rollout failures).
   starting with a letter, not ending with a hyphen, and shorter than 64 characters. It does **not**
   check the `<service>-` prefix Cloud Run also requires — that one is guaranteed by construction in
   `RefreshTarget`, which builds the name as `<service>-<suffix>`.
-  `RefreshTarget` also refuses two situations where the command would succeed without doing its job:
+  `RefreshTarget` also refuses situations where the command would succeed without doing its job:
   a name equal to the one already on `spec.template` (no new revision is created, so the diff is
   empty and `applyPlan` reports "No changes."), and a service whose `spec.traffic` pins every target
   to a specific revision (`servesLatestRevision`) — the state `rollback` leaves behind, where a new
@@ -327,10 +327,10 @@ revision-name conflicts, asynchronous rollout failures).
   Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
   `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
   in `status.traffic` more than once (a percentage entry plus a tag entry), so the shares are summed
-  and the tags collected. The list is paged through with the `Continue` token, with two
+  and the tags collected. The list is paged through with the `Continue` token, with
   guards: it stops when the same token comes back (the next page would repeat the last one) and
   after `listRevisionsMaxPages` pages. Without them a server that keeps returning the same token
-  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. Both guards
+  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. The guards
   **return an error rather than the partial list**: only an empty `Continue` ends the paging
   normally. A truncated list is not just short — the repeated-token case has read the same page
   twice, so it can hold duplicates as well as gaps, and `rollback` picks both the current revision
@@ -426,6 +426,16 @@ revision-name conflicts, asynchronous rollout failures).
 
 - All user-facing strings (cobra `Short`/`Long`, flag usage, error messages) are in **English**.
   Code comments are in Japanese — keep that split.
+- **Do not write a count unless the number itself matters.** "provides twelve subcommands",
+  "three things to know", "refuses two cases", "CI's third job" all summarize a list, so every one
+  of them has to be edited whenever the list changes, and nothing checks that it was: README said
+  `eleven` long after `traffic` made it twelve (#114). Name the items, or say "the following", and
+  let the list speak for itself. When unsure, ask whether adding an item to the list would make the
+  sentence wrong; if it would, drop the number. "Both" over a list that can grow has the same
+  problem — say "each" or "all of them". This applies everywhere clrnd's text lives — README, this file,
+  help text, code comments, commit messages and PR descriptions. Keep a number when it *is* the
+  fact: a timeout, a page limit, the lines of context in a diff, a two-way traffic split, "only when
+  there is exactly one container".
 - `rootCmd.SilenceUsage` is on, so a runtime error prints only the error. Cobra applies that to
   flag and argument errors too, so `SetFlagErrorFunc` adds a one-line `Run '<cmd> --help' for usage`
   instead of the whole block. Note that cobra prints usage with `Println`, i.e. to `OutOrStderr()` —
@@ -471,7 +481,7 @@ revision-name conflicts, asynchronous rollout failures).
 - `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
   `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
   tests pass or fail depending on whether `go test` was started from a terminal.
-- CI's third job, `release-build`, cross-compiles **the release matrix** before any tag exists, by
+- CI's `release-build` job cross-compiles **the release matrix** before any tag exists, by
   running `goreleaser check` and `goreleaser build --snapshot --clean` — the ordinary `Build` step
   only ever compiles for the runner (linux/amd64), so a Windows-only compile error or a broken
   `.goreleaser.yaml` used to surface after the tag was pushed. It drives GoReleaser rather than a
@@ -509,7 +519,7 @@ revision-name conflicts, asynchronous rollout failures).
   does an authenticated git operation — GoReleaser authenticates through `GITHUB_TOKEN` in the
   environment). Note the consequence of gating on `govulncheck`: an advisory published after a
   tag blocks re-running that release until the dependency (or the Go toolchain in `go.mod`) is
-  bumped. Two more properties of `release.yml` are deliberate. Its `concurrency` group is the
+  bumped. Other properties of `release.yml` are deliberate too. Its `concurrency` group is the
   **fixed** string `release`, not one derived from `github.ref`: a per-tag group is a different
   group for every tag, so two tags pushed back to back would run GoReleaser concurrently against
   the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
@@ -518,7 +528,7 @@ revision-name conflicts, asynchronous rollout failures).
 - `--image` (`ApplyImageOverrides` in
   [internal/cloudrun/imageoverride.go](internal/cloudrun/imageoverride.go)) is the **one** field a
   flag may override, because the image tag is the one part of a manifest that legitimately changes
-  on every deploy. It is registered by `addImageFlag` on `verify` / `diff` / `deploy` — the three
+  on every deploy. It is registered by `addImageFlag` on `verify` / `diff` / `deploy` — the
   commands whose answer must describe the same thing — but **not** on `render`, which prints the
   template expansion without parsing it and would have to round-trip the YAML to apply an override.
   With no `--image` the manifest bytes are returned untouched, so nothing is reformatted when the

@@ -1,9 +1,9 @@
 # clrnd
 
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
-It takes a service name and a manifest file as arguments and provides eleven subcommands:
-`verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `delete`,
-and `refresh`.
+It takes a service name and a manifest file as arguments and provides the subcommands
+`verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`,
+`delete`, and `refresh`.
 
 ## Installation
 
@@ -302,7 +302,7 @@ the same trust level you give a `Makefile`.** Rendering one is not a read-only o
 run `clrnd` against a manifest, config, or state that someone outside your trust boundary can
 write, and be careful with a CI job that renders a manifest from a fork's pull request.
 
-Three specific things to know:
+Specific things to know:
 
 - **A manifest can read any environment variable.** It is a Go template, so
   `{{ env "GITHUB_TOKEN" }}` works anywhere in the file. In CI that means the job's secrets can end
@@ -345,7 +345,7 @@ express. These live next to it and are deliberately out of scope:
   and `rollback` / `traffic` preserve existing tags at 0%, but there is no command to add or move
   one. Traffic *percentages* are managed — see [`traffic`](#traffic).
 
-Two smaller edges worth knowing: a mistyped `--region` becomes a DNS failure rather than "unknown
+Smaller edges worth knowing: a mistyped `--region` becomes a DNS failure rather than "unknown
 region", because the region goes straight into the API endpoint; and the diff is a plain unified
 diff with three lines of context and no pager, so a large service produces a large diff.
 
@@ -653,7 +653,7 @@ as the request is accepted, or `--timeout` to change how long it waits (default 
 ### init
 
 Initialize a project from an existing Cloud Run service. `init` fetches the service and scaffolds
-two files: the manifest (Knative-style YAML, with server-managed read-only fields such as `status`,
+the manifest (Knative-style YAML, with server-managed read-only fields such as `status`,
 `metadata.uid`, `resourceVersion`, the `cloud.googleapis.com/location` label, and the
 `run.googleapis.com/client-name` / `client-version` annotations stripped so it is deployable) and a `clrnd.yml` holding the
 `project`, `region`, `service`, and `manifest` path. After `init` the other commands run with no
@@ -662,7 +662,7 @@ positional arguments. Existing files are not overwritten unless `--force` is giv
 The config is written to `--config` when you pass it (it does not have to exist yet — `init` is what
 creates it), otherwise to `clrnd.yml` in the current directory. The `manifest:` it records is
 relative to the config file, so `clrnd init my-service -c infra/clrnd.yml` keeps working from any
-directory (the directory has to exist — `clrnd` writes files, it never creates directories). Both files are written with mode `0600`, since a live service definition can contain
+directory (the directory has to exist — `clrnd` writes files, it never creates directories). The files are written with mode `0600`, since a live service definition can contain
 plaintext environment variables. `--force` replaces them through a temporary file, so an
 interrupted or failing write leaves the previous content in place rather than a truncated file, and
 an existing file's mode is tightened to `0600` rather than kept as it was. See
@@ -835,7 +835,7 @@ with no difference applies nothing, so the name stays until there is a real chan
 The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
 `--no-wait` is given.
 
-`refresh` refuses two cases rather than succeeding without effect: when the generated name matches
+`refresh` refuses to run rather than succeed without effect when the generated name matches
 the revision the service already points at (run it again a second later, or pass a different
 `--revision-suffix`), and when traffic is pinned to specific revisions — the state a `rollback`
 leaves behind, where a new revision would be created but would serve nothing.

@@ -74,7 +74,7 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 }
 
 // vpcConnectorAnnotation / cloudSQLAnnotation は、マニフェストが Cloud Run 以外の
-// リソースを参照する 2 つのアノテーション。どちらも「デプロイして初めて落ちる」種類の
+// リソースを参照するアノテーション。どれも「デプロイして初めて落ちる」種類の
 // 参照なので、サービスアカウントや Secret と同じ枠で存在を確認する。
 const (
 	vpcConnectorAnnotation = "run.googleapis.com/vpc-access-connector"
