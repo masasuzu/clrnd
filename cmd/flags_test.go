@@ -23,8 +23,8 @@ func TestConfirm(t *testing.T) {
 		{"  yes  \n", true},
 		{"n\n", false},
 		{"no\n", false},
-		{"\n", false}, // 空回答 → デフォルト No
-		{"", false},   // EOF (パイプ等) → No
+		{"\n", false}, // empty answer → default No
+		{"", false},   // EOF (a pipe, etc.) → No
 		{"maybe\n", false},
 	}
 	for _, tt := range tests {
@@ -48,7 +48,7 @@ func TestConfirm(t *testing.T) {
 	}
 }
 
-// withConfig は cfg を一時的に差し替え、テスト後に元へ戻す。
+// withConfig temporarily replaces cfg and restores it after the test.
 func withConfig(t *testing.T, c *config.Config) {
 	t.Helper()
 	prev := cfg
@@ -56,7 +56,7 @@ func withConfig(t *testing.T, c *config.Config) {
 	t.Cleanup(func() { cfg = prev })
 }
 
-// withConfigDir は configDir を一時的に差し替え、テスト後に元へ戻す。
+// withConfigDir temporarily replaces configDir and restores it after the test.
 func withConfigDir(t *testing.T, dir string) {
 	t.Helper()
 	prev := configDir
@@ -64,7 +64,7 @@ func withConfigDir(t *testing.T, dir string) {
 	t.Cleanup(func() { configDir = prev })
 }
 
-// blockingReader は Read が永久にブロックするリーダー。端末で入力待ちしている状態を模擬する。
+// blockingReader is a reader whose Read blocks forever. It simulates a terminal waiting for input.
 type blockingReader struct{ release chan struct{} }
 
 func (b blockingReader) Read([]byte) (int, error) {
@@ -72,8 +72,8 @@ func (b blockingReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// TestConfirmAbortsWhenContextIsCancelled は、入力待ちの最中に ctx が cancel されたら
-// (Ctrl-C 相当) confirm がブロックしたままにならないことを確認する。
+// TestConfirmAbortsWhenContextIsCancelled checks that confirm does not stay blocked when ctx is
+// cancelled (the equivalent of Ctrl-C) while it is waiting for input.
 func TestConfirmAbortsWhenContextIsCancelled(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
@@ -103,10 +103,10 @@ func TestResolveConfigPath(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"manifest.yaml", "/etc/app/manifest.yaml"}, // 相対 → config dir 基準
+		{"manifest.yaml", "/etc/app/manifest.yaml"}, // relative → against the config dir
 		{"sub/m.yaml", "/etc/app/sub/m.yaml"},
-		{"/abs/m.yaml", "/abs/m.yaml"},                             // 絶対はそのまま
-		{"gs://bucket/state.tfstate", "gs://bucket/state.tfstate"}, // URL はそのまま
+		{"/abs/m.yaml", "/abs/m.yaml"},                             // absolute stays as-is
+		{"gs://bucket/state.tfstate", "gs://bucket/state.tfstate"}, // a URL stays as-is
 		{"", ""},
 	}
 	for _, c := range cases {
@@ -279,8 +279,9 @@ func TestParseTfstateSources(t *testing.T) {
 	})
 
 	t.Run("hyphen name is not a valid prefix, treated as location", func(t *testing.T) {
-		// name はテンプレート関数のプレフィックスになるため Go 識別子に限る。
-		// ハイフンを含む左辺は name として採用されず、全体が location 扱いになる。
+		// The name becomes a template function prefix, so it is limited to a Go identifier.
+		// A left-hand side containing a hyphen is not taken as a name; the whole value is
+		// treated as the location.
 		got, err := parseTfstateSources([]string{"my-state=loc"})
 		if err != nil {
 			t.Fatalf("err = %v", err)

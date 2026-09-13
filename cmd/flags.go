@@ -17,19 +17,19 @@ import (
 	"google.golang.org/api/option"
 )
 
-// プロジェクト/リージョンのフラグが未指定のときに参照する環境変数 (gcloud 互換)。
-// 先のものを優先する。
+// Environment variables consulted when the project/region flags are not given (gcloud-compatible).
+// Earlier ones take precedence.
 const (
 	envProjectPrimary   = "CLOUDSDK_CORE_PROJECT" // gcloud config core/project
-	envProjectSecondary = "GOOGLE_CLOUD_PROJECT"  // Google クライアントライブラリ標準
+	envProjectSecondary = "GOOGLE_CLOUD_PROJECT"  // Google client library standard
 	envRegionPrimary    = "CLOUDSDK_RUN_REGION"   // gcloud config run/region
 	envRegionSecondary  = "GOOGLE_CLOUD_REGION"
 )
 
-// addTargetFlags は --project / --region フラグを登録する。これらは必須だが、未指定の
-// 場合は環境変数と config ファイルにフォールバックするため MarkFlagRequired は使わず
-// resolve* で検証する。usage にも両方を書く (フラグを渡していないのに動く/動かない
-// 理由が --help から分かるように)。
+// addTargetFlags registers the --project / --region flags. They are required, but when not given
+// they fall back to environment variables and the config file, so MarkFlagRequired is not used and
+// resolve* validates them instead. The usage text names those fallbacks too (so --help explains why
+// a command works, or does not, without the flag being passed).
 func addTargetFlags(cmd *cobra.Command, project, region *string) {
 	cmd.Flags().StringVar(project, "project", "",
 		fmt.Sprintf("GCP project ID (env: %s, %s; config: project)", envProjectPrimary, envProjectSecondary))
@@ -38,21 +38,21 @@ func addTargetFlags(cmd *cobra.Command, project, region *string) {
 			envRegionPrimary, envRegionSecondary))
 }
 
-// 機械可読な出力を持つサブコマンドの出力形式。
+// Output formats for subcommands that have machine-readable output.
 const (
 	formatText = "text"
 	formatJSON = "json"
 )
 
-// addFormatFlag は --format を登録する。-o/--output は init/render が「出力ファイル」の
-// 意味で使っているので、形式の指定には gcloud と同じ --format を使う。
+// addFormatFlag registers --format. init/render already use -o/--output to mean "the output
+// file", so the format is chosen with --format, the same as gcloud.
 func addFormatFlag(cmd *cobra.Command, format *string) {
 	cmd.Flags().StringVar(format, "format", formatText,
 		fmt.Sprintf("output format: %s or %s", formatText, formatJSON))
 }
 
-// validateFormat は --format の値を検証する。クライアント生成 (= ADC 探索) より前に
-// 呼ぶこと。順序が逆だと、フラグの間違いが認証エラーに隠れる。
+// validateFormat validates the value of --format. Call it before creating the client
+// (= ADC discovery). In the opposite order a flag mistake is hidden behind an authentication error.
 func validateFormat(format string) error {
 	if format != formatText && format != formatJSON {
 		return fmt.Errorf("invalid --format %q: must be %q or %q", format, formatText, formatJSON)
@@ -60,8 +60,8 @@ func validateFormat(format string) error {
 	return nil
 }
 
-// writeFormatted は --format に応じて stdout へ書き出す。json のときは value を、
-// text のときは text をそのまま出す。
+// writeFormatted writes to stdout according to --format: value for json, and text as-is for
+// text.
 func writeFormatted(cmd *cobra.Command, format string, value any, text string) error {
 	if format == formatJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
@@ -72,12 +72,13 @@ func writeFormatted(cmd *cobra.Command, format string, value any, text string) e
 	return nil
 }
 
-// clientOptions は Cloud Run クライアント生成時に追加で渡すオプション。通常は空で、
-// テストから httptest のフェイク API を差し込むためにだけ使う。
+// clientOptions are extra options passed when creating the Cloud Run client. It is normally empty
+// and is used only by tests, to inject an httptest fake API.
 var clientOptions []option.ClientOption
 
-// newCloudRunClient は project/region をフラグ > 環境変数 > config の順で解決し、
-// Cloud Run Admin API クライアントを生成する。API を叩くサブコマンドの共通入口。
+// newCloudRunClient resolves project/region in the order flag > environment variable > config and
+// creates a Cloud Run Admin API client. It is the common entry point for subcommands that call the
+// API.
 func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*cloudrun.Client, error) {
 	project, err := resolveProject(projectFlag)
 	if err != nil {
@@ -90,7 +91,7 @@ func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*clo
 	return cloudrun.NewClient(cmd.Context(), project, region, clientOptions...)
 }
 
-// resolveService は位置引数 args[0] > config service の順で解決する。
+// resolveService resolves the service in the order positional args[0] > config service.
 func resolveService(args []string) (string, error) {
 	if len(args) >= 1 && args[0] != "" {
 		return args[0], nil
@@ -101,15 +102,15 @@ func resolveService(args []string) (string, error) {
 	return "", fmt.Errorf("service is required: pass it as an argument or set service in the config file")
 }
 
-// resolveManifest は位置引数 args[1] > config manifest の順で解決する
-// (service と manifest を取るサブコマンド用)。
+// resolveManifest resolves the manifest in the order positional args[1] > config manifest
+// (for subcommands that take both a service and a manifest).
 func resolveManifest(args []string) (string, error) {
 	return resolveManifestAt(args, 1)
 }
 
-// resolveManifestAt は位置引数 args[idx] > config manifest の順で manifest を解決する。
-// service を取らない render は idx=0 で、唯一の位置引数を manifest として扱う。
-// config 由来の相対パスは config ファイルのディレクトリ基準で解決する。
+// resolveManifestAt resolves the manifest in the order positional args[idx] > config manifest.
+// render, which takes no service, uses idx=0 and treats its only positional argument as the
+// manifest. A relative path from the config is resolved against the config file's directory.
 func resolveManifestAt(args []string, idx int) (string, error) {
 	if len(args) > idx && args[idx] != "" {
 		return args[idx], nil
@@ -120,8 +121,8 @@ func resolveManifestAt(args []string, idx int) (string, error) {
 	return "", fmt.Errorf("manifest is required: pass it as an argument or set manifest in the config file")
 }
 
-// resolveConfigPath は config に書かれた相対パスを config ファイルのディレクトリ基準に
-// 解決する。絶対パスとスキーム付き URL (gs://, s3:// など) はそのまま返す。
+// resolveConfigPath resolves a relative path written in the config against the config file's
+// directory. Absolute paths and URLs with a scheme (gs://, s3://, etc.) are returned unchanged.
 func resolveConfigPath(p string) string {
 	if p == "" || configDir == "" || filepath.IsAbs(p) || strings.Contains(p, "://") {
 		return p
@@ -129,8 +130,8 @@ func resolveConfigPath(p string) string {
 	return filepath.Join(configDir, p)
 }
 
-// resolveProject はフラグ > 環境変数 > config の順で解決する (gcloud と同じ優先順位)。
-// どこにも無ければエラー。
+// resolveProject resolves in the order flag > environment variable > config (the same precedence
+// as gcloud). It is an error when none of them is set.
 func resolveProject(flag string) (string, error) {
 	if v := firstNonEmpty(flag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project); v != "" {
 		return v, nil
@@ -138,7 +139,8 @@ func resolveProject(flag string) (string, error) {
 	return "", fmt.Errorf("project is required: set --project, $%s / $%s, or project in the config file", envProjectPrimary, envProjectSecondary)
 }
 
-// resolveRegion はフラグ > 環境変数 > config の順で解決する。どこにも無ければエラー。
+// resolveRegion resolves in the order flag > environment variable > config. It is an error when
+// none of them is set.
 func resolveRegion(flag string) (string, error) {
 	if v := firstNonEmpty(flag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region); v != "" {
 		return v, nil
@@ -146,9 +148,10 @@ func resolveRegion(flag string) (string, error) {
 	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
 }
 
-// resolveTargetOptional は resolveProject/resolveRegion と同じ優先順位で project/region を
-// 解決するが、どちらかが欠けてもエラーにせず ok=false を返す。verify の API 実在チェックを
-// 「対象が解決できるときだけ」走らせる (オフライン検証を壊さない) ために使う。
+// resolveTargetOptional resolves project/region with the same precedence as
+// resolveProject/resolveRegion, but when either is missing it returns ok=false instead of an
+// error. It is used to run verify's API existence checks "only when a target resolves" (so
+// offline verification is not broken).
 func resolveTargetOptional(projectFlag, regionFlag string) (project, region string, ok bool) {
 	project = firstNonEmpty(projectFlag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project)
 	region = firstNonEmpty(regionFlag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region)
@@ -158,10 +161,11 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 	return project, region, true
 }
 
-// warnPinnedRevision はマニフェストがリビジョン名 (spec.template.metadata.name) を固定して
-// いる場合に stderr へ警告する。Cloud Run は設定の異なる同名リビジョンを拒否するため、次に
-// テンプレートを変えた deploy が必ず失敗する。verify と deploy で同じ警告を出す
-// (deploy だけを回す CI でも、不透明な API エラーの前に理由が分かるように)。
+// warnPinnedRevision warns on stderr when the manifest pins the revision name
+// (spec.template.metadata.name). Cloud Run rejects a revision with the same name but a different
+// configuration, so the next deploy that changes the template is certain to fail. verify and
+// deploy print the same warning (so that even a CI job that only runs deploy learns the reason
+// before the opaque API error).
 func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
 	warning, err := pinnedRevisionWarning(manifest)
 	if err != nil || warning == "" {
@@ -171,8 +175,8 @@ func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
 	return nil
 }
 
-// warnManifestTraffic は --no-traffic がマニフェストの spec.traffic を上書きすることを
-// stderr へ警告する。書いていない場合は何もしない。
+// warnManifestTraffic warns on stderr that --no-traffic overwrites the manifest's spec.traffic.
+// It does nothing when the manifest has none.
 func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
 	pinned, err := cloudrun.HasTraffic(manifest)
 	if err != nil {
@@ -187,8 +191,9 @@ func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
 	return nil
 }
 
-// pinnedRevisionWarning は警告の文言そのものを返す (固定していなければ空文字列)。
-// verify の --format json は警告も構造化して返すので、出力先を決め打ちにしない。
+// pinnedRevisionWarning returns the warning text itself (an empty string when nothing is pinned).
+// verify's --format json returns warnings in structured form too, so the output destination is
+// not hard-wired here.
 func pinnedRevisionWarning(manifest []byte) (string, error) {
 	revision, err := cloudrun.RevisionName(manifest)
 	if err != nil {
@@ -203,9 +208,10 @@ func pinnedRevisionWarning(manifest []byte) (string, error) {
 			"configuration, so a later deploy that changes the template will fail", revision), nil
 }
 
-// confirm はプロンプトを stderr に出し、stdin から yes/no を読む。デフォルトは No。
-// stdin の読み取りは中断できないため goroutine に逃がし、ctx が cancel されたら
-// (Ctrl-C など) 待たずに戻る。そうしないとプロンプト表示中は Ctrl-C が効かない。
+// confirm prints the prompt to stderr and reads yes/no from stdin. The default is No.
+// A read from stdin cannot be interrupted, so it runs in a goroutine and confirm returns without
+// waiting once ctx is cancelled (Ctrl-C, etc.). Otherwise Ctrl-C would not work while the prompt
+// is shown.
 func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, error) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "%s [y/N]: ", prompt)
 
@@ -213,8 +219,8 @@ func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, erro
 		line string
 		err  error
 	}
-	// ctx cancel 時この goroutine は stdin をブロックしたまま残るが、直後に
-	// プロセスが終了するので問題にならない。
+	// When ctx is cancelled this goroutine is left blocked on stdin, but that is not a problem
+	// because the process exits right after.
 	ch := make(chan answer, 1)
 	go func() {
 		line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
@@ -223,7 +229,8 @@ func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, erro
 
 	select {
 	case <-ctx.Done():
-		// ^C でプロンプト行の途中に居るので、改行してから抜ける。
+		// After ^C the cursor is in the middle of the prompt line, so print a newline before
+		// returning.
 		fmt.Fprintln(cmd.ErrOrStderr())
 		return false, fmt.Errorf("aborted: %w", ctx.Err())
 	case a := <-ch:
@@ -235,8 +242,8 @@ func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, erro
 	}
 }
 
-// isInteractive はコマンドの標準入力が端末 (対話可能) かを判定する。confirm と同じ入力
-// ソース (cmd.InOrStdin) を見るため、両者の判定が食い違わない。
+// isInteractive reports whether the command's standard input is a terminal (interactive). It looks
+// at the same input source as confirm (cmd.InOrStdin), so the two cannot disagree.
 func isInteractive(cmd *cobra.Command) bool {
 	f, ok := cmd.InOrStdin().(*os.File)
 	if !ok {
@@ -249,7 +256,7 @@ func isInteractive(cmd *cobra.Command) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// addManifestFlags は --tfstate フラグを登録する。繰り返し指定可能。
+// addManifestFlags registers the --tfstate flag. It can be repeated.
 func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 	cmd.Flags().StringArrayVar(tfstate, "tfstate", nil,
 		"Terraform state for {{ tfstate }} placeholders: <location> or <name>=<location> "+
@@ -257,18 +264,18 @@ func addManifestFlags(cmd *cobra.Command, tfstate *[]string) {
 			"local path or s3://, gs://, ... URL)")
 }
 
-// addImageFlag は --image を登録する。マニフェストを読むコマンドのうち、
-// **適用に関わるもの** (verify / diff / deploy) だけに付ける。render に付けないのは、
-// render が「テンプレートを展開した文字列をそのまま出す」コマンドで、差し替えのために
-// パースし直すとその性質が崩れるため。
+// addImageFlag registers --image. Of the commands that read a manifest, it is added only to
+// **those involved in applying it** (verify / diff / deploy). render does not get it because render
+// is the command that "prints the template expansion as-is", and re-parsing it to apply an
+// override would break that property.
 func addImageFlag(cmd *cobra.Command, images *[]string) {
 	cmd.Flags().StringArrayVar(images, "image", nil,
 		"override a container image: <image>, or <container>=<image> when the manifest "+
 			"defines more than one container (repeatable)")
 }
 
-// renderManifest は tfstate 指定 (フラグ優先、無ければ config) を解釈し、マニフェストの
-// プレースホルダーを埋める。
+// renderManifest interprets the tfstate specification (the flag first, otherwise the config) and
+// fills in the manifest's placeholders.
 func renderManifest(ctx context.Context, manifest []byte, tfstateSpecs []string) ([]byte, error) {
 	sources, err := resolveTfstateSources(tfstateSpecs)
 	if err != nil {
@@ -277,8 +284,8 @@ func renderManifest(ctx context.Context, manifest []byte, tfstateSpecs []string)
 	return render.Render(ctx, manifest, sources)
 }
 
-// resolveTfstateSources は --tfstate フラグが指定されていればそれを使い、無ければ config の
-// tfstate を使う (フラグが config を置き換える)。
+// resolveTfstateSources uses the --tfstate flags when given, and the config's tfstate otherwise
+// (the flags replace the config).
 func resolveTfstateSources(specs []string) ([]render.Source, error) {
 	if len(specs) > 0 {
 		return parseTfstateSources(specs)
@@ -286,7 +293,7 @@ func resolveTfstateSources(specs []string) ([]render.Source, error) {
 	return configTfstateSources()
 }
 
-// configTfstateSources は config の tfstate を render.Source に変換する。
+// configTfstateSources converts the config's tfstate entries into render.Source values.
 func configTfstateSources() ([]render.Source, error) {
 	var out []render.Source
 	seen := make(map[string]bool)
@@ -307,10 +314,10 @@ func configTfstateSources() ([]render.Source, error) {
 	return out, nil
 }
 
-// parseTfstateSources は --tfstate の各指定を render.Source に変換する。
-// "name=location" は名前付き、"location" のみは "default" として扱う。
-// location に "=" を含む URL もあるため、name は先頭の "=" より前が name 形式の
-// 場合に限り採用する。
+// parseTfstateSources converts each --tfstate specification into a render.Source.
+// "name=location" is a named state; a bare "location" is treated as "default".
+// Some location URLs contain "=", so a name is taken only when the part before the first "=" has
+// the form of a name.
 func parseTfstateSources(specs []string) ([]render.Source, error) {
 	var out []render.Source
 	seen := make(map[string]bool)
@@ -331,8 +338,9 @@ func parseTfstateSources(specs []string) ([]render.Source, error) {
 	return out, nil
 }
 
-// firstNonEmpty は前後の空白を除いて最初の空でない文字列を (トリム済みで) 返す。
-// 空白のみの値は未設定として扱い、次のソースへフォールバックする。
+// firstNonEmpty returns the first string that is non-empty after trimming surrounding whitespace
+// (in its trimmed form). A whitespace-only value is treated as unset and falls back to the next
+// source.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if trimmed := strings.TrimSpace(v); trimmed != "" {

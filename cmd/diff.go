@@ -62,14 +62,15 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// deploy と同じ差し替えを通す。ここを外すと、diff が見せたものと deploy が
-	// 適用するものが食い違う。
+	// Apply the same overrides as deploy. Without this, what diff shows and what deploy applies
+	// would differ.
 	local, err = cloudrun.ApplyImageOverrides(local, diffImages)
 	if err != nil {
 		return err
 	}
-	// ローカルのパースはクライアント生成 (= ADC 探索) より先に行う。マニフェストの問題が
-	// 認証エラーに隠れないようにするため。Compare も同じパースをするが、純粋な処理で安い。
+	// Parse locally before creating the client (= ADC discovery), so that a manifest problem is
+	// not hidden behind an authentication error. Compare does the same parse, but it is a pure
+	// check and cheap.
 	if err := cloudrun.CheckSyntax(local); err != nil {
 		return err
 	}

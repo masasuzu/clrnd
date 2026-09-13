@@ -58,15 +58,15 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 何を消すのかを先に見せる。存在しなければここで分かるので、
-	// 実在しないサービスに対して確認を求めることもない。
+	// Show what is about to be deleted first. A missing service is detected here, so there is no
+	// confirmation prompt for a service that does not exist.
 	status, err := client.Status(ctx, service)
 	if err != nil {
 		return err
 	}
 	printDeleteTarget(cmd, client.Project(), client.Region(), service, status.URL)
 
-	// --dry-run は何も消さないので確認を求めない (deploy と同じ方針)。
+	// --dry-run deletes nothing, so it does not ask for confirmation (the same policy as deploy).
 	if !deleteDryRun {
 		ok, err := confirmAction(cmd, deleteAutoApprove, "delete",
 			fmt.Sprintf("Delete service %q? This cannot be undone.", service))
@@ -81,15 +81,15 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	if err := client.DeleteService(ctx, service, deleteDryRun); err != nil {
 		return err
 	}
-	// --dry-run は何も消していないので待たない。
+	// --dry-run has deleted nothing, so there is nothing to wait for.
 	if deleteDryRun || deleteNoWait {
 		return nil
 	}
 	return waitForDeletion(cmd, client, service, deleteTimeout, deleteInterval)
 }
 
-// printDeleteTarget は削除対象を stderr に並べる。プロジェクトとリージョンを必ず
-// 出すのは、取り違えたまま消してしまう事故を防ぐため。
+// printDeleteTarget lists what is about to be deleted on stderr. The project and region are always
+// printed to prevent the accident of deleting something after mixing them up.
 func printDeleteTarget(cmd *cobra.Command, project, region, service, url string) {
 	out := cmd.ErrOrStderr()
 	fmt.Fprintln(out, "About to delete:")

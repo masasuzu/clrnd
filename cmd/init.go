@@ -11,7 +11,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// init が生成する設定ファイル名。ルートの自動検出名 (defaultConfigFiles) の先頭に合わせる。
+// The name of the config file init generates. It matches the first of the root's auto-detected
+// names (defaultConfigFiles).
 const initConfigFile = "clrnd.yml"
 
 var (
@@ -32,7 +33,8 @@ var initCmd = &cobra.Command{
 		"service may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
-	// 生成先を -c で指定できるようにする。生成するファイルなので、まだ無くてもよい。
+	// Let -c choose where the config is generated. It is a file being generated, so it need not
+	// exist yet.
 	Annotations: map[string]string{annotationConfigOptional: ""},
 }
 
@@ -48,14 +50,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// --config が指定されていればそこへ書く。読む場所と書く場所が食い違うと、
-	// -c infra/clrnd.yml を渡したのに ./clrnd.yml が生まれる。
+	// When --config is given, write there. If the read location and the write location disagreed,
+	// passing -c infra/clrnd.yml would still produce ./clrnd.yml.
 	configFile := initConfigFile
 	if configPath != "" {
 		configFile = configPath
 	}
 
-	// 上書き事故を防ぐため、書き込み前に既存ファイルをまとめて確認する。
+	// To prevent accidental overwrites, check all the existing files up front, before writing any.
 	manifestExisted := fileExists(initManifest)
 	if !initForce {
 		for _, path := range []string{initManifest, configFile} {
@@ -75,45 +77,48 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// live のリビジョン名をそのまま残すと、テンプレートを変えた 2 回目の deploy が
-	// 「設定の異なる同名リビジョンは作れない」で失敗する。scaffold では落として自動採番に任せる。
+	// Keeping the live revision name as-is makes the second deploy that changes the template fail
+	// with "a revision with the same name and a different configuration cannot be created". The
+	// scaffold drops it and leaves naming to Cloud Run's automatic numbering.
 	manifest, err := cloudrun.ToManifest(cloudrun.WithoutRevisionName(obj))
 	if err != nil {
 		return err
 	}
 
-	// config に書くマニフェストのパスは config ファイルからの相対にする。
-	// resolveConfigPath が config のディレクトリ基準で解決するため、cwd 基準のまま
-	// 記録すると -c で別ディレクトリを指したときにパスが壊れる。
+	// The manifest path written to the config is made relative to the config file.
+	// resolveConfigPath resolves it against the config's directory, so recording it relative to
+	// the cwd would break the path when -c points at another directory.
 	configYAML, err := scaffoldConfig(client.Project(), client.Region(), service,
 		manifestPathFor(configFile, initManifest))
 	if err != nil {
 		return err
 	}
 
-	// --force で既存のマニフェストを潰す場合は、巻き戻せるように中身を控えておく。
+	// When --force is about to overwrite an existing manifest, keep its content so it can be
+	// rolled back.
 	var previousManifest []byte
 	if manifestExisted {
 		previousManifest, _ = os.ReadFile(initManifest)
 	}
 
-	// 生成物には live の平文の環境変数が入りうるので、他ユーザから読めないようにする。
-	// --force が無い場合は作成と存在確認を 1 回の操作で行い、上の確認の後に作られた
-	// ファイルを潰さない。--force の場合は原子的に置き換える。
+	// The generated files can contain the live service's plaintext environment variables, so keep
+	// them unreadable by other users. Without --force, creation and the existence check happen in
+	// a single operation, so a file created after the check above is not overwritten. With
+	// --force, the file is replaced atomically.
 	if err := writeScaffold(initManifest, manifest, initForce); err != nil {
 		return err
 	}
 	if err := writeScaffold(configFile, configYAML, initForce); err != nil {
-		// config の書き込みに失敗したら manifest を元に戻し、中途半端な scaffold を
-		// 残さない。巻き戻しは best-effort で、返すのは本来の書き込みエラー。
+		// If writing the config fails, restore the manifest so no half-finished scaffold is left
+		// behind. The rollback is best-effort, and the error returned is the original write error.
 		restoreManifest(initManifest, previousManifest, manifestExisted)
 		return err
 	}
 	return nil
 }
 
-// writeScaffold は init の生成物を 1 つ書く。force なら既存ファイルを原子的に置き換え、
-// そうでなければ既に在る場合に失敗する。
+// writeScaffold writes one of init's generated files. With force it replaces an existing file
+// atomically; otherwise it fails when the file already exists.
 func writeScaffold(path string, data []byte, force bool) error {
 	if force {
 		return writeFilePrivate(path, data)
@@ -121,8 +126,8 @@ func writeScaffold(path string, data []byte, force bool) error {
 	return writeFileExclusive(path, data)
 }
 
-// manifestPathFor は config ファイルから見たマニフェストの相対パスを返す。
-// 相対にできない場合 (別ボリューム等) は与えられたパスをそのまま使う。
+// manifestPathFor returns the manifest's path relative to the config file.
+// When it cannot be made relative (a different volume, etc.), the given path is used as-is.
 func manifestPathFor(configFile, manifest string) string {
 	rel, err := filepath.Rel(filepath.Dir(configFile), manifest)
 	if err != nil {
@@ -131,8 +136,8 @@ func manifestPathFor(configFile, manifest string) string {
 	return rel
 }
 
-// restoreManifest は init が書き換えたマニフェストを元の状態に戻す。
-// 元から無かった場合は削除し、在った場合は控えておいた中身を書き戻す。
+// restoreManifest puts the manifest init rewrote back into its original state.
+// If it did not exist before, it is removed; if it did, the saved content is written back.
 func restoreManifest(path string, previous []byte, existed bool) {
 	if !existed {
 		_ = os.Remove(path)
@@ -143,15 +148,16 @@ func restoreManifest(path string, previous []byte, existed bool) {
 	}
 }
 
-// fileExists は path にファイル (またはディレクトリ) が存在するかを返す。
+// fileExists reports whether a file (or directory) exists at path.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// scaffoldConfig は init が生成する clrnd.yml の中身を組み立てる。手書きせず config.Config を
-// マーシャルすることで、値のエスケープ (パスにコロン等が含まれる場合) を YAML 側に任せ、
-// clrnd.yml を読む側 (config.Load) とスキーマがずれないようにする。
+// scaffoldConfig builds the content of the clrnd.yml that init generates. Marshalling
+// config.Config instead of writing it by hand leaves value escaping (when a path contains a colon,
+// etc.) to the YAML library and keeps the schema in step with the reader of clrnd.yml
+// (config.Load).
 func scaffoldConfig(project, region, service, manifest string) ([]byte, error) {
 	out, err := yaml.Marshal(config.Config{
 		Project:  project,

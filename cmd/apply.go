@@ -8,18 +8,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// applyOptions は適用フローの共通オプション。deploy と rollback が同じ流れを使う。
+// applyOptions holds the options shared by the apply flow. deploy and rollback use the same flow.
 type applyOptions struct {
 	DryRun      bool
 	AutoApprove bool
 	NoWait      bool
 	Timeout     time.Duration
 	Interval    time.Duration
-	// Prompt は確認プロンプトの文言。
+	// Prompt is the text of the confirmation prompt.
 	Prompt string
 }
 
-// addApplyFlags は適用フローに共通のフラグを登録する。
+// addApplyFlags registers the flags shared by the apply flow.
 func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
 	cmd.Flags().BoolVar(&o.DryRun, "dry-run", false,
 		"validate the request server-side without applying changes")
@@ -33,17 +33,19 @@ func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
 		"how long to wait for the rollout to finish")
 }
 
-// addServerDefaultsFlag は --no-server-defaults を登録する。diff と deploy で共有する。
-// 既定でサーバ既定値を解決するので、フラグは「やめる」側に置く (--no-wait と同じ形)。
+// addServerDefaultsFlag registers --no-server-defaults. It is shared by diff and deploy.
+// Server defaults are resolved by default, so the flag is the one that turns it off (the same
+// shape as --no-wait).
 func addServerDefaultsFlag(cmd *cobra.Command, skip *bool) {
 	cmd.Flags().BoolVar(skip, "no-server-defaults", false,
 		"compare against the manifest as written, without asking Cloud Run to fill in the fields "+
 			"it defaults (avoids the dry-run write, so read-only credentials are enough)")
 }
 
-// confirmAction は取り返しのつかない操作の前に確認を取る。autoApprove なら省略し、
-// 確認できない環境 (非対話な stdin) では拒否する。ok が false なら中止する
-// (中止メッセージは出力済み)。action はエラー文に埋める動詞。
+// confirmAction asks for confirmation before an irreversible operation. It skips the prompt when
+// autoApprove is set, and refuses where confirmation is impossible (a non-interactive stdin).
+// When ok is false the caller aborts (the abort message has already been printed). action is the
+// verb embedded in the error message.
 func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) (bool, error) {
 	if autoApprove {
 		return true, nil
@@ -62,12 +64,13 @@ func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) 
 	return ok, nil
 }
 
-// applyPlan は差分を stdout に出し、必要なら確認を取り、適用してロールアウトを待つ。
-// 状態やプロンプトは stderr、stdout はデータ (差分) 専用。
+// applyPlan prints the diff to stdout, confirms when needed, applies, and waits for the rollout.
+// Status and prompts go to stderr; stdout is for data (the diff) only.
 func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.DeployPlan, o applyOptions) error {
 	ctx := cmd.Context()
 
-	// 差分が無ければ適用はしない。--dry-run はサーバ側検証のために続行する。
+	// With no diff there is nothing to apply. --dry-run still goes ahead, for server-side
+	// validation.
 	if plan.Diff == "" {
 		fmt.Fprintln(cmd.ErrOrStderr(), "No changes.")
 		if o.DryRun {
@@ -77,10 +80,11 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 		if o.NoWait {
 			return nil
 		}
-		// 適用するものは無いが、サービスが健全かは確認する。
-		// 失敗したデプロイの後に同じマニフェストで再実行すると差分はゼロになるので、
-		// ここを素通りさせると壊れたまま成功扱いになる (待機を入れた意味が消える)。
-		// Generation は指定しない = 世代を問わず「いま Ready か」だけを見る。
+		// There is nothing to apply, but still check that the service is healthy.
+		// Re-running with the same manifest after a failed deploy produces an empty diff, so
+		// letting this case through would report a broken service as a success (defeating the
+		// point of adding the wait).
+		// No Generation is given: only "is it Ready now", whatever the generation.
 		return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
 			Timeout:  o.Timeout,
 			Interval: o.Interval,
@@ -88,7 +92,7 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 	}
 	fmt.Fprint(cmd.OutOrStdout(), plan.Diff)
 
-	// dry-run でなければ確認する。--auto-approve でスキップ。
+	// Confirm unless this is a dry run. --auto-approve skips it.
 	if !o.DryRun {
 		ok, err := confirmAction(cmd, o.AutoApprove, "apply", o.Prompt)
 		if err != nil {
@@ -103,7 +107,7 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 	if err != nil {
 		return err
 	}
-	// --dry-run はサーバ側検証だけで何も変わらないので待たない。
+	// --dry-run only validates server-side and changes nothing, so there is nothing to wait for.
 	if o.DryRun || o.NoWait {
 		return nil
 	}

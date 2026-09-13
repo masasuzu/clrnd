@@ -6,32 +6,35 @@ import (
 	"path/filepath"
 )
 
-// privateFileMode は clrnd が生成するファイルの権限。render の出力には must_env で
-// 展開した秘密が、init の出力には live サービスの平文の env[].value が入りうるので、
-// 他ユーザから読めないようにする。
+// privateFileMode is the permission of the files clrnd generates. render's output can contain
+// secrets expanded with must_env, and init's output can contain the live service's plaintext
+// env[].value, so keep them unreadable by other users.
 const privateFileMode os.FileMode = 0o600
 
-// writeFilePrivate は data を path へ書き、書き終わったファイルの権限を必ず
-// privateFileMode にする。
+// writeFilePrivate writes data to path and always leaves the finished file with privateFileMode
+// permissions.
 //
-// os.WriteFile では足りない。perm は新規作成時にしか適用されないので、
-// 既存の出力先が 0644 なら秘密を書いても 0644 のまま残る。そして既存ファイルは書き込み
-// 前に truncate されるので、途中で失敗すると以前の正常な内容まで失う。
-// 同じディレクトリの一時ファイルへ書ききってから rename することで、どちらも避ける。
+// os.WriteFile is not enough. Its perm is applied only when the file is created, so an existing
+// 0644 destination stays 0644 even after a secret is written into it. And an existing file is
+// truncated before writing, so a failure part-way through loses the previous good content as well.
+// Writing the whole content to a temporary file in the same directory and then renaming it avoids
+// each of these.
 //
-// 「置き換えが原子的で、path が常に古い内容か新しい内容のどちらかになる」と言えるのは
-// Unix の rename に限る。Windows の os.Rename は MoveFileEx(MOVEFILE_REPLACE_EXISTING)
-// で、置換の原子性は OS が保証しないので、クラッシュ時の中間状態はありえる。それでも
-// 一時ファイル経由にする意味は残る: 書き込みの失敗 (容量不足/I-O エラー) では出力先に
-// 触れないままなので前の内容が残り、部分的に書けたファイルが表に出ることも無い。
-// mode についても同じ線引きで、Windows のファイル権限は読み取り専用ビットに丸められる
-// ため、0600 が「他ユーザから読めない」ことを意味するのは Unix だけ。
+// "The replacement is atomic, so path always holds either the old or the new content" holds only
+// for the Unix rename. Windows' os.Rename is MoveFileEx(MOVEFILE_REPLACE_EXISTING), whose
+// replacement the OS does not guarantee to be atomic, so an intermediate state after a crash is
+// possible. Going through a temporary file still has a point there: a failed write (disk full /
+// I/O error) never touches the destination, so the previous content remains and a partially
+// written file is never exposed.
+// The mode follows the same line: Windows reduces file permissions to the read-only bit, so 0600
+// means "unreadable by other users" only on Unix.
 //
-// Windows では出力先が他プロセスに開かれていると rename が失敗するが、これは失敗として
-// 返るだけで、出力先の内容は壊れない。
+// On Windows the rename fails when another process has the destination open, but that is only
+// returned as a failure; the destination's content is not damaged.
 func writeFilePrivate(path string, data []byte) error {
-	// /dev/null やプロセス置換 (>(cmd)) のような通常ファイルでない出力先には、
-	// 置き換えるべき中身も権限も無い。rename もできないのでそのまま書く。
+	// A destination that is not a regular file, such as /dev/null or a process substitution
+	// (>(cmd)), has no content to replace and no permissions to set. It cannot be renamed over
+	// either, so write to it directly.
 	if info, err := os.Stat(path); err == nil && !info.Mode().IsRegular() {
 		if err := os.WriteFile(path, data, privateFileMode); err != nil {
 			return fmt.Errorf("failed to write to %s: %w", path, err)
@@ -45,7 +48,8 @@ func writeFilePrivate(path string, data []byte) error {
 		return fmt.Errorf("failed to write to %s: %w", path, err)
 	}
 	tmp := f.Name()
-	// 失敗して抜ける経路では一時ファイルを残さない。rename に成功したら tmp を空にする。
+	// Do not leave the temporary file behind on any failure path. tmp is cleared once the rename
+	// succeeds.
 	defer func() {
 		if tmp != "" {
 			_ = os.Remove(tmp)
@@ -62,8 +66,8 @@ func writeFilePrivate(path string, data []byte) error {
 	return nil
 }
 
-// writeAndClose は開いたファイルへ中身を書ききって閉じる。作成時の perm は umask で
-// 削られるため、権限は明示的に設定し直して確定させる。
+// writeAndClose writes the whole content to an open file and closes it. The perm given at creation
+// is reduced by the umask, so the permissions are set again explicitly to pin them down.
 func writeAndClose(f *os.File, data []byte) error {
 	defer func() { _ = f.Close() }()
 
@@ -73,17 +77,17 @@ func writeAndClose(f *os.File, data []byte) error {
 	if _, err := f.Write(data); err != nil {
 		return err
 	}
-	// 書いた内容がディスクに届く前に rename すると、クラッシュ時に空のファイルが残りうる。
+	// Renaming before the written content reaches the disk can leave an empty file after a crash.
 	if err := f.Sync(); err != nil {
 		return err
 	}
 	return f.Close()
 }
 
-// writeFileExclusive は path がまだ無い場合にだけ作成して書く。存在確認と作成を
-// 1 回の O_CREATE|O_EXCL で行うので、確認の後・書き込みの前に作られたファイルを
-// 上書きしない (--force を渡していないのに既存ファイルが消えることを防ぐ)。
-// 書き込みに失敗した場合は、自分が作ったファイルを消して何も残さない。
+// writeFileExclusive creates and writes path only when it does not exist yet. The existence check
+// and the creation happen in a single O_CREATE|O_EXCL open, so a file created after the check but
+// before the write is not overwritten (preventing an existing file from being lost without
+// --force). If the write fails, it removes the file it created and leaves nothing behind.
 func writeFileExclusive(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, privateFileMode)
 	if err != nil {

@@ -74,19 +74,22 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// ローカル検証はクライアント生成 (= ADC 探索) と project/region 解決より先に行う。
-	// 認証情報や target が無い環境でも、マニフェストの問題がそれらのエラーに隠れない
-	// ようにするため。Plan も内部で同じ検証をするが、純粋な処理なので二重でも安い。
+	// Validate locally before creating the client (= ADC discovery) and resolving project/region,
+	// so that in an environment without credentials or a target, a manifest problem is not hidden
+	// behind those errors. Plan runs the same validation internally, but it is a pure check, so
+	// doing it twice is cheap.
 	if err := cloudrun.Validate(manifest, service); err != nil {
 		return err
 	}
-	// deploy だけを回す CI でも、リビジョン名固定が原因の 409 を事前に説明できるようにする。
+	// Even a CI job that only runs deploy gets an explanation, ahead of time, of the 409 a pinned
+	// revision name causes.
 	if err := warnPinnedRevision(cmd, manifest); err != nil {
 		return err
 	}
-	// --no-traffic はマニフェストの spec.traffic を無視して現在の配分で置き換える。
-	// 黙って上書きすると「書いたのに効かない」になるので、書いてある場合は言う。
-	// これもローカルな検査なので、クライアント生成 (= ADC 探索) より前に出す。
+	// --no-traffic ignores the manifest's spec.traffic and replaces it with the current split.
+	// Overwriting it silently would mean "I wrote it and it has no effect", so say so when the
+	// manifest has one. This is also a local check, so it comes before creating the client
+	// (= ADC discovery).
 	if deployNoTraffic {
 		if err := warnManifestTraffic(cmd, manifest); err != nil {
 			return err

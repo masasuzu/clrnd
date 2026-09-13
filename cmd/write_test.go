@@ -12,7 +12,7 @@ import (
 	"github.com/masasuzu/clrnd/internal/config"
 )
 
-// startInitAPI は init が読む live サービスを返すフェイク API を立てる。
+// startInitAPI starts a fake API that returns the live service init reads.
 func startInitAPI(t *testing.T) {
 	t.Helper()
 	startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -21,9 +21,9 @@ func startInitAPI(t *testing.T) {
 	})
 }
 
-// TestInitWritesTheConfigWhereItWasAskedTo は、-c で指定した場所に config を書くことを
-// 確認する。読む場所と書く場所が食い違うと、-c infra/clrnd.yml を渡したのに
-// ./clrnd.yml が生まれる。
+// TestInitWritesTheConfigWhereItWasAskedTo checks that the config is written to the location given
+// with -c. If the place it reads from and the place it writes to disagree, passing
+// -c infra/clrnd.yml still produces ./clrnd.yml.
 func TestInitWritesTheConfigWhereItWasAskedTo(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
@@ -45,9 +45,9 @@ func TestInitWritesTheConfigWhereItWasAskedTo(t *testing.T) {
 	}
 }
 
-// TestInitRecordsTheManifestPathRelativeToTheConfig は、記録するマニフェストのパスが
-// config ファイル基準になっていることを確認する。resolveConfigPath は config の
-// ディレクトリ基準で解決するので、cwd 基準のまま記録するとパスが壊れる。
+// TestInitRecordsTheManifestPathRelativeToTheConfig checks that the recorded manifest path is
+// relative to the config file. resolveConfigPath resolves it against the config's directory, so
+// recording it relative to the cwd breaks the path.
 func TestInitRecordsTheManifestPathRelativeToTheConfig(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
@@ -69,28 +69,29 @@ func TestInitRecordsTheManifestPathRelativeToTheConfig(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("failed to parse the config: %v", err)
 	}
-	// マニフェストは cwd に書かれるので、infra/ から見ると 1 つ上。
+	// The manifest is written to the cwd, so seen from infra/ it is one level up.
 	if cfg.Manifest != filepath.Join("..", "manifest.yaml") {
 		t.Errorf("manifest = %q, want it relative to the config directory", cfg.Manifest)
 	}
 }
 
-// 存在しないディレクトリの下を config の書き込み先にする。init は「既に在る --config
-// だけを読む」ので loadConfig は素通りし、マニフェストを書いた *後* の config 書き込み
-// だけが失敗する。config 自体をディレクトリにする手もあるが、それだと loadConfig が
-// それを設定ファイルとして読もうとして落ち、runInit に入る前に終わってしまう
-// (復元を検証しているつもりで、書き換えが起きていないだけの状態を見ることになる)。
+// Use a path under a directory that does not exist as the config destination. init "reads
+// --config only when it already exists", so loadConfig lets it through and only the config write
+// *after* the manifest has been written fails. Making the config itself a directory would also be
+// an option, but then loadConfig tries to read it as a config file and fails, ending before
+// runInit is entered (the test would think it was verifying the restore while only looking at a
+// state in which nothing was ever overwritten).
 const unwritableConfig = "nodir/clrnd.yml"
 
-// TestInitRestoresTheManifestWhenTheConfigWriteFails は、config の書き込みに失敗した
-// ときに --force で潰したマニフェストが戻ることを確認する。戻さないと、手で編集した
-// マニフェストが live の内容で潰れたまま config も無い状態が残る。
+// TestInitRestoresTheManifestWhenTheConfigWriteFails checks that when writing the config fails,
+// the manifest overwritten by --force is put back. Without that, a hand-edited manifest is left
+// overwritten with the live contents, and there is no config either.
 func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	const original = "# 手で編集したマニフェスト\n"
+	const original = "# hand-edited manifest\n"
 	if err := os.WriteFile("manifest.yaml", []byte(original), 0o600); err != nil {
 		t.Fatalf("failed to seed the manifest: %v", err)
 	}
@@ -100,8 +101,9 @@ func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("init error = nil, want the config write to fail")
 	}
-	// マニフェストを書いた後の config 書き込みで落ちたことを確かめる。ここが手前で
-	// 落ちていると、復元ではなく「そもそも書き換えていない」状態を見てしまう。
+	// Make sure it failed on the config write that comes after writing the manifest. If it failed
+	// earlier, the test would be looking at a state where "nothing was overwritten in the first
+	// place" rather than at a restore.
 	if !strings.Contains(err.Error(), unwritableConfig) {
 		t.Fatalf("init error = %v, want it to fail on writing the config", err)
 	}
@@ -115,9 +117,9 @@ func TestInitRestoresTheManifestWhenTheConfigWriteFails(t *testing.T) {
 	}
 }
 
-// TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails は、元々マニフェストが
-// 無かった場合に、config の書き込みに失敗したら作りかけのマニフェストを残さないことを
-// 確認する。restoreManifest のもう一方の分岐。
+// TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails checks that when there was no
+// manifest to begin with and writing the config fails, the half-made manifest is not left behind.
+// This is the other branch of restoreManifest.
 func TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
@@ -137,8 +139,8 @@ func TestInitRemovesTheManifestItCreatedWhenTheConfigWriteFails(t *testing.T) {
 	}
 }
 
-// TestInitWritesRestrictivePermissions は、生成物が他ユーザから読めないことを
-// 確認する。live の定義には平文の環境変数が入りうる。
+// TestInitWritesRestrictivePermissions checks that the generated files cannot be read by other
+// users. The live definition can contain plaintext environment variables.
 func TestInitWritesRestrictivePermissions(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
@@ -159,8 +161,8 @@ func TestInitWritesRestrictivePermissions(t *testing.T) {
 	}
 }
 
-// TestRenderRefusesToOverwriteItsInput は、-o に入力と同じファイルを渡したときに
-// 断ることを確認する。通せばレンダリング元が結果で潰れる。
+// TestRenderRefusesToOverwriteItsInput checks that it refuses when -o is given the same file as
+// the input. Letting it through would overwrite the render source with its own result.
 func TestRenderRefusesToOverwriteItsInput(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 
@@ -180,8 +182,8 @@ func TestRenderRefusesToOverwriteItsInput(t *testing.T) {
 	}
 }
 
-// TestRenderWritesRestrictivePermissions は、展開後の出力が他ユーザから読めない
-// ことを確認する。must_env などで秘密を含みうる。
+// TestRenderWritesRestrictivePermissions checks that the rendered output cannot be read by other
+// users. It can contain secrets via must_env and the like.
 func TestRenderWritesRestrictivePermissions(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 	out := filepath.Join(t.TempDir(), "rendered.yaml")
@@ -198,9 +200,9 @@ func TestRenderWritesRestrictivePermissions(t *testing.T) {
 	}
 }
 
-// TestInitReadsTheConfigWhenItAlreadyExists は、-c の指す config が既にある場合は
-// init もそれを読むことを確認する。書き込み先として許すために読み飛ばしてしまうと、
-// config に書いた service/project が --force での再生成時に効かなくなる。
+// TestInitReadsTheConfigWhenItAlreadyExists checks that when the config -c points to already
+// exists, init reads it as well. If it were skipped to allow it as a write destination, the
+// service/project written in the config would have no effect when regenerating with --force.
 func TestInitReadsTheConfigWhenItAlreadyExists(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
@@ -211,7 +213,7 @@ func TestInitReadsTheConfigWhenItAlreadyExists(t *testing.T) {
 		t.Fatalf("failed to seed the config: %v", err)
 	}
 
-	// service も --project/--region も渡さない。config から埋まらなければ失敗する。
+	// Pass neither the service nor --project/--region. It fails unless the config fills them in.
 	if _, _, err := executeRoot(t, "init", "--config", "clrnd.yml", "--force"); err != nil {
 		t.Fatalf("init error = %v", err)
 	}
@@ -220,9 +222,9 @@ func TestInitReadsTheConfigWhenItAlreadyExists(t *testing.T) {
 	}
 }
 
-// TestMissingConfigStillFailsForOtherCommands は、init 以外では明示した --config が
-// 無いことが従来どおりエラーであることを確認する。init のために入れた例外が全コマンドへ
-// 波及すると、パスの打ち間違いが黙って無視される。
+// TestMissingConfigStillFailsForOtherCommands checks that for commands other than init, a
+// missing explicit --config is still an error as before. If the exception added for init spread
+// to every command, a typo in the path would be silently ignored.
 func TestMissingConfigStillFailsForOtherCommands(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -236,9 +238,10 @@ func TestMissingConfigStillFailsForOtherCommands(t *testing.T) {
 	}
 }
 
-// TestRenderTightensThePermissionsOfAnExistingOutput は、既にある出力先へ書いても
-// 0600 になることを確認する。os.WriteFile の perm は新規作成時にしか効かないので、
-// 0644 のファイルへ秘密混じりの展開結果を書くと誰からも読める状態が残っていた。
+// TestRenderTightensThePermissionsOfAnExistingOutput checks that writing to an output that
+// already exists still leaves it at 0600. os.WriteFile's perm only applies when the file is
+// created, so writing rendered output containing secrets into a 0644 file used to leave it
+// readable by anyone.
 func TestRenderTightensThePermissionsOfAnExistingOutput(t *testing.T) {
 	manifest := writeManifest(t, localManifest)
 	out := filepath.Join(t.TempDir(), "rendered.yaml")
@@ -265,15 +268,16 @@ func TestRenderTightensThePermissionsOfAnExistingOutput(t *testing.T) {
 	}
 }
 
-// TestInitTightensThePermissionsOfExistingFiles は、--force で既存ファイルを潰す場合も
-// 0600 になることを確認する。live の定義には平文の環境変数が入りうる。
+// TestInitTightensThePermissionsOfExistingFiles checks that overwriting existing files with
+// --force also leaves them at 0600. The live definition can contain plaintext environment
+// variables.
 func TestInitTightensThePermissionsOfExistingFiles(t *testing.T) {
 	startInitAPI(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
-	// clrnd.yml は自動検出で読まれるので、パースできる中身にしておく。
+	// clrnd.yml is read by auto-detection, so give it contents that parse.
 	seed := map[string]string{
-		"manifest.yaml": "# 手で編集したマニフェスト\n",
+		"manifest.yaml": "# hand-edited manifest\n",
 		"clrnd.yml":     "project: test-project\nregion: asia-northeast1\nservice: my-svc\n",
 	}
 	for name, content := range seed {
@@ -297,9 +301,9 @@ func TestInitTightensThePermissionsOfExistingFiles(t *testing.T) {
 	}
 }
 
-// TestWriteFilePrivateKeepsTheOldContentOnFailure は、書き込みに失敗しても既存の
-// 内容が残ることを確認する。truncate してから書くと、途中で失敗した時点で以前の
-// 正常な内容まで失われる。
+// TestWriteFilePrivateKeepsTheOldContentOnFailure checks that the existing content survives a
+// failed write. Truncating before writing means that a failure partway through also loses the
+// previous good content.
 func TestWriteFilePrivateKeepsTheOldContentOnFailure(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
@@ -310,7 +314,7 @@ func TestWriteFilePrivateKeepsTheOldContentOnFailure(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatalf("failed to seed the file: %v", err)
 	}
-	// 一時ファイルを作れないようにして書き込みを失敗させる。
+	// Make the write fail by preventing the temporary file from being created.
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatalf("failed to change the directory mode: %v", err)
 	}
@@ -328,11 +332,11 @@ func TestWriteFilePrivateKeepsTheOldContentOnFailure(t *testing.T) {
 	}
 }
 
-// TestWriteFilePrivateLeavesNoTemporaryFile は、rename に失敗しても一時ファイルを
-// 残さないことを確認する。残ると出力先の隣に中身の見えるゴミが溜まる。
+// TestWriteFilePrivateLeavesNoTemporaryFile checks that no temporary file is left behind when the
+// rename fails. Otherwise junk with readable contents piles up next to the destination.
 func TestWriteFilePrivateLeavesNoTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
-	// 出力先をディレクトリにして rename を失敗させる。
+	// Make the rename fail by making the destination a directory.
 	path := filepath.Join(dir, "taken")
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("failed to create the directory: %v", err)
@@ -350,9 +354,9 @@ func TestWriteFilePrivateLeavesNoTemporaryFile(t *testing.T) {
 	}
 }
 
-// TestWriteFileExclusiveRefusesAnExistingFile は、--force が無い経路が既存ファイルを
-// 上書きしないことを確認する。存在確認と書き込みが別操作だと、その隙に作られた
-// ファイルを黙って潰す。
+// TestWriteFileExclusiveRefusesAnExistingFile checks that the path without --force does not
+// overwrite an existing file. When the existence check and the write are separate operations, a
+// file created in between is silently overwritten.
 func TestWriteFileExclusiveRefusesAnExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clrnd.yml")
 	const original = "original\n"
@@ -376,7 +380,7 @@ func TestWriteFileExclusiveRefusesAnExistingFile(t *testing.T) {
 	}
 }
 
-// TestWriteFileExclusiveCreatesAPrivateFile は、新規作成が 0600 になることを確認する。
+// TestWriteFileExclusiveCreatesAPrivateFile checks that a newly created file is 0600.
 func TestWriteFileExclusiveCreatesAPrivateFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clrnd.yml")
 

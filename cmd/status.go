@@ -31,7 +31,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// フラグの検証はクライアント生成 (= ADC 探索) より先に行う。
+	// Validate the flags before creating the client (= ADC discovery).
 	if err := validateFormat(statusFormat); err != nil {
 		return err
 	}

@@ -12,14 +12,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// 未指定時に探す設定ファイル名 (カレントディレクトリ)。
+// Config file names looked for when none is given (in the current directory).
 var defaultConfigFiles = []string{"clrnd.yml", "clrnd.yaml"}
 
 var (
 	configPath string
-	// cfg は読み込んだ設定。未指定なら空 (nil セーフ)。
+	// cfg is the loaded config. Empty when none is given (nil-safe).
 	cfg = &config.Config{}
-	// configDir は読み込んだ設定ファイルのディレクトリ。config 由来の相対パスの基準。
+	// configDir is the directory of the loaded config file, the base for relative paths from the
+	// config.
 	configDir string
 )
 
@@ -29,14 +30,14 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: loadConfig,
 }
 
-// Execute はルートコマンドを実行する。SIGINT/SIGTERM で cancel される context を渡すので、
-// 各サブコマンドは cmd.Context() を使うことで Ctrl-C で中断できる。
+// Execute runs the root command. It passes a context that SIGINT/SIGTERM cancels, so each
+// subcommand can be interrupted with Ctrl-C by using cmd.Context().
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// 1 回目のシグナルで ctx を cancel した後はハンドラを解除し、既定の挙動 (即終了) に
-	// 戻す。解除しないと 2 回目以降のシグナルが握り潰され、ctx を見ない処理に入っている
-	// 間はプロセスを止める手段が無くなる。
+	// Once the first signal has cancelled ctx, release the handler and return to the default
+	// behaviour (exit immediately). Without that, every later signal is swallowed, and while the
+	// process is in code that does not watch ctx there is no way left to stop it.
 	go func() {
 		<-ctx.Done()
 		stop()
@@ -45,12 +46,12 @@ func Execute() error {
 }
 
 func init() {
-	// 実行時エラーのたびに usage を丸ごと出さない。せっかく組み立てたエラー文が
-	// 30 行のフラグ一覧に埋もれてしまい、Ctrl-C やロールアウト失敗のときに特に困る。
+	// Do not print the whole usage on every runtime error. The carefully built error message gets
+	// buried under a flag list dozens of lines long, which hurts most on Ctrl-C or a failed
+	// rollout.
 	//
-	// SilenceUsage はフラグや引数のパースエラーにも効いてしまうので、そちらには
-	// 代わりに 1 行の案内を添える。usage 全文よりは、どこを見ればよいかの一言の方が
-	// 役に立つ。
+	// SilenceUsage also applies to flag and argument parse errors, so those get a one-line hint
+	// instead. A short pointer to where to look is more useful than the full usage.
 	rootCmd.SilenceUsage = true
 	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, c.CommandPath())
@@ -73,12 +74,14 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 }
 
-// annotationConfigOptional が付いたサブコマンドは、--config で明示されたファイルが
-// 無くてもエラーにしない。設定ファイルを「読む」のではなく「作る」コマンド (init) 用。
+// A subcommand carrying annotationConfigOptional does not fail when the file given explicitly with
+// --config does not exist. It is for a command that "creates" the config file rather than "reads"
+// it (init).
 const annotationConfigOptional = "clrnd/config-optional"
 
-// loadConfig は --config か、未指定ならデフォルト名の設定ファイルを読み込む。
-// --config 明示時にファイルが無ければエラー。自動検出時は無ければ何もしない。
+// loadConfig loads the config file named by --config, or one with a default name when it is not
+// given. A missing file is an error when --config is explicit; when auto-detecting, a missing
+// file means nothing is done.
 func loadConfig(cmd *cobra.Command, args []string) error {
 	path := configPath
 	if path == "" {
@@ -87,8 +90,8 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 	} else if _, ok := cmd.Annotations[annotationConfigOptional]; ok {
-		// init は clrnd.yml を生成する側なので、-c で指定した書き込み先がまだ
-		// 無いのは正常。存在する場合だけ読み、値を引き継ぐ。
+		// init is the side that generates clrnd.yml, so it is normal for the destination given
+		// with -c not to exist yet. Read it only when it exists, and carry its values over.
 		if !fileExists(path) {
 			return nil
 		}

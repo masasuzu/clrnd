@@ -48,8 +48,8 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 引数の組み合わせはクライアント生成 (= ADC 探索) より先に弾く。他のコマンドと同じく、
-	// フラグの間違いが認証エラーの後ろに隠れないようにする。
+	// Reject a bad combination of arguments before creating the client (= ADC discovery). As in
+	// the other commands, this keeps a flag mistake from hiding behind an authentication error.
 	req := cloudrun.TrafficRequest{
 		Revision: trafficRevision,
 		Latest:   trafficLatest,
@@ -65,8 +65,8 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// 名前を指定した場合は、そのリビジョンがこのサービスのものか確かめる。打ち間違いを
-	// 「存在しないリビジョンへ 100%」として適用すると、サービスが配信不能になる。
+	// When a name is given, confirm that the revision belongs to this service. Applying a typo as
+	// "100% to a revision that does not exist" would leave the service unable to serve.
 	if req.Revision != "" {
 		revisions, err := client.ListRevisions(ctx, service)
 		if err != nil {
@@ -92,7 +92,8 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// desired は live 由来なので既定値は既に入っている。解決は要らない。
+	// desired comes from the live service, so the defaults are already filled in. No resolution is
+	// needed.
 	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
 	if err != nil {
 		return err
@@ -102,7 +103,7 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 	return applyPlan(cmd, client, plan, trafficApply)
 }
 
-// trafficTargetLabel は確認プロンプトに出す送り先の呼び方。
+// trafficTargetLabel is how the destination is referred to in the confirmation prompt.
 func trafficTargetLabel(req cloudrun.TrafficRequest) string {
 	if req.Latest {
 		return "the latest revision"

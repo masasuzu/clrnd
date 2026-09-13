@@ -19,21 +19,22 @@ var (
 	verifyFormat    string
 )
 
-// verifyResult は --format json の出力。text の出力 (stderr の warning と、失敗時の
-// エラー) と同じ材料を構造化したもので、CI が「警告を無視するか失敗にするか」を
-// 自分で決められるようにする。
+// verifyResult is the --format json output. It is the same material as the text output (the
+// warnings on stderr and the error on failure) in structured form, so CI can decide for itself
+// whether to ignore a warning or fail on it.
 type verifyResult struct {
 	Service  string `json:"service"`
 	Manifest string `json:"manifest"`
-	// OK は失敗が無かったか。Missing があるか、ローカル検証に失敗すると false。
+	// OK reports whether there was no failure. It is false when anything is Missing or local
+	// validation failed.
 	OK bool `json:"ok"`
-	// Errors はローカル検証の失敗。
+	// Errors are the local validation failures.
 	Errors []string `json:"errors,omitempty"`
-	// Missing は実在しないと確定した参照 (失敗)。
+	// Missing are references confirmed not to exist (failures).
 	Missing []string `json:"missing,omitempty"`
-	// Unchecked は確認できなかった参照 (警告)。
+	// Unchecked are references that could not be checked (warnings).
 	Unchecked []string `json:"unchecked,omitempty"`
-	// Warnings はそれ以外の助言 (リビジョン名の固定など)。
+	// Warnings are any other advice (a pinned revision name, etc.).
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -76,7 +77,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// 出力形式の検証は、他のローカルな検査と同じくクライアント生成より先に行う。
+	// Validate the output format before creating the client, like the other local checks.
 	if err := validateFormat(verifyFormat); err != nil {
 		return err
 	}
@@ -93,25 +94,27 @@ func runVerify(cmd *cobra.Command, args []string) error {
 
 	result := verifyResult{Service: service, Manifest: manifestPath}
 
-	// deploy が適用するものを検証するため、同じ差し替えを通す (イメージの実在チェックも
-	// 差し替え後のイメージに対して行われる)。ここから先の失敗は finishVerify を通す:
-	// --format json の利用者にとって、stdout が空のまま終わる経路があると
-	// `clrnd verify --format json | jq ...` が読めない出力で落ちる。
+	// Apply the same overrides so that what gets verified is what deploy applies (the image
+	// existence check also runs against the overridden image). Every failure from here on goes
+	// through finishVerify: for --format json users, any path that ends with an empty stdout makes
+	// `clrnd verify --format json | jq ...` fail on unreadable output.
 	manifest, err = cloudrun.ApplyImageOverrides(manifest, verifyImages)
 	if err != nil {
 		result.Errors = strings.Split(err.Error(), "\n")
 		return finishVerify(cmd, result, err)
 	}
 
-	// ローカルなスキーマ検証は常に行う。Validate は errors.Join なので、1 行 1 件に
-	// ばらして構造化する (text 出力は従来どおりエラーとしてまとめて出る)。
+	// Local schema validation always runs. Validate returns an errors.Join, so split it into one
+	// entry per line for the structured form (the text output still prints them together as one
+	// error, as before).
 	if err := cloudrun.Validate(manifest, service); err != nil {
 		result.Errors = strings.Split(err.Error(), "\n")
 		return finishVerify(cmd, result, err)
 	}
 
-	// リビジョン名の固定は文法上は正しいが、次にテンプレートを変えたときの deploy が
-	// 必ず失敗するので警告する (失敗にはしない: 使い捨てのデプロイでは正しい書き方)。
+	// A pinned revision name is syntactically valid, but the next deploy that changes the template
+	// is certain to fail, so warn about it (without failing: for a one-shot deploy it is the right
+	// way to write it).
 	warning, err := pinnedRevisionWarning(manifest)
 	if err != nil {
 		return err
@@ -127,7 +130,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 実在しないと確定したものだけを失敗として返す。
+	// Only what is confirmed not to exist is returned as a failure.
 	var failure error
 	if len(result.Missing) > 0 {
 		failure = fmt.Errorf("%s", strings.Join(result.Missing, "\n"))
@@ -135,17 +138,19 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	return finishVerify(cmd, result, failure)
 }
 
-// verifyRemote は API 実在チェックを走らせ、結果を result に足す。target が解決できない
-// 場合は何もしない (CI でのオフライン検証を壊さないため)。
+// verifyRemote runs the API existence checks and adds their results to result. It does nothing
+// when the target does not resolve (so offline verification in CI is not broken).
 //
-// リージョンを使うのは VPC コネクタの短縮名を完全なリソース名に補うときだけ
-// (IAM / Secret Manager / Artifact Registry / Cloud SQL はリージョンを取らない) だが、
-// 「デプロイ先が決まっている」条件は両方揃っている方を採る: 片方しか無い状態は設定
-// ミスの可能性が高く、黙って本番のプロジェクトを引きに行くより何もしない方が安全。
+// The region is used only to expand a short VPC connector name into a full resource name
+// (IAM / Secret Manager / Artifact Registry / Cloud SQL take no region), but the condition for
+// "the deploy target is known" requires project and region together: having only one of them is
+// more likely a configuration mistake, and doing nothing is safer than silently reaching for the
+// production project.
 func verifyRemote(ctx context.Context, cmd *cobra.Command, manifest []byte, result *verifyResult) error {
 	project, region, ok := resolveTargetOptional(verifyProject, verifyRegion)
 	if !ok {
-		// 片方だけ明示的に指定された場合は、リモートチェックを黙ってスキップせず知らせる。
+		// When only one of them was given explicitly, say so instead of silently skipping the
+		// remote checks.
 		if cmd.Flags().Changed("project") || cmd.Flags().Changed("region") {
 			result.Warnings = append(result.Warnings,
 				"skipping API existence checks: both --project and --region must be set")
@@ -162,11 +167,11 @@ func verifyRemote(ctx context.Context, cmd *cobra.Command, manifest []byte, resu
 	return nil
 }
 
-// finishVerify は結果を出力し、失敗があればそれを返す。
+// finishVerify prints the result and returns the failure, if any.
 //
-// text は従来どおり: 成功時の stdout は空で、警告は stderr、失敗はエラーとして返す
-// (cobra が stderr に出す)。json は結果を 1 つのオブジェクトとして stdout に出したうえで、
-// 失敗はやはりエラーとして返す — stdout をデータ専用に保ちつつ、終了コードも変えないため。
+// text is as before: stdout is empty on success, warnings go to stderr, and a failure is returned
+// as an error (cobra prints it to stderr). json prints the result to stdout as a single object and
+// still returns a failure as an error — keeping stdout data-only without changing the exit code.
 func finishVerify(cmd *cobra.Command, result verifyResult, failure error) error {
 	result.OK = failure == nil
 
@@ -181,7 +186,8 @@ func finishVerify(cmd *cobra.Command, result verifyResult, failure error) error 
 	for _, w := range result.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
-	// 確認できなかったもの (権限不足・API 未到達など) は警告に留め、verify は失敗させない。
+	// What could not be checked (permission denied, API unreachable, etc.) stays a warning and
+	// does not fail verify.
 	for _, u := range result.Unchecked {
 		fmt.Fprintf(out, "warning: could not verify %s\n", u)
 	}
