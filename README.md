@@ -1,9 +1,9 @@
 # clrnd
 
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
-It takes a service name and a manifest file as arguments and provides eleven subcommands:
-`verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `delete`,
-and `refresh`.
+It takes a service name and a manifest file as arguments and provides twelve subcommands:
+`verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`,
+`delete`, and `refresh`.
 
 ## Installation
 
