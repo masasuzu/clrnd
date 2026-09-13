@@ -430,7 +430,9 @@ revision-name conflicts, asynchronous rollout failures).
   "three things to know", "refuses two cases", "CI's third job" all summarize a list, so every one
   of them has to be edited whenever the list changes, and nothing checks that it was: README said
   `eleven` long after `traffic` made it twelve (#114). Name the items, or say "the following", and
-  let the list speak for itself. This applies everywhere clrnd's text lives — README, this file,
+  let the list speak for itself. When unsure, ask whether adding an item to the list would make the
+  sentence wrong; if it would, drop the number. "Both" over a list that can grow has the same
+  problem — say "each" or "all of them". This applies everywhere clrnd's text lives — README, this file,
   help text, code comments, commit messages and PR descriptions. Keep a number when it *is* the
   fact: a timeout, a page limit, the lines of context in a diff, a two-way traffic split, "only when
   there is exactly one container".
