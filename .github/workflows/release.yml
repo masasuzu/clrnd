@@ -127,7 +127,7 @@ jobs:
       # build on a musl host. On Alpine and the like it does not install via packslip:, but it
       # does via github:.
       - name: Publish packslip
-        uses: jdx/packslip@74c75db7d611b36dd5a157999ec16cf823ccf80c # v1.2.0
+        uses: jdx/packslip@87479dfc6443253dff69601cace5fc6ea07e6df5 # v1.4.0
         with:
           artifacts: dist/*.tar.gz dist/*.zip
           bin: clrnd
