@@ -102,7 +102,7 @@ func TestWaitDone(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			done, err := waitDone(tt.status, "my-svc", tt.generation)
+			done, err := waitDone(tt.status, subject("service", "my-svc"), tt.generation)
 			if done != tt.wantDone {
 				t.Errorf("waitDone() done = %v, want %v", done, tt.wantDone)
 			}

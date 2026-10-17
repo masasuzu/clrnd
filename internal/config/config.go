@@ -13,9 +13,14 @@ import (
 // JSON tags. omitempty has no effect on reading (UnmarshalStrict); it is there so that empty fields
 // are left out when init marshals a Config to generate clrnd.yml.
 type Config struct {
-	Project  string    `json:"project,omitempty"`
-	Region   string    `json:"region,omitempty"`
-	Service  string    `json:"service,omitempty"`
+	Project string `json:"project,omitempty"`
+	Region  string `json:"region,omitempty"`
+	Service string `json:"service,omitempty"`
+	// Job names a Cloud Run job instead of a service. A config file describes one deployable
+	// resource, so at most one of Service and Job is set (Load enforces it). Keeping a key per kind
+	// rather than one shared "name" means a command for the other kind finds nothing to act on,
+	// instead of acting on a resource of its own kind that happens to share the name.
+	Job      string    `json:"job,omitempty"`
 	Manifest string    `json:"manifest,omitempty"`
 	Tfstate  []Tfstate `json:"tfstate,omitempty"`
 }
@@ -35,6 +40,9 @@ func Load(path string) (*Config, error) {
 	var c Config
 	if err := yaml.UnmarshalStrict(data, &c); err != nil {
 		return nil, fmt.Errorf("failed to parse config %s: %w", path, err)
+	}
+	if c.Service != "" && c.Job != "" {
+		return nil, fmt.Errorf("config %s sets both service and job: a config file describes one of them", path)
 	}
 	return &c, nil
 }

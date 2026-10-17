@@ -72,6 +72,7 @@ func init() {
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(deployCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(jobsCmd)
 }
 
 // A subcommand carrying annotationConfigOptional does not fail when the file given explicitly with

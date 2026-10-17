@@ -91,17 +91,6 @@ func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*clo
 	return cloudrun.NewClient(cmd.Context(), project, region, clientOptions...)
 }
 
-// resolveService resolves the service in the order positional args[0] > config service.
-func resolveService(args []string) (string, error) {
-	if len(args) >= 1 && args[0] != "" {
-		return args[0], nil
-	}
-	if cfg.Service != "" {
-		return cfg.Service, nil
-	}
-	return "", fmt.Errorf("service is required: pass it as an argument or set service in the config file")
-}
-
 // resolveManifest resolves the manifest in the order positional args[1] > config manifest
 // (for subcommands that take both a service and a manifest).
 func resolveManifest(args []string) (string, error) {

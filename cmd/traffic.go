@@ -100,7 +100,7 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 	}
 
 	trafficApply.Prompt = fmt.Sprintf("Send %d%% of the traffic to %s?", req.Percent, trafficTargetLabel(req))
-	return applyPlan(cmd, client, plan, trafficApply)
+	return applyPlan(cmd, plan, trafficApply)
 }
 
 // trafficTargetLabel is how the destination is referred to in the confirmation prompt.

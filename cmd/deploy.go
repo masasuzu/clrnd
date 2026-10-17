@@ -8,20 +8,57 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	deployProject    string
-	deployRegion     string
-	deployTfstate    []string
-	deployImages     []string
-	deployNoDefaults bool
-	deployNoTraffic  bool
-	deployApply      applyOptions
-)
+// deployOptions are deploy's flags. Each deploy command (services, jobs) has its own.
+type deployOptions struct {
+	project    string
+	region     string
+	tfstate    []string
+	images     []string
+	noDefaults bool
+	noTraffic  bool
+	apply      applyOptions
+}
 
-var deployCmd = &cobra.Command{
-	Use:   "deploy [service] [manifest]",
-	Short: "Deploy a manifest to Cloud Run",
-	Long: "Show the diff against the live service, then (after confirmation) apply the manifest to\n" +
+var deployCmd = newDeployCmd(serviceTarget)
+
+// newDeployCmd builds deploy for a target.
+func newDeployCmd(t target) *cobra.Command {
+	o := &deployOptions{}
+	cmd := &cobra.Command{
+		Use:   fmt.Sprintf("deploy [%s] [manifest]", t.noun),
+		Short: "Deploy a manifest to Cloud Run",
+		Long:  deployLong(t),
+		Args:  cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeploy(cmd, args, t, o)
+		},
+	}
+	addTargetFlags(cmd, &o.project, &o.region)
+	addManifestFlags(cmd, &o.tfstate)
+	addImageFlag(cmd, &o.images)
+	addApplyFlags(cmd, &o.apply)
+	addServerDefaultsFlag(cmd, &o.noDefaults)
+	if t.isService() {
+		cmd.Flags().BoolVar(&o.noTraffic, "no-traffic", false,
+			"create the revision without sending traffic to it (keep the current split)")
+	}
+	return cmd
+}
+
+func deployLong(t target) string {
+	if !t.isService() {
+		return "Show the diff against the live job, then (after confirmation) apply the manifest to\n" +
+			"Cloud Run, creating the job if it does not exist or replacing it otherwise. The manifest\n" +
+			"is validated locally before the request is sent. Deploying does not run the job.\n" +
+			"After applying, deploy waits until the job is ready; pass --no-wait to return as soon\n" +
+			"as the request is accepted.\n" +
+			"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
+			"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
+			"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
+			"--image replaces a container image without editing the manifest.\n" +
+			"job and manifest may be omitted when set in the config file."
+	}
+	return "Show the diff against the live service, then (after confirmation) apply the manifest to\n" +
 		"Cloud Run, creating the service if it does not exist or replacing it otherwise. The manifest\n" +
 		"is validated locally before the request is sent.\n" +
 		"After applying, deploy waits until the new revision is serving and fails if the rollout\n" +
@@ -34,23 +71,11 @@ var deployCmd = &cobra.Command{
 		"With --no-traffic the new revision is created without receiving any traffic: the current\n" +
 		"split is pinned to the revisions serving it now, so you can move traffic over afterwards\n" +
 		"with 'clrnd traffic'.\n" +
-		"service and manifest may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(2),
-	RunE: runDeploy,
+		"service and manifest may be omitted when set in the config file."
 }
 
-func init() {
-	addTargetFlags(deployCmd, &deployProject, &deployRegion)
-	addManifestFlags(deployCmd, &deployTfstate)
-	addImageFlag(deployCmd, &deployImages)
-	addApplyFlags(deployCmd, &deployApply)
-	addServerDefaultsFlag(deployCmd, &deployNoDefaults)
-	deployCmd.Flags().BoolVar(&deployNoTraffic, "no-traffic", false,
-		"create the revision without sending traffic to it (keep the current split)")
-}
-
-func runDeploy(cmd *cobra.Command, args []string) error {
-	service, err := resolveService(args)
+func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) error {
+	name, err := t.resolveName(args)
 	if err != nil {
 		return err
 	}
@@ -65,11 +90,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
-	manifest, err = renderManifest(ctx, manifest, deployTfstate)
+	manifest, err = renderManifest(ctx, manifest, o.tfstate)
 	if err != nil {
 		return err
 	}
-	manifest, err = cloudrun.ApplyImageOverrides(manifest, deployImages)
+	manifest, err = cloudrun.ApplyImageOverrides(t.kind, manifest, o.images)
 	if err != nil {
 		return err
 	}
@@ -78,37 +103,39 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// so that in an environment without credentials or a target, a manifest problem is not hidden
 	// behind those errors. Plan runs the same validation internally, but it is a pure check, so
 	// doing it twice is cheap.
-	if err := cloudrun.Validate(manifest, service); err != nil {
+	if err := cloudrun.Validate(t.kind, manifest, name); err != nil {
 		return err
 	}
-	// Even a CI job that only runs deploy gets an explanation, ahead of time, of the 409 a pinned
-	// revision name causes.
-	if err := warnPinnedRevision(cmd, manifest); err != nil {
-		return err
+	if t.isService() {
+		// Even a CI job that only runs deploy gets an explanation, ahead of time, of the 409 a
+		// pinned revision name causes.
+		if err := warnPinnedRevision(cmd, manifest); err != nil {
+			return err
+		}
 	}
 	// --no-traffic ignores the manifest's spec.traffic and replaces it with the current split.
 	// Overwriting it silently would mean "I wrote it and it has no effect", so say so when the
 	// manifest has one. This is also a local check, so it comes before creating the client
 	// (= ADC discovery).
-	if deployNoTraffic {
+	if o.noTraffic {
 		if err := warnManifestTraffic(cmd, manifest); err != nil {
 			return err
 		}
 	}
 
-	client, err := newCloudRunClient(cmd, deployProject, deployRegion)
+	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {
 		return err
 	}
 
-	plan, err := client.Plan(ctx, service, manifest, cloudrun.PlanOptions{
-		ResolveDefaults: !deployNoDefaults,
-		KeepTraffic:     deployNoTraffic,
+	plan, err := client.Plan(ctx, t.kind, name, manifest, cloudrun.PlanOptions{
+		ResolveDefaults: !o.noDefaults,
+		KeepTraffic:     o.noTraffic,
 	})
 	if err != nil {
 		return err
 	}
 
-	deployApply.Prompt = "Apply these changes?"
-	return applyPlan(cmd, client, plan, deployApply)
+	o.apply.Prompt = "Apply these changes?"
+	return applyPlan(cmd, plan, o.apply)
 }

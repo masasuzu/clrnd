@@ -162,7 +162,7 @@ func startVerifyAPI(t *testing.T, status func(path string) int) (func() []string
 func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -188,7 +188,7 @@ func TestVerifyRemoteLooksUpTheServiceAccountAcrossProjects(t *testing.T) {
 func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusNotFound })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestVerifyRemoteReportsMissingResources(t *testing.T) {
 func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(verifyManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(verifyManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestVerifyRemoteTreatsOtherFailuresAsUnchecked(t *testing.T) {
 func TestVerifyRemoteSkipsWhatTheManifestDoesNotReference(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -260,7 +260,7 @@ spec:
 func TestVerifyRemoteChecksArtifactRegistryImages(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -289,7 +289,7 @@ func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 		return http.StatusOK
 	})
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -307,7 +307,7 @@ func TestVerifyRemoteReportsAMissingImage(t *testing.T) {
 func TestVerifyRemoteTreatsAnInaccessibleImageAsUnchecked(t *testing.T) {
 	_, opts := startVerifyAPI(t, func(string) int { return http.StatusForbidden })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(arManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(arManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestVerifyRemoteSkipsRegistriesItCannotCheck(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
 	// validManifest's image is on gcr.io.
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(validManifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(validManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -391,7 +391,7 @@ func pathsMatching(paths []string, substr string) []string {
 func TestVerifyRemoteChecksTheVPCConnector(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	if _, err := VerifyRemote(context.Background(), testProject, testRegion,
+	if _, err := VerifyRemote(context.Background(), KindService, testProject, testRegion,
 		[]byte(verifyRefsManifest), opts...); err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -414,7 +414,7 @@ func TestVerifyRemoteKeepsAFullyQualifiedConnector(t *testing.T) {
 		"vpc-access-connector: projects/other-project/locations/us-central1/connectors/shared", 1)
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	if _, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...); err != nil {
+	if _, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(manifest), opts...); err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
 
@@ -438,7 +438,7 @@ func TestVerifyRemoteReportsMissingReferences(t *testing.T) {
 		return http.StatusOK
 	})
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion,
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion,
 		[]byte(verifyRefsManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
@@ -474,7 +474,7 @@ func TestVerifyRemoteSkipsVersionsOfAMissingSecret(t *testing.T) {
 		return http.StatusOK
 	})
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion,
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion,
 		[]byte(verifyRefsManifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
@@ -497,7 +497,7 @@ func TestVerifyRemoteReportsAMalformedCloudSQLConnection(t *testing.T) {
 		"cloudsql-instances: main-db", 1)
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(manifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -517,7 +517,7 @@ func TestVerifyRemoteReportsAMalformedCloudSQLConnection(t *testing.T) {
 func TestVerifyRemoteSkipsUnreferencedAPIs(t *testing.T) {
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	if _, err := VerifyRemote(context.Background(), testProject, testRegion,
+	if _, err := VerifyRemote(context.Background(), KindService, testProject, testRegion,
 		[]byte(verifyManifest), opts...); err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
@@ -548,7 +548,7 @@ func TestVerifyRemoteReportsADestroyedSecretVersion(t *testing.T) {
 				option.WithHTTPClient(srv.Client()),
 			}
 
-			res, err := VerifyRemote(context.Background(), testProject, testRegion,
+			res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion,
 				[]byte(verifyManifest), opts...)
 			if err != nil {
 				t.Fatalf("VerifyRemote() error = %v", err)
@@ -570,7 +570,7 @@ func TestVerifyRemoteReadsTheVersionFromTheSecretPath(t *testing.T) {
 		"              name: projects/other-project/secrets/api-token/versions/7", 1)
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	if _, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...); err != nil {
+	if _, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(manifest), opts...); err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}
 	got := pathsMatching(recorded(), "/versions/")
@@ -589,7 +589,7 @@ func TestVerifyRemoteHandlesADomainScopedCloudSQLProject(t *testing.T) {
 		"cloudsql-instances: example.com:other-project:asia-northeast1:main-db", 1)
 	recorded, opts := startVerifyAPI(t, func(string) int { return http.StatusOK })
 
-	res, err := VerifyRemote(context.Background(), testProject, testRegion, []byte(manifest), opts...)
+	res, err := VerifyRemote(context.Background(), KindService, testProject, testRegion, []byte(manifest), opts...)
 	if err != nil {
 		t.Fatalf("VerifyRemote() error = %v", err)
 	}

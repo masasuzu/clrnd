@@ -35,13 +35,12 @@ type RemoteCheck struct {
 // nor Secret Manager takes a region, so there is no other use for it.
 //
 // opts, as with NewClient, is the extension point tests use to inject a fake API.
-func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
+func VerifyRemote(ctx context.Context, kind Kind, project, region string, manifest []byte,
 	opts ...option.ClientOption) (*RemoteCheck, error) {
-	svc, err := parseManifest(manifest)
+	w, err := kind.manifestWorkload(manifest)
 	if err != nil {
 		return nil, err
 	}
-	w := serviceWorkload(svc)
 
 	sa := w.ServiceAccountName
 	secrets := secretNames(w)

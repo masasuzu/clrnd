@@ -80,7 +80,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	}
 
 	rollbackApply.Prompt = fmt.Sprintf("Send all traffic to %s?", target.Name)
-	return applyPlan(cmd, client, plan, rollbackApply)
+	return applyPlan(cmd, plan, rollbackApply)
 }
 
 // readyLabelOrUnknown is the Ready state shown in the warning, or "unknown" when there is no

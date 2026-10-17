@@ -74,19 +74,8 @@ func newStatus(obj *run.Service) *Status {
 	s.LatestReadyRevision = obj.Status.LatestReadyRevisionName
 	s.LatestCreatedRevision = obj.Status.LatestCreatedRevisionName
 	s.ObservedGeneration = obj.Status.ObservedGeneration
+	s.Conditions = newConditions(obj.Status.Conditions)
 
-	for _, c := range obj.Status.Conditions {
-		if c == nil {
-			continue
-		}
-		s.Conditions = append(s.Conditions, Condition{
-			Type:               c.Type,
-			Status:             c.Status,
-			Reason:             c.Reason,
-			Message:            c.Message,
-			LastTransitionTime: c.LastTransitionTime,
-		})
-	}
 	for _, t := range obj.Status.Traffic {
 		if t == nil {
 			continue
@@ -100,6 +89,43 @@ func newStatus(obj *run.Service) *Status {
 		})
 	}
 	return s
+}
+
+// newJobStatus converts a job into the part of a Status that waiting reads: its generations and
+// conditions. A job has no URL, revisions or traffic, so those stay empty, and Service holds the
+// job's name.
+func newJobStatus(obj *run.Job) *Status {
+	s := &Status{}
+	if obj == nil {
+		return s
+	}
+	if obj.Metadata != nil {
+		s.Service = obj.Metadata.Name
+		s.Generation = obj.Metadata.Generation
+	}
+	if obj.Status != nil {
+		s.ObservedGeneration = obj.Status.ObservedGeneration
+		s.Conditions = newConditions(obj.Status.Conditions)
+	}
+	return s
+}
+
+// newConditions converts the API's conditions, skipping null entries.
+func newConditions(in []*run.GoogleCloudRunV1Condition) []Condition {
+	var out []Condition
+	for _, c := range in {
+		if c == nil {
+			continue
+		}
+		out = append(out, Condition{
+			Type:               c.Type,
+			Status:             c.Status,
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: c.LastTransitionTime,
+		})
+	}
+	return out
 }
 
 // Ready returns the Ready condition, or nil if there is none. It is exported so that wait

@@ -10,20 +10,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	verifyProject   string
-	verifyRegion    string
-	verifyTfstate   []string
-	verifyImages    []string
-	verifyLocalOnly bool
-	verifyFormat    string
-)
+// verifyOptions are verify's flags. Each verify command (services, jobs) has its own.
+type verifyOptions struct {
+	project   string
+	region    string
+	tfstate   []string
+	images    []string
+	localOnly bool
+	format    string
+}
 
 // verifyResult is the --format json output. It is the same material as the text output (the
 // warnings on stderr and the error on failure) in structured form, so CI can decide for itself
 // whether to ignore a warning or fail on it.
 type verifyResult struct {
-	Service  string `json:"service"`
+	// Service or Job names what was verified; the other is left out.
+	Service  string `json:"service,omitempty"`
+	Job      string `json:"job,omitempty"`
 	Manifest string `json:"manifest"`
 	// OK reports whether there was no failure. It is false when anything is Missing or local
 	// validation failed.
@@ -38,38 +41,48 @@ type verifyResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-var verifyCmd = &cobra.Command{
-	Use:   "verify [service] [manifest]",
-	Short: "Verify a manifest",
-	Long: "Validate that the manifest file is a well-formed Cloud Run service definition and\n" +
-		"contains the fields required to deploy. This local check never needs the API.\n" +
-		"When --project/--region are resolvable (and --local-only is not set), it also checks\n" +
-		"via the API that referenced resources actually exist: the service account, the Secret\n" +
-		"Manager secrets and the versions they reference, the VPC connector and Cloud SQL\n" +
-		"instances named in the annotations, and container images hosted on Artifact Registry\n" +
-		"(*-docker.pkg.dev).\n" +
-		"Images on gcr.io, Docker Hub, or any other registry are not checked and not reported.\n" +
-		"--image checks the image you would deploy with, not the one written in the manifest.\n" +
-		"A valid manifest produces no output on stdout; warnings (a pinned revision name, a check\n" +
-		"that could not be completed) go to stderr without failing the command.\n" +
-		"--format json prints the result instead — missing, unchecked and warnings as one object\n" +
-		"on stdout — while the exit code stays the same.\n" +
-		"service and manifest may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(2),
-	RunE: runVerify,
-}
+var verifyCmd = newVerifyCmd(serviceTarget)
 
-func init() {
-	addTargetFlags(verifyCmd, &verifyProject, &verifyRegion)
-	addManifestFlags(verifyCmd, &verifyTfstate)
-	addImageFlag(verifyCmd, &verifyImages)
-	verifyCmd.Flags().BoolVar(&verifyLocalOnly, "local-only", false,
+// newVerifyCmd builds verify for a target.
+func newVerifyCmd(t target) *cobra.Command {
+	o := &verifyOptions{}
+	warnings := "warnings (a check that could not be completed) go to stderr"
+	if t.isService() {
+		warnings = "warnings (a pinned revision name, a check\n" +
+			"that could not be completed) go to stderr"
+	}
+	cmd := &cobra.Command{
+		Use:   fmt.Sprintf("verify [%s] [manifest]", t.noun),
+		Short: "Verify a manifest",
+		Long: fmt.Sprintf("Validate that the manifest file is a well-formed Cloud Run %[1]s definition and\n"+
+			"contains the fields required to deploy. This local check never needs the API.\n"+
+			"When --project/--region are resolvable (and --local-only is not set), it also checks\n"+
+			"via the API that referenced resources actually exist: the service account, the Secret\n"+
+			"Manager secrets and the versions they reference, the VPC connector and Cloud SQL\n"+
+			"instances named in the annotations, and container images hosted on Artifact Registry\n"+
+			"(*-docker.pkg.dev).\n"+
+			"Images on gcr.io, Docker Hub, or any other registry are not checked and not reported.\n"+
+			"--image checks the image you would deploy with, not the one written in the manifest.\n"+
+			"A valid manifest produces no output on stdout; %[2]s without failing the command.\n"+
+			"--format json prints the result instead — missing, unchecked and warnings as one object\n"+
+			"on stdout — while the exit code stays the same.\n"+
+			"%[1]s and manifest may be omitted when set in the config file.", t.noun, warnings),
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runVerify(cmd, args, t, o)
+		},
+	}
+	addTargetFlags(cmd, &o.project, &o.region)
+	addManifestFlags(cmd, &o.tfstate)
+	addImageFlag(cmd, &o.images)
+	cmd.Flags().BoolVar(&o.localOnly, "local-only", false,
 		"skip the API existence checks and validate the manifest locally only")
-	addFormatFlag(verifyCmd, &verifyFormat)
+	addFormatFlag(cmd, &o.format)
+	return cmd
 }
 
-func runVerify(cmd *cobra.Command, args []string) error {
-	service, err := resolveService(args)
+func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) error {
+	name, err := t.resolveName(args)
 	if err != nil {
 		return err
 	}
@@ -78,7 +91,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Validate the output format before creating the client, like the other local checks.
-	if err := validateFormat(verifyFormat); err != nil {
+	if err := validateFormat(o.format); err != nil {
 		return err
 	}
 	ctx := cmd.Context()
@@ -87,46 +100,53 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
 	}
-	manifest, err = renderManifest(ctx, manifest, verifyTfstate)
+	manifest, err = renderManifest(ctx, manifest, o.tfstate)
 	if err != nil {
 		return err
 	}
 
-	result := verifyResult{Service: service, Manifest: manifestPath}
+	result := verifyResult{Manifest: manifestPath}
+	if t.isService() {
+		result.Service = name
+	} else {
+		result.Job = name
+	}
 
 	// Apply the same overrides so that what gets verified is what deploy applies (the image
 	// existence check also runs against the overridden image). Every failure from here on goes
 	// through finishVerify: for --format json users, any path that ends with an empty stdout makes
 	// `clrnd verify --format json | jq ...` fail on unreadable output.
-	manifest, err = cloudrun.ApplyImageOverrides(manifest, verifyImages)
+	manifest, err = cloudrun.ApplyImageOverrides(t.kind, manifest, o.images)
 	if err != nil {
 		result.Errors = strings.Split(err.Error(), "\n")
-		return finishVerify(cmd, result, err)
+		return finishVerify(cmd, o.format, result, err)
 	}
 
 	// Local schema validation always runs. Validate returns an errors.Join, so split it into one
 	// entry per line for the structured form (the text output still prints them together as one
 	// error, as before).
-	if err := cloudrun.Validate(manifest, service); err != nil {
+	if err := cloudrun.Validate(t.kind, manifest, name); err != nil {
 		result.Errors = strings.Split(err.Error(), "\n")
-		return finishVerify(cmd, result, err)
+		return finishVerify(cmd, o.format, result, err)
 	}
 
 	// A pinned revision name is syntactically valid, but the next deploy that changes the template
 	// is certain to fail, so warn about it (without failing: for a one-shot deploy it is the right
-	// way to write it).
-	warning, err := pinnedRevisionWarning(manifest)
-	if err != nil {
-		return err
-	}
-	if warning != "" {
-		result.Warnings = append(result.Warnings, warning)
+	// way to write it). A job has no revisions.
+	if t.isService() {
+		warning, err := pinnedRevisionWarning(manifest)
+		if err != nil {
+			return err
+		}
+		if warning != "" {
+			result.Warnings = append(result.Warnings, warning)
+		}
 	}
 
-	if !verifyLocalOnly {
-		if err := verifyRemote(ctx, cmd, manifest, &result); err != nil {
+	if !o.localOnly {
+		if err := verifyRemote(ctx, cmd, t, o, manifest, &result); err != nil {
 			result.Errors = append(result.Errors, err.Error())
-			return finishVerify(cmd, result, err)
+			return finishVerify(cmd, o.format, result, err)
 		}
 	}
 
@@ -135,7 +155,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if len(result.Missing) > 0 {
 		failure = fmt.Errorf("%s", strings.Join(result.Missing, "\n"))
 	}
-	return finishVerify(cmd, result, failure)
+	return finishVerify(cmd, o.format, result, failure)
 }
 
 // verifyRemote runs the API existence checks and adds their results to result. It does nothing
@@ -146,8 +166,9 @@ func runVerify(cmd *cobra.Command, args []string) error {
 // "the deploy target is known" requires project and region together: having only one of them is
 // more likely a configuration mistake, and doing nothing is safer than silently reaching for the
 // production project.
-func verifyRemote(ctx context.Context, cmd *cobra.Command, manifest []byte, result *verifyResult) error {
-	project, region, ok := resolveTargetOptional(verifyProject, verifyRegion)
+func verifyRemote(ctx context.Context, cmd *cobra.Command, t target, o *verifyOptions, manifest []byte,
+	result *verifyResult) error {
+	project, region, ok := resolveTargetOptional(o.project, o.region)
 	if !ok {
 		// When only one of them was given explicitly, say so instead of silently skipping the
 		// remote checks.
@@ -158,7 +179,7 @@ func verifyRemote(ctx context.Context, cmd *cobra.Command, manifest []byte, resu
 		return nil
 	}
 
-	res, err := cloudrun.VerifyRemote(ctx, project, region, manifest, clientOptions...)
+	res, err := cloudrun.VerifyRemote(ctx, t.kind, project, region, manifest, clientOptions...)
 	if err != nil {
 		return err
 	}
@@ -172,10 +193,10 @@ func verifyRemote(ctx context.Context, cmd *cobra.Command, manifest []byte, resu
 // text is as before: stdout is empty on success, warnings go to stderr, and a failure is returned
 // as an error (cobra prints it to stderr). json prints the result to stdout as a single object and
 // still returns a failure as an error — keeping stdout data-only without changing the exit code.
-func finishVerify(cmd *cobra.Command, result verifyResult, failure error) error {
+func finishVerify(cmd *cobra.Command, format string, result verifyResult, failure error) error {
 	result.OK = failure == nil
 
-	if verifyFormat == formatJSON {
+	if format == formatJSON {
 		if err := writeFormatted(cmd, formatJSON, result, ""); err != nil {
 			return err
 		}
