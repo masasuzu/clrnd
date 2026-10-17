@@ -45,7 +45,7 @@ func TestSecretResourceName(t *testing.T) {
 
 func TestSecretAliases(t *testing.T) {
 	t.Run("nil-safe on empty service", func(t *testing.T) {
-		if got := secretAliases(&run.Service{}); got != nil {
+		if got := secretAliases(serviceWorkload(&run.Service{})); got != nil {
 			t.Errorf("secretAliases(empty) = %v, want nil", got)
 		}
 	})
@@ -62,7 +62,7 @@ func TestSecretAliases(t *testing.T) {
 				},
 			},
 		}
-		got := secretAliases(svc)
+		got := secretAliases(serviceWorkload(svc))
 		want := map[string]string{
 			"a": "projects/p1/secrets/s1",
 			"b": "projects/p2/secrets/s2",
@@ -92,7 +92,7 @@ func TestSecretNames(t *testing.T) {
 			},
 		},
 	}
-	got := secretNames(svc)
+	got := secretNames(serviceWorkload(svc))
 	want := []string{"s1", "s2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("secretNames() = %v, want %v (deduped, env + volume)", got, want)

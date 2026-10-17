@@ -99,7 +99,7 @@ func TestContainerImages(t *testing.T) {
 			},
 		},
 	}
-	got := containerImages(svc)
+	got := containerImages(serviceWorkload(svc))
 	want := []string{"gcr.io/p/a:v1", "gcr.io/p/b:v1"}
 	if len(got) != len(want) {
 		t.Fatalf("containerImages() = %v, want %v", got, want)
@@ -112,7 +112,7 @@ func TestContainerImages(t *testing.T) {
 }
 
 func TestContainerImagesIsNilSafe(t *testing.T) {
-	if got := containerImages(&run.Service{}); got != nil {
+	if got := containerImages(serviceWorkload(&run.Service{})); got != nil {
 		t.Errorf("containerImages() = %v, want nil", got)
 	}
 }

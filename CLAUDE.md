@@ -247,6 +247,13 @@ revision-name conflicts, asynchronous rollout failures).
   (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
   service argument. Returns `errors.Join` of all problems so the user sees them at once. The local
   `Validate` needs no `--project`/`--region` and no credentials.
+- What a manifest *runs* — containers, volumes, the service account and the template annotations —
+  is read through `workload` ([internal/cloudrun/workload.go](internal/cloudrun/workload.go)),
+  never by walking `spec.template.spec` directly. `VerifyRemote`'s checks, `--image` and the
+  container rules in `validate` all take a `workload`, and `serviceWorkload` is the only place
+  that knows where a Service keeps it. This is groundwork for Cloud Run jobs (#96), which keep the
+  same fields one template deeper: supporting one means writing its extractor, not forking every
+  check. `workload.Path` is that location, so error messages name the field a user actually wrote.
 - `VerifyRemote` (in [internal/cloudrun/verify.go](internal/cloudrun/verify.go)) complements
   `Validate` with API existence checks, aligning `verify`'s semantics with ecspresso. It confirms
   the manifest's service account (IAM `projects.serviceAccounts.get`) and the Secret Manager secrets
