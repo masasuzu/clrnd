@@ -506,30 +506,6 @@ func TestDiff(t *testing.T) {
 	})
 }
 
-func TestServiceContainers(t *testing.T) {
-	t.Run("nil-safe on empty service", func(t *testing.T) {
-		if got := serviceContainers(&run.Service{}); got != nil {
-			t.Errorf("serviceContainers(empty) = %v, want nil", got)
-		}
-	})
-
-	t.Run("returns containers", func(t *testing.T) {
-		svc := &run.Service{
-			Spec: &run.ServiceSpec{
-				Template: &run.RevisionTemplate{
-					Spec: &run.RevisionSpec{
-						Containers: []*run.Container{{Image: "x"}},
-					},
-				},
-			},
-		}
-		got := serviceContainers(svc)
-		if len(got) != 1 || got[0].Image != "x" {
-			t.Errorf("serviceContainers() = %v, want one container with image x", got)
-		}
-	})
-}
-
 func TestIsNotFound(t *testing.T) {
 	tests := []struct {
 		name string

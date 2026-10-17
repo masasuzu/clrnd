@@ -8,7 +8,6 @@ import (
 	artifactregistry "google.golang.org/api/artifactregistry/v1"
 	iam "google.golang.org/api/iam/v1"
 	"google.golang.org/api/option"
-	run "google.golang.org/api/run/v1"
 	secretmanager "google.golang.org/api/secretmanager/v1"
 	sqladmin "google.golang.org/api/sqladmin/v1"
 	vpcaccess "google.golang.org/api/vpcaccess/v1"
@@ -42,9 +41,10 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 	if err != nil {
 		return nil, err
 	}
+	w := serviceWorkload(svc)
 
-	sa := serviceAccountName(svc)
-	secrets := secretNames(svc)
+	sa := w.ServiceAccountName
+	secrets := secretNames(w)
 	res := &RemoteCheck{}
 
 	if sa != "" {
@@ -66,10 +66,10 @@ func VerifyRemote(ctx context.Context, project, region string, manifest []byte,
 		}
 	}
 
-	checkSecrets(ctx, res, svc, secrets, project, opts...)
-	checkVPCConnector(ctx, res, svc, project, region, opts...)
-	checkCloudSQL(ctx, res, svc, opts...)
-	checkImages(ctx, res, containerImages(svc), opts...)
+	checkSecrets(ctx, res, w, secrets, project, opts...)
+	checkVPCConnector(ctx, res, w, project, region, opts...)
+	checkCloudSQL(ctx, res, w, opts...)
+	checkImages(ctx, res, containerImages(w), opts...)
 
 	return res, nil
 }
@@ -87,9 +87,9 @@ const (
 // The annotation value can be either a short name (just the connector name) or a full resource
 // name. A short name is completed with the deploy target's project and region: a connector is a
 // regional resource, so this is the one place region is needed.
-func checkVPCConnector(ctx context.Context, res *RemoteCheck, svc *run.Service,
+func checkVPCConnector(ctx context.Context, res *RemoteCheck, w workload,
 	project, region string, opts ...option.ClientOption) {
-	connector := templateAnnotation(svc, vpcConnectorAnnotation)
+	connector := w.annotation(vpcConnectorAnnotation)
 	if connector == "" {
 		return
 	}
@@ -120,8 +120,8 @@ func checkVPCConnector(ctx context.Context, res *RemoteCheck, svc *run.Service,
 // checkCloudSQL checks that the Cloud SQL instances connected to exist. The value is a
 // comma-separated list of "<project>:<region>:<instance>". The project is taken from the
 // connection name, so an instance in another project is not wrongly reported as Missing.
-func checkCloudSQL(ctx context.Context, res *RemoteCheck, svc *run.Service, opts ...option.ClientOption) {
-	raw := templateAnnotation(svc, cloudSQLAnnotation)
+func checkCloudSQL(ctx context.Context, res *RemoteCheck, w workload, opts ...option.ClientOption) {
+	raw := w.annotation(cloudSQLAnnotation)
 	if raw == "" {
 		return
 	}
@@ -188,13 +188,13 @@ func splitConnectionName(conn string) (project, instance string, ok bool) {
 // When the secret itself was not found, its versions are not queried. Listing "secret X does not
 // exist" alongside "secret X has no version latest" tells you nothing more; it only buries the
 // real cause.
-func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secrets []string,
+func checkSecrets(ctx context.Context, res *RemoteCheck, w workload, secrets []string,
 	project string, opts ...option.ClientOption) {
 	if len(secrets) == 0 {
 		return
 	}
-	aliases := secretAliases(svc)
-	versions := versionsBySecret(svc)
+	aliases := secretAliases(w)
+	versions := versionsBySecret(w)
 
 	smSvc, err := secretmanager.NewService(ctx, opts...)
 	if err != nil {
@@ -239,10 +239,10 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, svc *run.Service, secre
 }
 
 // versionsBySecret collects, per secret, the referenced versions without duplicates.
-func versionsBySecret(svc *run.Service) map[string][]string {
+func versionsBySecret(w workload) map[string][]string {
 	out := make(map[string][]string)
 	seen := make(map[secretVersionRef]bool)
-	for _, ref := range secretVersionRefs(svc) {
+	for _, ref := range secretVersionRefs(w) {
 		if seen[ref] {
 			continue
 		}
@@ -265,12 +265,7 @@ type secretVersionRef struct {
 // secretVersionRefs collects the (secret, version) pairs the manifest references, without
 // duplicates. The version is the secretKeyRef.key of an env entry and the items[].key of a secret
 // volume. One with no version given is treated as "latest", as Cloud Run does.
-func secretVersionRefs(svc *run.Service) []secretVersionRef {
-	spec := templateSpec(svc)
-	if spec == nil {
-		return nil
-	}
-
+func secretVersionRefs(w workload) []secretVersionRef {
 	seen := make(map[secretVersionRef]bool)
 	var out []secretVersionRef
 	add := func(secret, version string) {
@@ -293,7 +288,7 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 		}
 	}
 
-	for _, c := range spec.Containers {
+	for _, c := range w.Containers {
 		if c == nil {
 			continue
 		}
@@ -303,7 +298,7 @@ func secretVersionRefs(svc *run.Service) []secretVersionRef {
 			}
 		}
 	}
-	for _, v := range spec.Volumes {
+	for _, v := range w.Volumes {
 		if v == nil || v.Secret == nil {
 			continue
 		}
@@ -328,15 +323,6 @@ func versionFromSecretPath(name string) string {
 		return name[i+len(marker):]
 	}
 	return ""
-}
-
-// templateAnnotation reads an annotation of spec.template.metadata nil-safely.
-func templateAnnotation(svc *run.Service, key string) string {
-	meta := templateMeta(svc)
-	if meta == nil {
-		return ""
-	}
-	return strings.TrimSpace(meta.Annotations[key])
 }
 
 // checkImages checks through Artifact Registry that containers[].image exists, and adds the
@@ -391,23 +377,9 @@ func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ..
 	}
 }
 
-// serviceAccountName extracts the manifest's runtime service account nil-safely.
-func serviceAccountName(svc *run.Service) string {
-	spec := templateSpec(svc)
-	if spec == nil {
-		return ""
-	}
-	return spec.ServiceAccountName
-}
-
 // secretNames collects, without duplicates, the Secret Manager secret names the manifest
 // references. It looks at env secretKeyRef as well as secret volumes.
-func secretNames(svc *run.Service) []string {
-	spec := templateSpec(svc)
-	if spec == nil {
-		return nil
-	}
-
+func secretNames(w workload) []string {
 	seen := make(map[string]bool)
 	var out []string
 	add := func(n string) {
@@ -417,7 +389,7 @@ func secretNames(svc *run.Service) []string {
 		}
 	}
 
-	for _, c := range spec.Containers {
+	for _, c := range w.Containers {
 		if c == nil {
 			continue
 		}
@@ -427,7 +399,7 @@ func secretNames(svc *run.Service) []string {
 			}
 		}
 	}
-	for _, v := range spec.Volumes {
+	for _, v := range w.Volumes {
 		if v != nil && v.Secret != nil {
 			add(v.Secret.SecretName)
 		}
@@ -439,15 +411,12 @@ func secretNames(svc *run.Service) []string {
 // in another project. The value is a comma-separated list of "<alias>:projects/<p>/secrets/<s>".
 const secretAliasAnnotation = "run.googleapis.com/secrets"
 
-// secretAliases parses the run.googleapis.com/secrets annotation of spec.template.metadata and
+// secretAliases parses the run.googleapis.com/secrets annotation of the template and
 // returns a map of alias name -> actual path (projects/<p>/secrets/<s>).
 // For a secret in another project, secretKeyRef.name holds only the alias and the actual path is
 // in this annotation, so without looking it up the existence check misjudges.
-func secretAliases(svc *run.Service) map[string]string {
-	if svc.Spec == nil || svc.Spec.Template == nil || svc.Spec.Template.Metadata == nil {
-		return nil
-	}
-	raw := svc.Spec.Template.Metadata.Annotations[secretAliasAnnotation]
+func secretAliases(w workload) map[string]string {
+	raw := w.Annotations[secretAliasAnnotation]
 	if raw == "" {
 		return nil
 	}

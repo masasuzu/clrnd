@@ -499,18 +499,7 @@ func validate(svc *run.Service, service string) error {
 		errs = append(errs, fmt.Errorf("metadata.name %q does not match service argument %q", svc.Metadata.Name, service))
 	}
 
-	containers := serviceContainers(svc)
-	if len(containers) == 0 {
-		errs = append(errs, errors.New("spec.template.spec.containers must define at least one container"))
-	}
-	for i, c := range containers {
-		switch {
-		case c == nil:
-			errs = append(errs, fmt.Errorf("spec.template.spec.containers[%d] must not be null", i))
-		case c.Image == "":
-			errs = append(errs, fmt.Errorf("spec.template.spec.containers[%d].image is required", i))
-		}
-	}
+	errs = append(errs, validateContainers(serviceWorkload(svc))...)
 
 	return errors.Join(errs...)
 }
@@ -588,15 +577,6 @@ func alignRevisionName(current, desired *run.Service) *run.Service {
 		return current
 	}
 	return WithoutRevisionName(current)
-}
-
-// serviceContainers extracts the list of containers from a service definition nil-safely.
-func serviceContainers(svc *run.Service) []*run.Container {
-	spec := templateSpec(svc)
-	if spec == nil {
-		return nil
-	}
-	return spec.Containers
 }
 
 // Diff returns the unified diff of current and desired. It returns the empty string when there

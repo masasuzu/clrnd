@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	run "google.golang.org/api/run/v1"
 )
 
 // artifactRegistryHost matches an Artifact Registry host name. The leading part is the location
@@ -99,14 +97,10 @@ func (r imageRef) resourceName() string {
 }
 
 // containerImages collects the images the manifest references, in order and without duplicates.
-func containerImages(svc *run.Service) []string {
-	spec := templateSpec(svc)
-	if spec == nil {
-		return nil
-	}
+func containerImages(w workload) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, c := range spec.Containers {
+	for _, c := range w.Containers {
 		if c == nil || c.Image == "" || seen[c.Image] {
 			continue
 		}

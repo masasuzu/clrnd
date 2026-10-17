@@ -68,7 +68,7 @@ func TestApplyImageOverridesSingleContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the result does not parse: %v", err)
 	}
-	containers := serviceContainers(svc)
+	containers := serviceWorkload(svc).Containers
 	if len(containers) != 1 || containers[0].Image != "gcr.io/p/app:v2" {
 		t.Errorf("containers = %+v, want the image replaced", containers)
 	}
@@ -103,7 +103,7 @@ func TestApplyImageOverridesByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the result does not parse: %v", err)
 	}
-	containers := serviceContainers(svc)
+	containers := serviceWorkload(svc).Containers
 	if len(containers) != 2 {
 		t.Fatalf("containers = %+v, want both kept", containers)
 	}

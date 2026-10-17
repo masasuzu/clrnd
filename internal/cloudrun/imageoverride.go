@@ -62,17 +62,18 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	containers := serviceContainers(svc)
+	w := serviceWorkload(svc)
+	containers := w.Containers
 	if len(containers) == 0 {
 		return nil, fmt.Errorf("--image needs a container to apply to, but the manifest defines none")
 	}
 	// A null container (a manifest with a bare "-" under containers:) is rejected by Validate,
 	// but the override runs before that. Without checking here, it would assign to nil and panic.
-	// The message matches Validate's, so the explanation does not depend on whether --image was
-	// passed.
+	// It reports the same error Validate does (nullContainerError), so the explanation does not
+	// depend on whether --image was passed.
 	for i, c := range containers {
 		if c == nil {
-			return nil, fmt.Errorf("spec.template.spec.containers[%d] must not be null", i)
+			return nil, nullContainerError(w, i)
 		}
 	}
 
