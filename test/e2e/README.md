@@ -15,7 +15,8 @@ hand when you change anything that talks to the Cloud Run API.
 ## Setup
 
 - `gcloud` on `PATH`, authenticated with Application Default Credentials
-  (`gcloud auth application-default login`)
+  (`gcloud auth application-default login`, or better a dedicated config; see
+  [Credentials](#credentials))
 - The Cloud Run API enabled on the target project
 - A project to run against, provided either way:
   - `PROJECT=<project-id> ./run.sh`, or
@@ -24,6 +25,69 @@ hand when you change anything that talks to the Cloud Run API.
 
 Without one of those the script refuses to run, which also means a fresh clone
 cannot create anything by accident.
+
+## Credentials
+
+By default the run acts as whatever `~/.config/gcloud` holds: clrnd through
+Application Default Credentials, and `gcloud` (cleanup and checks) through its own
+login. Running `gcloud auth application-default login` in another terminal — for
+another project, as another account — changes that under the test, which then fails
+with a 403 on every step.
+
+**Recommended:** give the test a gcloud config directory of its own that
+impersonates a service account. Nothing outside it changes what the test acts as,
+the service account's roles bound what it can touch, and its actions are logged
+under its own name.
+
+1. Create the service account once (replace `<project>`, and use your own account
+   for `<you>`):
+
+   ```sh
+   gcloud iam service-accounts create clrnd-e2e --project <project>
+   SA=clrnd-e2e@<project>.iam.gserviceaccount.com
+   gcloud projects add-iam-policy-binding <project> --member "serviceAccount:$SA" --role roles/run.developer
+   # deploy as the services' runtime service account (by default the compute one)
+   gcloud iam service-accounts add-iam-policy-binding <runtime-service-account> \
+     --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser
+   # let yourself act as it
+   gcloud iam service-accounts add-iam-policy-binding "$SA" \
+     --member "user:<you>" --role roles/iam.serviceAccountTokenCreator
+   ```
+
+2. Log in once into a dedicated config directory:
+
+   ```sh
+   export CLOUDSDK_CONFIG=~/.config/gcloud-clrnd-e2e
+   gcloud auth login                                      # your own account, the source credential
+   gcloud config set auth/impersonate_service_account "$SA"
+   gcloud auth application-default login --impersonate-service-account "$SA"
+   ```
+
+3. Point the test at it, either with `CLRND_E2E_GCLOUD_CONFIG=~/.config/gcloud-clrnd-e2e`
+   or by writing that path into `gcloud-config.env` next to this README (one line,
+   git-ignored).
+
+The script then sets `CLOUDSDK_CONFIG` for gcloud **and**
+`GOOGLE_APPLICATION_CREDENTIALS` for clrnd: the Go client libraries do not read
+`CLOUDSDK_CONFIG`, and without the second one clrnd would still use
+`~/.config/gcloud`. It refuses a dedicated directory whose ADC is not a service
+account (an easy result of forgetting `--impersonate-service-account`), and warns
+when gcloud there impersonates a different account.
+
+Whatever the credentials, every run first checks both identities before it
+creates a thing, and stops with the API's error instead of a page of failures:
+
+- clrnd: it prints who clrnd acts as and asks the built binary for a service that
+  does not exist. Anything but a 404 stops the run.
+- gcloud: it lists services as gcloud's active account. gcloud reads the state
+  the assertions check and deletes the service at the end, so when it cannot,
+  every check waits out its timeout and the service is left behind — while clrnd
+  itself succeeds. `--cleanup-orphans` runs the same check, since a failed listing
+  would otherwise read as "nothing to delete".
+
+No service account key file is involved: the source credential is your own login,
+kept in that directory. It can still expire (Google sometimes asks to
+reauthenticate); log in again into the same directory when it does.
 
 ## Usage
 
@@ -36,6 +100,7 @@ ONLY=current ./run.sh           # only the current-binary phase
 OLD_REF=<git-ref> ./run.sh      # also build that ref and compare its behaviour
 REGION=<region> ./run.sh        # default: asia-northeast1
 WORK_ROOT=<dir> ./run.sh        # parent of the build/scratch dir (default: $TMPDIR)
+CLRND_E2E_GCLOUD_CONFIG=<dir> ./run.sh   # gcloud config dir to act from (see Credentials)
 ```
 
 Each run uses a unique service named `clrnd-e2e-<timestamp>` and deletes it on
