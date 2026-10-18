@@ -1,75 +1,87 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"time"
 
+	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
 )
 
-var (
-	deleteProject     string
-	deleteRegion      string
-	deleteDryRun      bool
-	deleteAutoApprove bool
-	deleteNoWait      bool
-	deleteInterval    time.Duration
-	deleteTimeout     time.Duration
-)
-
-var deleteCmd = &cobra.Command{
-	Use:   "delete [service]",
-	Short: "Delete a service",
-	Long: "Delete a Cloud Run service. This cannot be undone: the service, all of its revisions,\n" +
-		"and its URL go away.\n" +
-		"What is about to be deleted is printed on stderr and confirmed before anything happens.\n" +
-		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate the request\n" +
-		"server-side without deleting anything.\n" +
-		"Deletion is asynchronous, so delete waits until the service is actually gone; pass\n" +
-		"--no-wait to return as soon as the request is accepted.\n" +
-		"service may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(1),
-	RunE: runDelete,
+// deleteOptions are delete's flags. Each delete command (services, jobs) has its own.
+type deleteOptions struct {
+	project     string
+	region      string
+	dryRun      bool
+	autoApprove bool
+	noWait      bool
+	interval    time.Duration
+	timeout     time.Duration
 }
 
-func init() {
-	addTargetFlags(deleteCmd, &deleteProject, &deleteRegion)
-	deleteCmd.Flags().BoolVar(&deleteDryRun, "dry-run", false,
+var deleteCmd = newDeleteCmd(serviceTarget)
+
+// newDeleteCmd builds delete for a target.
+func newDeleteCmd(t target) *cobra.Command {
+	o := &deleteOptions{}
+	goes := "the service, all of its revisions,\nand its URL go away"
+	if !t.isService() {
+		goes = "the job and all of its executions go\naway"
+	}
+	cmd := &cobra.Command{
+		Use:   fmt.Sprintf("delete [%s]", t.noun),
+		Short: fmt.Sprintf("Delete a %s", t.noun),
+		Long: fmt.Sprintf("Delete a Cloud Run %[1]s. This cannot be undone: %[2]s.\n"+
+			"What is about to be deleted is printed on stderr and confirmed before anything happens.\n"+
+			"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate the request\n"+
+			"server-side without deleting anything.\n"+
+			"Deletion is asynchronous, so delete waits until the %[1]s is actually gone; pass\n"+
+			"--no-wait to return as soon as the request is accepted.\n"+
+			"%[1]s may be omitted when set in the config file.", t.noun, goes),
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDelete(cmd, args, t, o)
+		},
+	}
+	addTargetFlags(cmd, &o.project, &o.region)
+	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false,
 		"validate the request server-side without deleting anything")
-	deleteCmd.Flags().BoolVar(&deleteAutoApprove, "auto-approve", false,
+	cmd.Flags().BoolVar(&o.autoApprove, "auto-approve", false,
 		"delete without the interactive confirmation prompt (for CI/CD)")
-	deleteCmd.Flags().BoolVar(&deleteNoWait, "no-wait", false,
-		"return as soon as the request is accepted, without waiting for the service to disappear")
-	deleteCmd.Flags().DurationVar(&deleteInterval, "interval", defaultRolloutInterval,
+	cmd.Flags().BoolVar(&o.noWait, "no-wait", false,
+		fmt.Sprintf("return as soon as the request is accepted, without waiting for the %s to disappear", t.noun))
+	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval,
 		"how long to wait between polls while the deletion completes")
-	deleteCmd.Flags().DurationVar(&deleteTimeout, "timeout", defaultRolloutTimeout,
-		"how long to wait for the service to disappear")
+	cmd.Flags().DurationVar(&o.timeout, "timeout", defaultRolloutTimeout,
+		fmt.Sprintf("how long to wait for the %s to disappear", t.noun))
+	return cmd
 }
 
-func runDelete(cmd *cobra.Command, args []string) error {
-	service, err := resolveService(args)
+func runDelete(cmd *cobra.Command, args []string, t target, o *deleteOptions) error {
+	name, err := t.resolveName(args)
 	if err != nil {
 		return err
 	}
 
 	ctx := cmd.Context()
-	client, err := newCloudRunClient(cmd, deleteProject, deleteRegion)
+	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {
 		return err
 	}
 
-	// Show what is about to be deleted first. A missing service is detected here, so there is no
-	// confirmation prompt for a service that does not exist.
-	status, err := client.Status(ctx, service)
+	// Show what is about to be deleted first. A missing resource is detected here, so there is no
+	// confirmation prompt for one that does not exist.
+	details, err := deleteDetails(ctx, client, t, name)
 	if err != nil {
 		return err
 	}
-	printDeleteTarget(cmd, client.Project(), client.Region(), service, status.URL)
+	printDeleteTarget(cmd, client.Project(), client.Region(), t.noun, name, details)
 
 	// --dry-run deletes nothing, so it does not ask for confirmation (the same policy as deploy).
-	if !deleteDryRun {
-		ok, err := confirmAction(cmd, deleteAutoApprove, "delete",
-			fmt.Sprintf("Delete service %q? This cannot be undone.", service))
+	if !o.dryRun {
+		ok, err := confirmAction(cmd, o.autoApprove, "delete",
+			fmt.Sprintf("Delete %s %q? This cannot be undone.", t.noun, name))
 		if err != nil {
 			return err
 		}
@@ -78,25 +90,54 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := client.DeleteService(ctx, service, deleteDryRun); err != nil {
+	if err := client.Delete(ctx, t.kind, name, o.dryRun); err != nil {
 		return err
 	}
 	// --dry-run has deleted nothing, so there is nothing to wait for.
-	if deleteDryRun || deleteNoWait {
+	if o.dryRun || o.noWait {
 		return nil
 	}
-	return waitForDeletion(cmd, client, service, deleteTimeout, deleteInterval)
+	return waitForDeletion(cmd, client, t, name, o.timeout, o.interval)
+}
+
+// deleteDetail is one extra line of what printDeleteTarget shows.
+type deleteDetail struct {
+	label, value string
+}
+
+// deleteDetails fetches the resource (failing when it does not exist) and returns what is worth
+// showing about it before it goes: a service's URL, a job's executions.
+func deleteDetails(ctx context.Context, client *cloudrun.Client, t target, name string) ([]deleteDetail, error) {
+	if t.isService() {
+		status, err := client.Status(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if status.URL == "" {
+			return nil, nil
+		}
+		return []deleteDetail{{"url", status.URL}}, nil
+	}
+	status, err := client.GetJobStatus(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return []deleteDetail{{"executions", fmt.Sprintf("%d (deleted with the job)", status.ExecutionCount)}}, nil
 }
 
 // printDeleteTarget lists what is about to be deleted on stderr. The project and region are always
 // printed to prevent the accident of deleting something after mixing them up.
-func printDeleteTarget(cmd *cobra.Command, project, region, service, url string) {
+func printDeleteTarget(cmd *cobra.Command, project, region, noun, name string, details []deleteDetail) {
 	out := cmd.ErrOrStderr()
+	rows := append([]deleteDetail{{noun, name}, {"project", project}, {"region", region}}, details...)
+	width := 0
+	for _, r := range rows {
+		if len(r.label) > width {
+			width = len(r.label)
+		}
+	}
 	fmt.Fprintln(out, "About to delete:")
-	fmt.Fprintf(out, "  service: %s\n", service)
-	fmt.Fprintf(out, "  project: %s\n", project)
-	fmt.Fprintf(out, "  region:  %s\n", region)
-	if url != "" {
-		fmt.Fprintf(out, "  url:     %s\n", url)
+	for _, r := range rows {
+		fmt.Fprintf(out, "  %-*s %s\n", width+1, r.label+":", r.value)
 	}
 }

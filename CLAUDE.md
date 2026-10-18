@@ -12,8 +12,8 @@ which has no ecspresso counterpart because splitting traffic between revisions i
 model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
-Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, and `run` with its alias
-`execute`, gcloud's name for it): the top-level commands stay the services' so existing invocations keep working, and the
+Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, `status`, `delete`, `init`, and
+`run` with its alias `execute`, gcloud's name for it): the top-level commands stay the services' so existing invocations keep working, and the
 group is spelled the way gcloud spells it (`gcloud run jobs`).
 
 ## Commands
@@ -53,12 +53,16 @@ revision-name conflicts, asynchronous rollout failures).
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout. The exception is the commands a job
-  shares with a service — `deploy`, `diff`, `verify`: they are built by `newDeployCmd(target)` and
-  friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
+  shares with a service — `deploy`, `diff`, `verify`, `delete`, `init`: they are built by
+  `newDeployCmd(target)` and friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
   [cmd/jobs.go](cmd/jobs.go)), with their flags in a per-command options struct instead of package
   vars. A `target` ([cmd/target.go](cmd/target.go)) carries the `cloudrun.Kind`, the noun used in
   help and messages, and how the name is resolved; anything only a service has (`--no-traffic`, the
   pinned-revision warning) is gated on `target.isService()`.
+  `jobs status` and `jobs run` are ordinary commands: a job's state and its executions have nothing
+  in common with a service's beyond `Ready`. `jobsCmd` itself has `Args: cobra.NoArgs` and a
+  `RunE` that prints the help — without a Run, cobra never validates a group's arguments, so
+  `clrnd jobs lod` (a typo) printed the help and exited 0.
 - Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional and
   `resolveService` (or `resolveJob`)/`resolveManifest` fill them from the config file when absent (positional →
   config); args fill service first, then manifest. Only the commands that take **both** a
@@ -333,7 +337,9 @@ revision-name conflicts, asynchronous rollout failures).
   **Deletion is asynchronous too**: the DELETE returns while the service is still readable for a
   while, so `delete` polls with `Client.WaitDeleted` until a 404 comes back (`--no-wait` opts out).
   Without it, "delete then recreate" races. `WaitDeleted` shares `waitDefaults`/`nextWaitInterval`
-  and the same transient-error tolerance as `Wait`.
+  and the same transient-error tolerance as `Wait`. `Client.Delete` and `Client.WaitDeleted` take
+  the `Kind`, and `jobs delete` is the same command built for jobs; what `deleteDetails` adds to
+  the target differs (a service's URL, a job's execution count, since the executions go with it).
 - `rollback` (in [internal/cloudrun/rollback.go](internal/cloudrun/rollback.go)) repoints
   `spec.traffic` at an earlier revision. It touches **only** the traffic split — `spec.template` is
   left alone, so no new revision is created and the revision-name conflict cannot apply. Traffic
@@ -451,8 +457,9 @@ revision-name conflicts, asynchronous rollout failures).
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
   finds the `Ready` condition and is meant to be reused by `wait`. The JSON form is the `Status`
   struct itself (`--format json`), so the two outputs cannot drift apart.
-- `init` (in [cmd/init.go](cmd/init.go), formerly `load`) fetches a service via `GetService`/
-  `ToManifest` and scaffolds `manifest.yaml` (the `--output` file) plus the config file, refusing to
+- `init` (in [cmd/init.go](cmd/init.go), formerly `load` — the alias is kept for services only)
+  fetches a service or job through `Client.LiveManifest` (the kind's `scaffold` hook: a service
+  drops its revision name) and scaffolds `manifest.yaml` (the `--output` file) plus the config file, refusing to
   overwrite existing files without `--force`. The config goes to `--config` when given, otherwise
   `clrnd.yml` (`initConfigFile`); the recorded `manifest:` is made relative to the config's directory
   by `manifestPathFor`, because `resolveConfigPath` resolves it from there. Both files are written

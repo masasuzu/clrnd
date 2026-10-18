@@ -55,6 +55,14 @@ var serviceKind = &kindOf[*run.Service]{
 		}
 		return call.Context(ctx).Do()
 	},
+	del: func(ctx context.Context, c *Client, name string, dryRun bool) error {
+		call := c.api.Namespaces.Services.Delete(c.serviceName(name))
+		if dryRun {
+			call = call.DryRun(dryRunAll)
+		}
+		_, err := call.Context(ctx).Do()
+		return err
+	},
 
 	prepare: func(desired, current *run.Service, name string, opts PlanOptions) (*run.Service, error) {
 		if !opts.KeepTraffic {
@@ -63,6 +71,10 @@ var serviceKind = &kindOf[*run.Service]{
 		return keepTraffic(desired, current, name)
 	},
 	align: alignRevisionName,
+	// Keeping the live revision name makes the second deploy that changes the template fail with
+	// "a revision with the same name and a different configuration cannot be created". The
+	// scaffold drops it and leaves naming to Cloud Run's automatic numbering.
+	scaffold: WithoutRevisionName,
 }
 
 // parseManifest parses a service manifest strictly (see kindOf.parse).
@@ -148,19 +160,6 @@ func keepTraffic(desired, current *run.Service, service string) (*run.Service, e
 	out := *desired
 	out.Spec = &spec
 	return &out, nil
-}
-
-// DeleteService deletes the service. When dryRun is true, the server only validates.
-// This cannot be undone, so the caller must obtain confirmation.
-func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool) error {
-	call := c.api.Namespaces.Services.Delete(c.serviceName(service))
-	if dryRun {
-		call = call.DryRun(dryRunAll)
-	}
-	if _, err := call.Context(ctx).Do(); err != nil {
-		return fmt.Errorf("failed to delete service %q: %w", service, err)
-	}
-	return nil
 }
 
 // isNotFound reports whether err is a googleapi 404 error.

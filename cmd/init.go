@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
@@ -15,37 +14,52 @@ import (
 // names (defaultConfigFiles).
 const initConfigFile = "clrnd.yml"
 
-var (
-	initProject  string
-	initRegion   string
-	initManifest string
-	initForce    bool
-)
-
-var initCmd = &cobra.Command{
-	Use:     "init [service]",
-	Aliases: []string{"load"},
-	Short:   "Initialize a project from an existing service",
-	Long: "Fetch an existing Cloud Run service and scaffold a project from it: write its\n" +
-		"manifest (Knative-style YAML, with server-managed fields stripped) and a clrnd.yml\n" +
-		"holding the project, region, service, and manifest path. Existing files are not\n" +
-		"overwritten unless --force is given.\n" +
-		"service may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(1),
-	RunE: runInit,
-	// Let -c choose where the config is generated. It is a file being generated, so it need not
-	// exist yet.
-	Annotations: map[string]string{annotationConfigOptional: ""},
+// initOptions are init's flags. Each init command (services, jobs) has its own.
+type initOptions struct {
+	project  string
+	region   string
+	manifest string
+	force    bool
 }
 
-func init() {
-	addTargetFlags(initCmd, &initProject, &initRegion)
-	initCmd.Flags().StringVarP(&initManifest, "output", "o", "manifest.yaml", "manifest file to write")
-	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite existing files")
+var initCmd = newInitCmd(serviceTarget)
+
+// newInitCmd builds init for a target.
+func newInitCmd(t target) *cobra.Command {
+	o := &initOptions{}
+	format := "Knative-style YAML"
+	if !t.isService() {
+		format = "YAML"
+	}
+	cmd := &cobra.Command{
+		Use:   fmt.Sprintf("init [%s]", t.noun),
+		Short: fmt.Sprintf("Initialize a project from an existing %s", t.noun),
+		Long: fmt.Sprintf("Fetch an existing Cloud Run %[1]s and scaffold a project from it: write its\n"+
+			"manifest (%[2]s, with server-managed fields stripped) and a clrnd.yml\n"+
+			"holding the project, region, %[1]s, and manifest path. Existing files are not\n"+
+			"overwritten unless --force is given.\n"+
+			"%[1]s may be omitted when set in the config file.", t.noun, format),
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInit(cmd, args, t, o)
+		},
+		// Let -c choose where the config is generated. It is a file being generated, so it need not
+		// exist yet.
+		Annotations: map[string]string{annotationConfigOptional: ""},
+	}
+	if t.isService() {
+		// init was called load once; the old name keeps working for services, which is all it
+		// ever covered.
+		cmd.Aliases = []string{"load"}
+	}
+	cmd.Flags().StringVarP(&o.manifest, "output", "o", "manifest.yaml", "manifest file to write")
+	cmd.Flags().BoolVar(&o.force, "force", false, "overwrite existing files")
+	addTargetFlags(cmd, &o.project, &o.region)
+	return cmd
 }
 
-func runInit(cmd *cobra.Command, args []string) error {
-	service, err := resolveService(args)
+func runInit(cmd *cobra.Command, args []string, t target, o *initOptions) error {
+	name, err := t.resolveName(args)
 	if err != nil {
 		return err
 	}
@@ -58,9 +72,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// To prevent accidental overwrites, check all the existing files up front, before writing any.
-	manifestExisted := fileExists(initManifest)
-	if !initForce {
-		for _, path := range []string{initManifest, configFile} {
+	manifestExisted := fileExists(o.manifest)
+	if !o.force {
+		for _, path := range []string{o.manifest, configFile} {
 			if fileExists(path) {
 				return fmt.Errorf("%s already exists: pass --force to overwrite", path)
 			}
@@ -68,19 +82,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
-	client, err := newCloudRunClient(cmd, initProject, initRegion)
+	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {
 		return err
 	}
 
-	obj, err := client.GetService(ctx, service)
-	if err != nil {
-		return err
-	}
-	// Keeping the live revision name as-is makes the second deploy that changes the template fail
-	// with "a revision with the same name and a different configuration cannot be created". The
-	// scaffold drops it and leaves naming to Cloud Run's automatic numbering.
-	manifest, err := cloudrun.ToManifest(cloudrun.WithoutRevisionName(obj))
+	// A service loses its revision name here (see WithoutRevisionName).
+	manifest, err := client.LiveManifest(ctx, t.kind, name)
 	if err != nil {
 		return err
 	}
@@ -88,8 +96,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// The manifest path written to the config is made relative to the config file.
 	// resolveConfigPath resolves it against the config's directory, so recording it relative to
 	// the cwd would break the path when -c points at another directory.
-	configYAML, err := scaffoldConfig(client.Project(), client.Region(), service,
-		manifestPathFor(configFile, initManifest))
+	configYAML, err := scaffoldConfig(t, client.Project(), client.Region(), name,
+		manifestPathFor(configFile, o.manifest))
 	if err != nil {
 		return err
 	}
@@ -98,20 +106,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// rolled back.
 	var previousManifest []byte
 	if manifestExisted {
-		previousManifest, _ = os.ReadFile(initManifest)
+		previousManifest, _ = os.ReadFile(o.manifest)
 	}
 
 	// The generated files can contain the live service's plaintext environment variables, so keep
 	// them unreadable by other users. Without --force, creation and the existence check happen in
 	// a single operation, so a file created after the check above is not overwritten. With
 	// --force, the file is replaced atomically.
-	if err := writeScaffold(initManifest, manifest, initForce); err != nil {
+	if err := writeScaffold(o.manifest, manifest, o.force); err != nil {
 		return err
 	}
-	if err := writeScaffold(configFile, configYAML, initForce); err != nil {
+	if err := writeScaffold(configFile, configYAML, o.force); err != nil {
 		// If writing the config fails, restore the manifest so no half-finished scaffold is left
 		// behind. The rollback is best-effort, and the error returned is the original write error.
-		restoreManifest(initManifest, previousManifest, manifestExisted)
+		restoreManifest(o.manifest, previousManifest, manifestExisted)
 		return err
 	}
 	return nil
@@ -158,13 +166,14 @@ func fileExists(path string) bool {
 // config.Config instead of writing it by hand leaves value escaping (when a path contains a colon,
 // etc.) to the YAML library and keeps the schema in step with the reader of clrnd.yml
 // (config.Load).
-func scaffoldConfig(project, region, service, manifest string) ([]byte, error) {
-	out, err := yaml.Marshal(config.Config{
-		Project:  project,
-		Region:   region,
-		Service:  service,
-		Manifest: manifest,
-	})
+func scaffoldConfig(t target, project, region, name, manifest string) ([]byte, error) {
+	c := config.Config{Project: project, Region: region, Manifest: manifest}
+	if t.isService() {
+		c.Service = name
+	} else {
+		c.Job = name
+	}
+	out, err := yaml.Marshal(c)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build %s: %w", initConfigFile, err)
 	}

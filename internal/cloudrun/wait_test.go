@@ -262,7 +262,7 @@ func TestWaitDeletedReturnsWhenTheServiceIsGone(t *testing.T) {
 	opts := fastWait(0)
 	opts.OnUpdate = func(message string) { updates = append(updates, message) }
 
-	if err := c.WaitDeleted(context.Background(), "my-svc", opts); err != nil {
+	if err := c.WaitDeleted(context.Background(), KindService, "my-svc", opts); err != nil {
 		t.Fatalf("WaitDeleted() error = %v", err)
 	}
 	mu.Lock()
@@ -282,7 +282,7 @@ func TestWaitDeletedTimesOut(t *testing.T) {
 		return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
 	})
 
-	err := c.WaitDeleted(context.Background(), "my-svc", WaitOptions{
+	err := c.WaitDeleted(context.Background(), KindService, "my-svc", WaitOptions{
 		Timeout: 50 * time.Millisecond, Interval: time.Millisecond,
 	})
 	if err == nil {
@@ -310,7 +310,7 @@ func TestWaitDeletedToleratesTransientErrors(t *testing.T) {
 	opts := fastWait(0)
 	opts.OnRetry = func(err error) { retries = append(retries, err) }
 
-	if err := c.WaitDeleted(context.Background(), "my-svc", opts); err != nil {
+	if err := c.WaitDeleted(context.Background(), KindService, "my-svc", opts); err != nil {
 		t.Fatalf("WaitDeleted() error = %v, want the transient failure to be retried", err)
 	}
 	if len(retries) != 1 {
@@ -529,7 +529,7 @@ func TestWaitDeletedFailsFastOnPermanentErrors(t *testing.T) {
 		return http.StatusForbidden, googleAPIError(403, "permission denied")
 	})
 
-	err := c.WaitDeleted(context.Background(), "my-svc", fastWait(0))
+	err := c.WaitDeleted(context.Background(), KindService, "my-svc", fastWait(0))
 	if err == nil {
 		t.Fatal("WaitDeleted() error = nil, want the permanent failure returned")
 	}

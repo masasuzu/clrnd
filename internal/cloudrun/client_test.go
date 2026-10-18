@@ -326,7 +326,7 @@ func TestDeleteService(t *testing.T) {
 		return http.StatusOK, map[string]interface{}{}
 	})
 
-	if err := c.DeleteService(context.Background(), "my-svc", false); err != nil {
+	if err := c.Delete(context.Background(), KindService, "my-svc", false); err != nil {
 		t.Fatalf("DeleteService() error = %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestDeleteServiceDryRun(t *testing.T) {
 		return http.StatusOK, map[string]interface{}{}
 	})
 
-	if err := c.DeleteService(context.Background(), "my-svc", true); err != nil {
+	if err := c.Delete(context.Background(), KindService, "my-svc", true); err != nil {
 		t.Fatalf("DeleteService() error = %v", err)
 	}
 	if del := lastRequest(t, api, http.MethodDelete); !strings.Contains(del.Query, "dryRun=all") {
@@ -356,7 +356,7 @@ func TestDeleteServiceDryRun(t *testing.T) {
 func TestDeleteServicePropagatesErrors(t *testing.T) {
 	c, _ := newTestClient(t, nil) // the default handler returns 404
 
-	err := c.DeleteService(context.Background(), "missing", false)
+	err := c.Delete(context.Background(), KindService, "missing", false)
 	if err == nil || !strings.Contains(err.Error(), `failed to delete service "missing"`) {
 		t.Fatalf("DeleteService() error = %v, want it to name the service", err)
 	}

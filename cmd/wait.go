@@ -59,19 +59,19 @@ func runWait(cmd *cobra.Command, args []string) error {
 	})
 }
 
-// waitForDeletion waits until the service is actually gone. Deletion in Cloud Run is asynchronous,
-// so without this the service can still be fetched right after delete.
-func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string,
+// waitForDeletion waits until the service or job is actually gone. Deletion in Cloud Run is
+// asynchronous, so without this it can still be fetched right after delete.
+func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, t target, name string,
 	timeout, interval time.Duration) error {
 	out := cmd.ErrOrStderr()
-	return client.WaitDeleted(cmd.Context(), service, cloudrun.WaitOptions{
+	return client.WaitDeleted(cmd.Context(), t.kind, name, cloudrun.WaitOptions{
 		Timeout:  timeout,
 		Interval: interval,
 		OnUpdate: func(message string) {
-			fmt.Fprintf(out, "waiting for %s to be deleted: %s\n", service, message)
+			fmt.Fprintf(out, "waiting for %s to be deleted: %s\n", name, message)
 		},
 		OnRetry: func(err error) {
-			fmt.Fprintf(out, "waiting for %s to be deleted: could not read the status, retrying: %v\n", service, err)
+			fmt.Fprintf(out, "waiting for %s to be deleted: could not read the status, retrying: %v\n", name, err)
 		},
 	})
 }

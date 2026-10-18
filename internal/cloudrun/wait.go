@@ -120,10 +120,9 @@ func waitReady(ctx context.Context, subject string, fetch func(context.Context) 
 	}
 }
 
-// WaitDeleted waits until the service is actually gone. Cloud Run deletion is asynchronous, and
-// the service can still be fetched when the DELETE is accepted, so without this a procedure such
-// as "delete, then recreate" races.
-func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptions) error {
+// waitDeleted is the polling loop behind Client.WaitDeleted: it ends at the first 404.
+func (k *kindOf[T]) waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error {
+	what := subject(k.noun, name)
 	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -131,7 +130,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 	var lastErr error
 	notified := false
 	for {
-		_, err := c.GetService(waitCtx, service)
+		_, err := k.get(waitCtx, c, name)
 		switch {
 		case isNotFound(err):
 			// Gone. This is the outcome being waited for.
@@ -145,7 +144,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 				}
 			}
 		case waitCtx.Err() != nil:
-			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
+			return waitDeleteInterrupted(ctx, waitCtx, what, timeout, lastErr)
 		case !isRetryable(err):
 			// The same classification as Wait. A failure that waiting will not fix is returned
 			// right away.
@@ -160,7 +159,7 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 
 		select {
 		case <-waitCtx.Done():
-			return waitDeleteInterrupted(ctx, waitCtx, service, timeout, lastErr)
+			return waitDeleteInterrupted(ctx, waitCtx, what, timeout, lastErr)
 		case <-time.After(interval):
 		}
 		interval = nextWaitInterval(interval)
@@ -168,19 +167,19 @@ func (c *Client) WaitDeleted(ctx context.Context, service string, opts WaitOptio
 }
 
 // waitDeleteInterrupted builds the reason the wait for deletion was cut short.
-func waitDeleteInterrupted(parent, waitCtx context.Context, service string,
+func waitDeleteInterrupted(parent, waitCtx context.Context, subject string,
 	timeout time.Duration, lastErr error) error {
 	if parent.Err() != nil {
-		return fmt.Errorf("interrupted while waiting for service %q to be deleted: %w", service, parent.Err())
+		return fmt.Errorf("interrupted while waiting for %s to be deleted: %w", subject, parent.Err())
 	}
 	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
 		if lastErr != nil {
-			return fmt.Errorf("timed out after %s waiting for service %q to be deleted; the last poll failed: %w",
-				timeout, service, lastErr)
+			return fmt.Errorf("timed out after %s waiting for %s to be deleted; the last poll failed: %w",
+				timeout, subject, lastErr)
 		}
-		return fmt.Errorf("timed out after %s waiting for service %q to be deleted", timeout, service)
+		return fmt.Errorf("timed out after %s waiting for %s to be deleted", timeout, subject)
 	}
-	return fmt.Errorf("stopped waiting for service %q to be deleted: %w", service, waitCtx.Err())
+	return fmt.Errorf("stopped waiting for %s to be deleted: %w", subject, waitCtx.Err())
 }
 
 // waitDefaults fills unset parameters with their default values.

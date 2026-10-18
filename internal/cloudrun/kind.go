@@ -30,6 +30,9 @@ type Kind interface {
 		opts PlanOptions) (string, error)
 	apply(ctx context.Context, p *DeployPlan, dryRun bool) (int64, error)
 	wait(ctx context.Context, c *Client, name string, opts WaitOptions) (*Status, error)
+	liveManifest(ctx context.Context, c *Client, name string) ([]byte, error)
+	remove(ctx context.Context, c *Client, name string, dryRun bool) error
+	waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error
 }
 
 // The kinds clrnd deploys.
@@ -62,6 +65,7 @@ type kindOf[T resource] struct {
 	get     func(ctx context.Context, c *Client, name string) (T, error)
 	create  func(ctx context.Context, c *Client, obj T, dryRun bool) (T, error)
 	replace func(ctx context.Context, c *Client, name string, obj T, dryRun bool) (T, error)
+	del     func(ctx context.Context, c *Client, name string, dryRun bool) error
 
 	// prepare adjusts the desired definition before it is diffed and applied; current is the zero
 	// value when the resource does not exist yet. nil leaves desired as it is.
@@ -69,6 +73,9 @@ type kindOf[T resource] struct {
 	// align adjusts the live definition for the comparison only (never for the apply). It is not
 	// called when there is no live definition. nil leaves it as it is.
 	align func(current, desired T) T
+	// scaffold adjusts a live definition before init writes it out as a manifest. nil leaves it as
+	// it is.
+	scaffold func(T) T
 }
 
 // Name implements Kind.
@@ -500,4 +507,43 @@ func setResourceVersion(desired, current *run.ObjectMeta) {
 		return
 	}
 	desired.ResourceVersion = current.ResourceVersion
+}
+
+func (k *kindOf[T]) liveManifest(ctx context.Context, c *Client, name string) ([]byte, error) {
+	obj, err := k.get(ctx, c, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
+	}
+	if k.scaffold != nil {
+		obj = k.scaffold(obj)
+	}
+	return toManifest(obj)
+}
+
+func (k *kindOf[T]) remove(ctx context.Context, c *Client, name string, dryRun bool) error {
+	if err := k.del(ctx, c, name, dryRun); err != nil {
+		return fmt.Errorf("failed to delete %s %q: %w", k.noun, name, err)
+	}
+	return nil
+}
+
+// LiveManifest fetches the live definition and returns it as a manifest usable for deploying:
+// server-managed fields stripped, and adjusted the way init scaffolds it (a service loses its
+// revision name, see WithoutRevisionName).
+func (c *Client) LiveManifest(ctx context.Context, kind Kind, name string) ([]byte, error) {
+	return kind.liveManifest(ctx, c, name)
+}
+
+// Delete deletes the service or job. When dryRun is true, the server only validates.
+// This cannot be undone, so the caller must obtain confirmation. Deletion is asynchronous; see
+// WaitDeleted.
+func (c *Client) Delete(ctx context.Context, kind Kind, name string, dryRun bool) error {
+	return kind.remove(ctx, c, name, dryRun)
+}
+
+// WaitDeleted waits until the service or job is actually gone. Cloud Run deletion is
+// asynchronous — confirmed for jobs as well as services — and the resource can still be fetched
+// when the DELETE is accepted, so without this a procedure such as "delete, then recreate" races.
+func (c *Client) WaitDeleted(ctx context.Context, kind Kind, name string, opts WaitOptions) error {
+	return kind.waitDeleted(ctx, c, name, opts)
 }

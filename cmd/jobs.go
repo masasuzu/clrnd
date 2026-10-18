@@ -7,7 +7,7 @@ import "github.com/spf13/cobra"
 // (gcloud run jobs).
 //
 // A job is deployed the same way a service is, so deploy, diff and verify are the services'
-// commands built for jobs (newDeployCmd and friends). What a service has and a job does not —
+// commands built for jobs (newDeployCmd and friends, which also covers delete and init). What a service has and a job does not —
 // revisions, traffic — has no counterpart here, and what a job has and a service does not — running it —
 // is its own command (jobsRunCmd).
 var jobsCmd = &cobra.Command{
@@ -16,6 +16,13 @@ var jobsCmd = &cobra.Command{
 	Long: "Commands for Cloud Run jobs (kind: Job). They take the job's name and a manifest the\n" +
 		"same way the top-level commands take a service's; in the config file, name the job with\n" +
 		"job: instead of service:.",
+	// Without a Run of its own, cobra never validates a group's arguments: `clrnd jobs lod my-job`
+	// would print the help and exit 0, so a typo in a CI script would pass silently. NoArgs turns
+	// that into "unknown command", and a bare `clrnd jobs` still shows the help.
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return cmd.Help()
+	},
 }
 
 func init() {
@@ -23,4 +30,7 @@ func init() {
 	jobsCmd.AddCommand(newDiffCmd(jobTarget))
 	jobsCmd.AddCommand(newDeployCmd(jobTarget))
 	jobsCmd.AddCommand(jobsRunCmd)
+	jobsCmd.AddCommand(jobsStatusCmd)
+	jobsCmd.AddCommand(newDeleteCmd(jobTarget))
+	jobsCmd.AddCommand(newInitCmd(jobTarget))
 }
