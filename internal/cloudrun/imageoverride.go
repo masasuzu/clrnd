@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	run "google.golang.org/api/run/v1"
-	"sigs.k8s.io/yaml"
 )
 
 // ImageOverride is a single --image value. An empty Container means "the only container in the
@@ -43,9 +42,9 @@ func ParseImageOverride(spec string) (ImageOverride, error) {
 //
 // An override is an exception to the principle that "the manifest is the only input", so its
 // reach is kept narrow: the container name may be omitted only when there is one container, and a
-// service with several has to say which container. Silently rewriting the first one would, on a
+// manifest with several has to say which container. Silently rewriting the first one would, on a
 // service with a sidecar, replace a container that was never meant to change.
-func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
+func ApplyImageOverrides(kind Kind, manifest []byte, specs []string) ([]byte, error) {
 	if len(specs) == 0 {
 		return manifest, nil
 	}
@@ -57,15 +56,15 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 		}
 		overrides = append(overrides, o)
 	}
+	return kind.overrideImages(manifest, overrides)
+}
 
-	svc, err := parseManifest(manifest)
-	if err != nil {
-		return nil, err
-	}
-	w := serviceWorkload(svc)
+// applyImageOverrides replaces the images of w's containers. The containers are shared with the
+// definition w was extracted from, so that definition changes with them.
+func applyImageOverrides(w workload, overrides []ImageOverride) error {
 	containers := w.Containers
 	if len(containers) == 0 {
-		return nil, fmt.Errorf("--image needs a container to apply to, but the manifest defines none")
+		return fmt.Errorf("--image needs a container to apply to, but the manifest defines none")
 	}
 	// A null container (a manifest with a bare "-" under containers:) is rejected by Validate,
 	// but the override runs before that. Without checking here, it would assign to nil and panic.
@@ -73,23 +72,18 @@ func ApplyImageOverrides(manifest []byte, specs []string) ([]byte, error) {
 	// depend on whether --image was passed.
 	for i, c := range containers {
 		if c == nil {
-			return nil, nullContainerError(w, i)
+			return nullContainerError(w, i)
 		}
 	}
 
 	for _, o := range overrides {
 		target, err := findContainer(containers, o.Container)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		target.Image = o.Image
 	}
-
-	out, err := yaml.Marshal(svc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to rebuild the manifest after --image: %w", err)
-	}
-	return out, nil
+	return nil
 }
 
 // findContainer looks a container up by name. An empty name succeeds only when there is exactly

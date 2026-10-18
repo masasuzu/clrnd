@@ -21,6 +21,55 @@ const (
 	dryRunAll = "all"
 )
 
+// serviceKind describes Cloud Run services.
+var serviceKind = &kindOf[*run.Service]{
+	name:       manifestKind,
+	noun:       "service",
+	apiVersion: manifestAPIVersion,
+
+	newObject: func() *run.Service { return &run.Service{} },
+	typeMeta:  func(s *run.Service) (string, string) { return s.ApiVersion, s.Kind },
+	meta: func(s *run.Service) *run.ObjectMeta {
+		if s == nil {
+			return nil
+		}
+		return s.Metadata
+	},
+	workload: serviceWorkload,
+	status:   newStatus,
+
+	get: func(ctx context.Context, c *Client, name string) (*run.Service, error) {
+		return c.api.Namespaces.Services.Get(c.serviceName(name)).Context(ctx).Do()
+	},
+	create: func(ctx context.Context, c *Client, obj *run.Service, dryRun bool) (*run.Service, error) {
+		call := c.api.Namespaces.Services.Create(c.parent(), obj)
+		if dryRun {
+			call = call.DryRun(dryRunAll)
+		}
+		return call.Context(ctx).Do()
+	},
+	replace: func(ctx context.Context, c *Client, name string, obj *run.Service, dryRun bool) (*run.Service, error) {
+		call := c.api.Namespaces.Services.ReplaceService(c.serviceName(name), obj)
+		if dryRun {
+			call = call.DryRun(dryRunAll)
+		}
+		return call.Context(ctx).Do()
+	},
+
+	prepare: func(desired, current *run.Service, name string, opts PlanOptions) (*run.Service, error) {
+		if !opts.KeepTraffic {
+			return desired, nil
+		}
+		return keepTraffic(desired, current, name)
+	},
+	align: alignRevisionName,
+}
+
+// parseManifest parses a service manifest strictly (see kindOf.parse).
+func parseManifest(manifest []byte) (*run.Service, error) {
+	return serviceKind.parse(manifest)
+}
+
 // Read-only annotations added by the server. A manifest for deploying does not need them.
 // Applied to top-level metadata and to spec.template.metadata.
 //
@@ -28,6 +77,10 @@ const (
 // service created with gcloud through init would bake "gcloud" into the manifest, and every later
 // clrnd deploy would keep sending it back. With a hand-written manifest it shows up the other way
 // round, as a removal diff that never goes away. clrnd does not manage these.
+//
+// The lists are shared by every kind. A job records who created and last changed it under
+// run.googleapis.com/ rather than serving.knative.dev/; no service carries those keys, so removing
+// them is harmless there.
 var serverManagedAnnotations = []string{
 	"run.googleapis.com/operation-id",
 	"run.googleapis.com/ingress-status",
@@ -36,15 +89,21 @@ var serverManagedAnnotations = []string{
 	"run.googleapis.com/client-version",
 	"serving.knative.dev/creator",
 	"serving.knative.dev/lastModifier",
+	"run.googleapis.com/creator",
+	"run.googleapis.com/lastModifier",
 }
 
 // Read-only labels added by the server. Applied to top-level metadata and to
 // spec.template.metadata (cloud.googleapis.com/location is in practice only set on top-level
 // metadata, but removing it from the template side does no harm, so the lists are not split).
+//
+// run.googleapis.com/lastUpdatedTime is set on a job and is a timestamp: left in, it would differ
+// between the live job and the dry run that resolves defaults, so every diff would show it.
 var serverManagedLabels = []string{
 	"client.knative.dev/nonce",
 	"run.googleapis.com/startupProbeType",
 	"cloud.googleapis.com/location",
+	"run.googleapis.com/lastUpdatedTime",
 }
 
 // Read-only fields of top-level metadata. Lists the parts of run.ObjectMeta that clients do not
@@ -64,150 +123,6 @@ var serverManagedMetaFields = []string{
 	"ownerReferences",
 	"generateName",
 	"clusterName",
-}
-
-// DeployPlan is what is about to be applied. Computed by Plan and applied by Apply.
-type DeployPlan struct {
-	Service string // service name
-	Create  bool   // whether the service does not exist and will be created
-	Diff    string // unified diff of live and desired (empty when there are no differences)
-
-	client  *Client
-	desired *run.Service
-}
-
-// PlanOptions holds optional settings for how the diff is computed. The zero value is the default
-// behaviour.
-type PlanOptions struct {
-	// ResolveDefaults, when true, runs the desired definition through a server-side dry run before
-	// diffing, to build a desired definition with the defaults filled in. Cloud Run fills defaults
-	// into many fields on create, so a hand-written minimal manifest keeps showing a diff even when
-	// nothing was changed (issue #11). Enabling this makes those differences line up on both sides
-	// and disappear.
-	//
-	// A dry run is a write API, so it cannot be used with read-only permissions. The CLI enables
-	// this by default and lets --no-server-defaults turn it off (the zero value of this struct
-	// stays "do not resolve", and rollback / refresh, which work on a definition taken from live,
-	// do not need resolving because the defaults are already in it).
-	// What is sent for the apply is always the original desired definition; values the server
-	// filled in are never written back.
-	ResolveDefaults bool
-
-	// KeepTraffic, when true, pins the current split by revision name before applying
-	// (deploy --no-traffic). Without spec.traffic in the manifest, Cloud Run sends all traffic to
-	// latestRevision, so left as is, the new revision would take production the moment it is
-	// deployed. Set this when traffic is meant to be moved gradually.
-	KeepTraffic bool
-}
-
-// Plan validates the manifest and computes the diff against the live service (changes nothing).
-func (c *Client) Plan(ctx context.Context, service string, manifest []byte, opts PlanOptions) (*DeployPlan, error) {
-	svc, err := parseManifest(manifest)
-	if err != nil {
-		return nil, err
-	}
-	if err := validate(svc, service); err != nil {
-		return nil, err
-	}
-	return c.PlanService(ctx, service, svc, opts)
-}
-
-// PlanService computes the diff against live using the desired service definition as is.
-// It is the entry point for paths that edit live and apply it without going through a manifest,
-// such as rollback and refresh. The desired metadata.namespace is rewritten to match the target.
-func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service, opts PlanOptions) (*DeployPlan, error) {
-	if desired == nil {
-		return nil, errors.New("no desired service to plan")
-	}
-	c.setNamespace(desired)
-
-	create := false
-	current, getErr := c.api.Namespaces.Services.Get(c.serviceName(service)).Context(ctx).Do()
-	if getErr != nil {
-		if !isNotFound(getErr) {
-			return nil, fmt.Errorf("failed to check service %q: %w", service, getErr)
-		}
-		// Does not exist: create it. The diff is taken with the current side empty.
-		create = true
-		current = nil
-	}
-
-	// Pin the traffic before setting resourceVersion and before diffing. Both what is applied and
-	// what shows in the diff have to be the definition after pinning.
-	if opts.KeepTraffic {
-		fixed, err := keepTraffic(desired, current, service)
-		if err != nil {
-			return nil, err
-		}
-		desired = fixed
-	}
-
-	plan := &DeployPlan{Service: service, client: c, desired: desired, Create: create}
-
-	// For an update, put the resourceVersion of the state just read onto desired to make the write
-	// a compare-and-swap. Sent without it, Cloud Run accepts the write as an unconditional
-	// overwrite (confirmed against the real API), so concurrent deploys silently erase each
-	// other's changes. A definition that was itself read from live before this GET (rollback,
-	// refresh, traffic) already carries the version of that read, and setResourceVersion keeps it:
-	// a change made in between then fails with a 409 instead of being overwritten.
-	setResourceVersion(desired, current)
-
-	// Resolve defaults only on the desired definition used for the diff. plan.desired (what is sent
-	// for the apply) is left as it was, so values the server filled in are not written back.
-	compared := desired
-	if opts.ResolveDefaults {
-		resolved, err := c.resolveDefaults(ctx, service, desired, create)
-		if err != nil {
-			return nil, err
-		}
-		compared = resolved
-	}
-
-	diff, err := compareServices(current, compared, "live/"+service, service)
-	if err != nil {
-		return nil, err
-	}
-	plan.Diff = diff
-	return plan, nil
-}
-
-// CompareManifest returns the diff between the live service and a local manifest. It is the entry
-// point for diff, and does the service fetch and (when needed) the default resolution together.
-func (c *Client) CompareManifest(ctx context.Context, service string, manifest []byte,
-	desiredLabel string, opts PlanOptions) (string, error) {
-	desired, err := parseManifest(manifest)
-	if err != nil {
-		return "", err
-	}
-	// Run the same validation as deploy, whether or not server defaults are resolved. Doing it only
-	// on the dry-run path would let diff --no-server-defaults accept input deploy rejects
-	// (metadata.name differing from the service name, etc.) and render "a diff that looks as if the
-	// name could be changed".
-	if err := validate(desired, service); err != nil {
-		return "", err
-	}
-	// Match the target. The dry run that resolves server defaults gets the same validation as a
-	// real write, so unless the same pre-processing as deploy is applied, diff alone gets rejected.
-	c.setNamespace(desired)
-
-	current, err := c.GetService(ctx, service)
-	if err != nil {
-		if !isNotFound(err) {
-			return "", err
-		}
-		// A service not created yet. Treated as "everything is an addition", like PlanService.
-		// A 404 used to be returned here, so the "write a manifest → diff → deploy" flow the
-		// README recommends before init failed on the first run only.
-		current = nil
-	}
-
-	if opts.ResolveDefaults {
-		// If it does not exist, the dry run is also a 404 unless it is a Create.
-		if desired, err = c.resolveDefaults(ctx, service, desired, current == nil); err != nil {
-			return "", err
-		}
-	}
-	return compareServices(current, desired, "live/"+service, desiredLabel)
 }
 
 // keepTraffic replaces the desired traffic split with the live service's current split.
@@ -235,100 +150,6 @@ func keepTraffic(desired, current *run.Service, service string) (*run.Service, e
 	return &out, nil
 }
 
-// setNamespace makes the body's namespace match the target project.
-// Both the apply and the dry run use a definition that has been through this.
-func (c *Client) setNamespace(svc *run.Service) {
-	if svc != nil && svc.Metadata != nil {
-		svc.Metadata.Namespace = c.project
-	}
-}
-
-// resolveDefaults runs a server-side dry run to get a service definition that includes the
-// defaults Cloud Run fills in. It changes nothing (dryRun=all).
-func (c *Client) resolveDefaults(ctx context.Context, service string, desired *run.Service, create bool) (*run.Service, error) {
-	var (
-		resolved *run.Service
-		err      error
-	)
-	if create {
-		resolved, err = c.api.Namespaces.Services.Create(c.parent(), desired).
-			DryRun(dryRunAll).Context(ctx).Do()
-	} else {
-		resolved, err = c.api.Namespaces.Services.ReplaceService(c.serviceName(service), desired).
-			DryRun(dryRunAll).Context(ctx).Do()
-	}
-	if err != nil {
-		// The cause is not necessarily permissions (the manifest's content was rejected, the
-		// service was deleted midway, etc.). Do not assert one; only add what this path is doing.
-		// But create and update need different permissions, so name the one actually called. For a
-		// diff against a service that does not exist, saying "update permission is needed" would
-		// leave someone who should add run.services.create unable to ever fix it.
-		call := "update"
-		if create {
-			call = "create"
-		}
-		return nil, fmt.Errorf(
-			"failed to resolve server defaults for service %q: %w "+
-				"(resolving them performs a dry-run %s, which needs permission to %s the "+
-				"service; pass --no-server-defaults to compare without one)", service, err, call, call)
-	}
-	return resolved, nil
-}
-
-// Apply applies the Plan to Cloud Run and returns the service after the apply. When dryRun is
-// true, the server only validates. When dryRun is false, DryRun is not called (passing an empty
-// string would send an empty dryRun= query parameter).
-//
-// The returned metadata.generation is "the generation just applied", so it can be used to have
-// Wait wait only for the rollout of that generation.
-func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (*run.Service, error) {
-	if p.Create {
-		call := p.client.api.Namespaces.Services.Create(p.client.parent(), p.desired)
-		if dryRun {
-			call = call.DryRun(dryRunAll)
-		}
-		applied, err := call.Context(ctx).Do()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create service %q: %w", p.Service, err)
-		}
-		return applied, nil
-	}
-
-	call := p.client.api.Namespaces.Services.ReplaceService(p.client.serviceName(p.Service), p.desired)
-	if dryRun {
-		call = call.DryRun(dryRunAll)
-	}
-	applied, err := call.Context(ctx).Do()
-	if err != nil {
-		if isConflict(err) {
-			// resourceVersion is sent, so a 409 is the case where "someone rewrote it between
-			// computing the diff and applying". The API's wording (version 'X' was specified but
-			// current version is 'Y') alone does not say what to do, so rephrase it.
-			return nil, fmt.Errorf("service %q changed after the diff was computed; re-run to compare against the current state: %w", p.Service, err)
-		}
-		return nil, fmt.Errorf("failed to update service %q: %w", p.Service, err)
-	}
-	return applied, nil
-}
-
-// setResourceVersion copies current's resourceVersion onto desired so that optimistic concurrency
-// control takes effect. It does nothing when current is nil (a create).
-func setResourceVersion(desired, current *run.Service) {
-	if desired == nil || desired.Metadata == nil || current == nil || current.Metadata == nil {
-		return
-	}
-	// If desired already carries a version, do not overwrite it. rollback / refresh / traffic read
-	// live and then edit it, so desired carries the version *of that read*. Replacing it with the
-	// newer version here would let the CAS wave through someone else's change made between the
-	// two GETs and silently revert it (meaning to touch only traffic, the image from the deploy
-	// just before would be rolled back too). Sent with the version it carries, that case becomes a
-	// 409.
-	if desired.Metadata.ResourceVersion != "" {
-		return
-	}
-	desired.Metadata.ResourceVersion = current.Metadata.ResourceVersion
-}
-
 // DeleteService deletes the service. When dryRun is true, the server only validates.
 // This cannot be undone, so the caller must obtain confirmation.
 func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool) error {
@@ -340,15 +161,6 @@ func (c *Client) DeleteService(ctx context.Context, service string, dryRun bool)
 		return fmt.Errorf("failed to delete service %q: %w", service, err)
 	}
 	return nil
-}
-
-// AppliedGeneration extracts metadata.generation from Apply's return value nil-safely.
-// If it cannot, it returns 0, in which case Wait looks only at Ready regardless of generation.
-func AppliedGeneration(applied *run.Service) int64 {
-	if applied == nil || applied.Metadata == nil {
-		return 0
-	}
-	return applied.Metadata.Generation
 }
 
 // isNotFound reports whether err is a googleapi 404 error.
@@ -417,6 +229,11 @@ func isConflict(err error) bool {
 // ToManifest removes the read-only fields added by the server and returns a Knative-style YAML
 // manifest usable for deploying.
 func ToManifest(obj *run.Service) ([]byte, error) {
+	return toManifest(obj)
+}
+
+// toManifest is ToManifest for any kind's API type.
+func toManifest(obj any) ([]byte, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sanitize the manifest: %w", err)
@@ -432,76 +249,6 @@ func ToManifest(obj *run.Service) ([]byte, error) {
 		return nil, fmt.Errorf("failed to convert the manifest to YAML: %w", err)
 	}
 	return manifest, nil
-}
-
-// compareServices is the comparison implementation shared by every path that computes a diff. It
-// does not modify its arguments.
-func compareServices(current, desired *run.Service, currentName, desiredName string) (string, error) {
-	current = alignRevisionName(current, desired)
-
-	desiredYAML, err := ToManifest(desired)
-	if err != nil {
-		return "", err
-	}
-
-	var currentYAML []byte
-	if current != nil {
-		if currentYAML, err = ToManifest(current); err != nil {
-			return "", err
-		}
-	}
-	return Diff(currentYAML, desiredYAML, currentName, desiredName)
-}
-
-// CheckSyntax only checks that the manifest parses strictly as a run.Service.
-// It is used to surface local problems before anything that accesses the API (unlike Validate, it
-// does not look at whether the service name matches or at required fields).
-func CheckSyntax(manifest []byte) error {
-	_, err := parseManifest(manifest)
-	return err
-}
-
-// Validate checks that a local manifest is a valid Cloud Run service definition.
-// It does not access the API and checks only the structure and the fields required to deploy. It
-// returns nil when there are no problems, and a combined error when there are several.
-func Validate(manifest []byte, service string) error {
-	svc, err := parseManifest(manifest)
-	if err != nil {
-		return err
-	}
-	return validate(svc, service)
-}
-
-// parseManifest strictly parses a manifest into a run.Service. UnmarshalStrict also detects
-// unknown fields (such as a misspelled field name).
-func parseManifest(manifest []byte) (*run.Service, error) {
-	var svc run.Service
-	if err := yaml.UnmarshalStrict(manifest, &svc); err != nil {
-		return nil, fmt.Errorf("failed to parse the manifest: %w", err)
-	}
-	return &svc, nil
-}
-
-// validate checks a parsed service definition.
-func validate(svc *run.Service, service string) error {
-	var errs []error
-	if svc.ApiVersion != manifestAPIVersion {
-		errs = append(errs, fmt.Errorf("apiVersion must be %q, got %q", manifestAPIVersion, svc.ApiVersion))
-	}
-	if svc.Kind != manifestKind {
-		errs = append(errs, fmt.Errorf("kind must be %q, got %q", manifestKind, svc.Kind))
-	}
-
-	switch {
-	case svc.Metadata == nil || svc.Metadata.Name == "":
-		errs = append(errs, errors.New("metadata.name is required"))
-	case svc.Metadata.Name != service:
-		errs = append(errs, fmt.Errorf("metadata.name %q does not match service argument %q", svc.Metadata.Name, service))
-	}
-
-	errs = append(errs, validateContainers(serviceWorkload(svc))...)
-
-	return errors.Join(errs...)
 }
 
 // templateSpec extracts a service definition's spec.template.spec (RevisionSpec) nil-safely.

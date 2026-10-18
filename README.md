@@ -3,7 +3,8 @@
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
 It takes a service name and a manifest file as arguments and provides the subcommands
 `verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`,
-`delete`, and `refresh`.
+`delete`, and `refresh`. Cloud Run jobs are deployed the same way through `clrnd jobs` (see
+[jobs](#jobs)).
 
 ## Installation
 
@@ -106,6 +107,9 @@ gcloud auth application-default login
 | `rollback` | `run.services.get`, `run.revisions.list`, `run.services.update` |
 | `refresh` | `run.services.get`, `run.services.update` |
 | `delete` | `run.services.get`, `run.services.delete` |
+| `jobs verify` | the same as `verify` |
+| `jobs diff` | `run.jobs.get` **and `run.jobs.update`** — plus `run.jobs.create` for a job that does not exist yet, for the same reason as `diff` |
+| `jobs deploy` | `run.jobs.get`, `run.jobs.update`, and `run.jobs.create` for a job that does not exist yet |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -158,6 +162,7 @@ directory.
 project: my-project
 region: asia-northeast1
 service: my-svc            # optional; overridable by the positional argument
+# job: my-job             # instead of service, for the `clrnd jobs` commands
 manifest: manifest.yaml    # optional; overridable by the positional argument
 tfstate:
   - location: gs://my-tf-state/app/default.tfstate        # default state (name omitted): {{ tfstate "..." }}
@@ -183,6 +188,7 @@ Resolution order (highest first), matching gcloud:
 | project  | `--project` → `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` → config `project` |
 | region   | `--region` → `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` → config `region` |
 | service  | positional `[service]` → config `service` |
+| job      | positional `[job]` → config `job` (the `clrnd jobs` commands) |
 | manifest | positional `[manifest]` → config `manifest` |
 | tfstate  | `--tfstate` (if any given, replaces config) → config `tfstate` |
 
@@ -190,6 +196,11 @@ The config is parsed strictly: **an unknown key is an error**, not a warning. A 
 `regoin:` fails loudly instead of silently falling back to the environment. A `--config` you pass
 explicitly must exist (`init` is the exception — it is the command that creates it); an
 auto-detected `clrnd.yml` that is absent is simply an empty config.
+
+A config file describes one thing to deploy, so it sets **only one** of `service` and `job`. A
+command for the other kind does not fall back to that name: `clrnd delete` run next to a job's
+config refuses (`the config file names a job`) instead of deleting a service that happens to share
+the job's name.
 
 ## Templating with Terraform state
 
@@ -337,9 +348,10 @@ express. These live next to it and are deliberately out of scope:
   capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
   silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
   or Terraform.
-- **Cloud Run jobs.** Only services (`kind: Service`) are supported. `verify` rejects a job
-  manifest — `kind must be "Service", got "Job"` — but it says nothing about jobs being
-  unsupported, so this is the place that says it.
+- **Running Cloud Run jobs.** `clrnd jobs` deploys, diffs and verifies a job definition, but does
+  not run it, wait for an execution, show a job's status or delete one yet. Use
+  `gcloud run jobs execute` / `describe` / `delete` for those.
+- **Cloud Run worker pools.** A `kind: WorkerPool` manifest is refused with a message saying so.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
   and `rollback` / `traffic` preserve existing tags at 0%, but there is no command to add or move
@@ -371,6 +383,7 @@ clrnd [command]
 | `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
+| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -945,6 +958,50 @@ because a single 503 would otherwise turn an already-applied deploy into a red C
 that will not heal are returned at once instead of holding the job for the whole timeout: `400`,
 `401`, `403`, and `404` (a service that does not exist will not appear). A `403` that reports a rate
 limit is the exception — quota clears on its own, so it is retried.
+
+### jobs
+
+Cloud Run jobs (`kind: Job`) are deployed with the commands under `clrnd jobs`. They are the
+service commands of the same name, built for jobs: the same arguments (a job name instead of a
+service name), the same flags, the same diff, confirmation and `--dry-run`, and the same
+compare-and-swap on `resourceVersion`.
+
+```sh
+clrnd jobs verify my-job job.yaml
+clrnd jobs diff my-job job.yaml
+clrnd jobs deploy my-job job.yaml --auto-approve
+```
+
+```yaml
+# job.yaml
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: my-job
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          containers:
+          - image: us-docker.pkg.dev/my-project/app/migrate:v1
+```
+
+What differs from a service:
+
+- The manifest's `apiVersion` is `run.googleapis.com/v1`, and the containers sit one template
+  deeper (`spec.template.spec.template.spec`). `verify` checks the same references in them, and
+  its `--format json` names the job under `job` instead of `service`.
+- `jobs deploy` creates or replaces the job definition and waits until the job is ready. It does
+  **not** run the job; there is no revision to roll out and no traffic, so `--no-traffic` does not
+  exist here.
+- Starting an execution updates the job, so a `jobs deploy` whose diff was computed before someone
+  ran the job and applied after it fails with the same "changed after the diff was computed" error
+  as a concurrent edit. Re-run it.
+- In the config file, name the job with `job:` instead of `service:`.
+
+Each kind's commands refuse the other's manifest before contacting the API and say where it
+belongs (`kind is "Job", but this command takes a Service: ... use the 'clrnd jobs' commands`).
 
 ## Exit codes
 

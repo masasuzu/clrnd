@@ -50,3 +50,22 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("Load() = nil error, want error for missing file")
 	}
 }
+
+func TestLoadJob(t *testing.T) {
+	c, err := Load(write(t, "job: my-job\nmanifest: job.yaml\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if c.Job != "my-job" || c.Service != "" {
+		t.Fatalf("Load() = %+v, want job my-job and no service", c)
+	}
+}
+
+// TestLoadRejectsServiceAndJob checks that a config cannot describe a service and a job at once:
+// it has one manifest, and a command of either kind would pick the wrong half up.
+func TestLoadRejectsServiceAndJob(t *testing.T) {
+	_, err := Load(write(t, "service: my-svc\njob: my-job\n"))
+	if err == nil || !strings.Contains(err.Error(), "sets both service and job") {
+		t.Fatalf("Load() error = %v, want it to refuse service and job together", err)
+	}
+}

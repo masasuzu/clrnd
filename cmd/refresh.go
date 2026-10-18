@@ -73,5 +73,5 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 	}
 
 	refreshApply.Prompt = fmt.Sprintf("Roll out a new revision %s-%s?", service, suffix)
-	return applyPlan(cmd, client, plan, refreshApply)
+	return applyPlan(cmd, plan, refreshApply)
 }

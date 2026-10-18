@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -50,7 +51,9 @@ func runWait(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	return waitForRollout(cmd, client, service, cloudrun.WaitOptions{
+	return waitForRollout(cmd, service, func(ctx context.Context, opts cloudrun.WaitOptions) (*cloudrun.Status, error) {
+		return client.Wait(ctx, service, opts)
+	}, cloudrun.WaitOptions{
 		Timeout:  waitTimeout,
 		Interval: waitInterval,
 	})
@@ -73,20 +76,21 @@ func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, service string
 	})
 }
 
-// waitForRollout waits until the service settles, printing progress to stderr whenever the state
-// changes. It is shared by wait (waits on the current state) and applyPlan (waits for the rollout of
-// the generation it applied). On success it prints nothing (following the convention that stdout
-// is data-only).
-func waitForRollout(cmd *cobra.Command, client *cloudrun.Client, service string, opts cloudrun.WaitOptions) error {
+// waitForRollout runs wait (Client.Wait, or DeployPlan.Wait for whatever kind the plan applies),
+// printing progress to stderr whenever the state changes. It is shared by wait (waits on the current
+// state) and applyPlan (waits for the rollout of the generation it applied). On success it prints
+// nothing (following the convention that stdout is data-only).
+func waitForRollout(cmd *cobra.Command, name string,
+	wait func(context.Context, cloudrun.WaitOptions) (*cloudrun.Status, error), opts cloudrun.WaitOptions) error {
 	out := cmd.ErrOrStderr()
 	opts.OnUpdate = func(message string) {
-		fmt.Fprintf(out, "waiting for %s: %s\n", service, message)
+		fmt.Fprintf(out, "waiting for %s: %s\n", name, message)
 	}
 	// A failed read does not stop the wait, but retrying silently would look like being "stuck",
 	// so say so.
 	opts.OnRetry = func(err error) {
-		fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", service, err)
+		fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", name, err)
 	}
-	_, err := client.Wait(cmd.Context(), service, opts)
+	_, err := wait(cmd.Context(), opts)
 	return err
 }

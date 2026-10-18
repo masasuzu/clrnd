@@ -67,7 +67,7 @@ func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) 
 
 // applyPlan prints the diff to stdout, confirms when needed, applies, and waits for the rollout.
 // Status and prompts go to stderr; stdout is for data (the diff) only.
-func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.DeployPlan, o applyOptions) error {
+func applyPlan(cmd *cobra.Command, plan *cloudrun.DeployPlan, o applyOptions) error {
 	ctx := cmd.Context()
 
 	// With no diff there is nothing to apply. --dry-run still goes ahead, for server-side
@@ -86,7 +86,7 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 		// letting this case through would report a broken service as a success (defeating the
 		// point of adding the wait).
 		// No Generation is given: only "is it Ready now", whatever the generation.
-		return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
+		return waitForRollout(cmd, plan.Name, plan.Wait, cloudrun.WaitOptions{
 			Timeout:  o.Timeout,
 			Interval: o.Interval,
 		})
@@ -104,7 +104,7 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 		}
 	}
 
-	applied, err := plan.Apply(ctx, o.DryRun)
+	generation, err := plan.Apply(ctx, o.DryRun)
 	if err != nil {
 		return err
 	}
@@ -112,9 +112,9 @@ func applyPlan(cmd *cobra.Command, client *cloudrun.Client, plan *cloudrun.Deplo
 	if o.DryRun || o.NoWait {
 		return nil
 	}
-	return waitForRollout(cmd, client, plan.Service, cloudrun.WaitOptions{
+	return waitForRollout(cmd, plan.Name, plan.Wait, cloudrun.WaitOptions{
 		Timeout:    o.Timeout,
 		Interval:   o.Interval,
-		Generation: cloudrun.AppliedGeneration(applied),
+		Generation: generation,
 	})
 }

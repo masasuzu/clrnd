@@ -151,18 +151,18 @@ spec:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Validate([]byte(tt.manifest), tt.service)
+			err := Validate(KindService, []byte(tt.manifest), tt.service)
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("Validate() = %v, want nil", err)
+					t.Fatalf("Validate(KindService, ) = %v, want nil", err)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatalf("Validate() = nil, want error containing %q", tt.wantErr)
+				t.Fatalf("Validate(KindService, ) = nil, want error containing %q", tt.wantErr)
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Validate() = %q, want it to contain %q", err.Error(), tt.wantErr)
+				t.Fatalf("Validate(KindService, ) = %q, want it to contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
@@ -177,9 +177,9 @@ spec:
       containers:
       - {}
 `
-	err := Validate([]byte(manifest), "my-svc")
+	err := Validate(KindService, []byte(manifest), "my-svc")
 	if err == nil {
-		t.Fatal("Validate() = nil, want aggregated errors")
+		t.Fatal("Validate(KindService, ) = nil, want aggregated errors")
 	}
 	for _, want := range []string{"apiVersion must be", "kind must be", "image is required"} {
 		if !strings.Contains(err.Error(), want) {
@@ -232,7 +232,7 @@ func compareManifest(current *run.Service, manifest []byte, currentName, desired
 	if err != nil {
 		return "", err
 	}
-	return compareServices(current, desired, currentName, desiredName)
+	return serviceKind.compareObjects(current, desired, currentName, desiredName)
 }
 
 // normalize is, for tests, the step that "brings the local manifest to the same normalization as
@@ -653,7 +653,7 @@ func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanService() error = %v", err)
 	}
-	if got := plan.desired.Metadata.ResourceVersion; got != "v1" {
+	if got := plan.desired.(*run.Service).Metadata.ResourceVersion; got != "v1" {
 		t.Errorf("resourceVersion = %q, want the version the caller read (%q)", got, "v1")
 	}
 }
@@ -677,7 +677,7 @@ func TestPlanServiceStampsTheResourceVersionWhenThereIsNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanService() error = %v", err)
 	}
-	if got := plan.desired.Metadata.ResourceVersion; got != "from-server" {
+	if got := plan.desired.(*run.Service).Metadata.ResourceVersion; got != "from-server" {
 		t.Errorf("resourceVersion = %q, want the one read from the API", got)
 	}
 }

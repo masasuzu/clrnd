@@ -60,9 +60,9 @@ func TestParseImageOverride(t *testing.T) {
 // TestApplyImageOverridesSingleContainer checks that the name can be omitted when there is only
 // one container.
 func TestApplyImageOverridesSingleContainer(t *testing.T) {
-	got, err := ApplyImageOverrides([]byte(validManifest), []string{"gcr.io/p/app:v2"})
+	got, err := ApplyImageOverrides(KindService, []byte(validManifest), []string{"gcr.io/p/app:v2"})
 	if err != nil {
-		t.Fatalf("ApplyImageOverrides() error = %v", err)
+		t.Fatalf("ApplyImageOverrides(KindService, ) error = %v", err)
 	}
 	svc, err := parseManifest(got)
 	if err != nil {
@@ -82,9 +82,9 @@ func TestApplyImageOverridesSingleContainer(t *testing.T) {
 // refused when there is more than one container. Silently rewriting the first one replaces the
 // wrong container in a service that has sidecars.
 func TestApplyImageOverridesNeedsANameWithSidecars(t *testing.T) {
-	_, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"gcr.io/p/app:v2"})
+	_, err := ApplyImageOverrides(KindService, []byte(twoContainerManifest), []string{"gcr.io/p/app:v2"})
 	if err == nil {
-		t.Fatal("ApplyImageOverrides() error = nil, want it to refuse an ambiguous override")
+		t.Fatal("ApplyImageOverrides(KindService, ) error = nil, want it to refuse an ambiguous override")
 	}
 	for _, want := range []string{"2 containers", "app", "proxy"} {
 		if !strings.Contains(err.Error(), want) {
@@ -95,9 +95,9 @@ func TestApplyImageOverridesNeedsANameWithSidecars(t *testing.T) {
 
 // TestApplyImageOverridesByName checks that naming a container changes only that container.
 func TestApplyImageOverridesByName(t *testing.T) {
-	got, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"proxy=gcr.io/p/proxy:v2"})
+	got, err := ApplyImageOverrides(KindService, []byte(twoContainerManifest), []string{"proxy=gcr.io/p/proxy:v2"})
 	if err != nil {
-		t.Fatalf("ApplyImageOverrides() error = %v", err)
+		t.Fatalf("ApplyImageOverrides(KindService, ) error = %v", err)
 	}
 	svc, err := parseManifest(got)
 	if err != nil {
@@ -119,21 +119,21 @@ func TestApplyImageOverridesByName(t *testing.T) {
 // exist is rejected. Letting it through means the deploy proceeds with "specified, yet not taking
 // effect".
 func TestApplyImageOverridesRejectsAnUnknownContainer(t *testing.T) {
-	_, err := ApplyImageOverrides([]byte(twoContainerManifest), []string{"sidecar=gcr.io/p/x:v2"})
+	_, err := ApplyImageOverrides(KindService, []byte(twoContainerManifest), []string{"sidecar=gcr.io/p/x:v2"})
 	if err == nil || !strings.Contains(err.Error(), "does not define") {
-		t.Errorf("ApplyImageOverrides() error = %v, want an unknown container to be rejected", err)
+		t.Errorf("ApplyImageOverrides(KindService, ) error = %v, want an unknown container to be rejected", err)
 	}
 }
 
 // TestApplyImageOverridesWithoutSpecsIsAPassthrough checks that, with no overrides given, the
 // manifest is returned as is (not reformatted).
 func TestApplyImageOverridesWithoutSpecsIsAPassthrough(t *testing.T) {
-	got, err := ApplyImageOverrides([]byte(validManifest), nil)
+	got, err := ApplyImageOverrides(KindService, []byte(validManifest), nil)
 	if err != nil {
-		t.Fatalf("ApplyImageOverrides() error = %v", err)
+		t.Fatalf("ApplyImageOverrides(KindService, ) error = %v", err)
 	}
 	if string(got) != validManifest {
-		t.Errorf("ApplyImageOverrides() = %q, want the manifest untouched", got)
+		t.Errorf("ApplyImageOverrides(KindService, ) = %q, want the manifest untouched", got)
 	}
 }
 
@@ -151,9 +151,9 @@ spec:
       containers:
       -
 `
-	_, err := ApplyImageOverrides([]byte(manifest), []string{"gcr.io/p/app:v2"})
+	_, err := ApplyImageOverrides(KindService, []byte(manifest), []string{"gcr.io/p/app:v2"})
 	if err == nil {
-		t.Fatal("ApplyImageOverrides() error = nil, want the null container rejected")
+		t.Fatal("ApplyImageOverrides(KindService, ) error = nil, want the null container rejected")
 	}
 	// Use the same wording as Validate (so the explanation does not change with or without
 	// --image).

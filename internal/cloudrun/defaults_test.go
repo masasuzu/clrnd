@@ -44,7 +44,7 @@ func defaultingAPI(t *testing.T) (*Client, func() []recordedRequest) {
 func TestPlanWithoutResolveDefaultsShowsThem(t *testing.T) {
 	c, _ := defaultingAPI(t)
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest), PlanOptions{})
+	plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest), PlanOptions{})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -59,7 +59,7 @@ func TestPlanWithoutResolveDefaultsShowsThem(t *testing.T) {
 func TestPlanResolvesServerDefaults(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest),
+	plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest),
 		PlanOptions{ResolveDefaults: true})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
@@ -86,7 +86,7 @@ func TestPlanResolvesServerDefaults(t *testing.T) {
 func TestPlanAppliesTheOriginalManifest(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
-	plan, err := c.Plan(context.Background(), "my-svc", []byte(validManifest),
+	plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest),
 		PlanOptions{ResolveDefaults: true})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
@@ -114,7 +114,7 @@ func TestPlanAppliesTheOriginalManifest(t *testing.T) {
 func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 	c, _ := defaultingAPI(t)
 
-	withDefaults, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+	withDefaults, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{ResolveDefaults: true})
 	if err != nil {
 		t.Fatalf("CompareManifest() error = %v", err)
@@ -123,7 +123,7 @@ func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 		t.Errorf("CompareManifest() = %q, want empty once the defaults are resolved", withDefaults)
 	}
 
-	plain, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+	plain, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{})
 	if err != nil {
 		t.Fatalf("CompareManifest() error = %v", err)
@@ -140,7 +140,7 @@ func TestCompareManifestResolvesServerDefaults(t *testing.T) {
 func TestCompareManifestValidatesBeforeTheDryRun(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
-	_, err := c.CompareManifest(context.Background(), "other-svc", []byte(validManifest),
+	_, err := c.CompareManifest(context.Background(), KindService, "other-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{ResolveDefaults: true})
 	if err == nil {
 		t.Fatal("CompareManifest() error = nil, want the name mismatch to be caught locally")
@@ -173,7 +173,7 @@ spec:
       containers:
       - image: gcr.io/project/image:tag
 `)
-	if _, err := c.CompareManifest(context.Background(), "my-svc", manifest,
+	if _, err := c.CompareManifest(context.Background(), KindService, "my-svc", manifest,
 		"manifest.yaml", PlanOptions{ResolveDefaults: true}); err != nil {
 		t.Fatalf("CompareManifest() error = %v", err)
 	}
@@ -207,7 +207,7 @@ func TestCompareManifestTreatsAMissingServiceAsAnAddition(t *testing.T) {
 		return http.StatusNotFound, googleAPIError(404, "not found")
 	})
 
-	got, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+	got, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{ResolveDefaults: true})
 	if err != nil {
 		t.Fatalf("CompareManifest() error = %v, want a missing service to be handled", err)
@@ -226,7 +226,7 @@ func TestCompareManifestTreatsAMissingServiceAsAnAddition(t *testing.T) {
 func TestCompareManifestHandlesAMissingServiceWithoutResolvingDefaults(t *testing.T) {
 	c, _ := newTestClient(t, nil) // the default handler returns 404
 
-	got, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+	got, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{})
 	if err != nil {
 		t.Fatalf("CompareManifest() error = %v", err)
@@ -242,7 +242,7 @@ func TestCompareManifestHandlesAMissingServiceWithoutResolvingDefaults(t *testin
 func TestCompareManifestValidatesWithoutResolvingDefaults(t *testing.T) {
 	c, recorded := defaultingAPI(t)
 
-	_, err := c.CompareManifest(context.Background(), "other-svc", []byte(validManifest),
+	_, err := c.CompareManifest(context.Background(), KindService, "other-svc", []byte(validManifest),
 		"manifest.yaml", PlanOptions{})
 	if err == nil {
 		t.Fatal("CompareManifest() error = nil, want the name mismatch to be caught")
@@ -265,7 +265,7 @@ func TestResolveDefaultsErrorPointsAtTheFlag(t *testing.T) {
 		return http.StatusOK, defaultedService()
 	})
 
-	_, err := c.Plan(context.Background(), "my-svc", []byte(validManifest),
+	_, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest),
 		PlanOptions{ResolveDefaults: true})
 	if err == nil {
 		t.Fatal("Plan() error = nil, want the permission failure to surface")
@@ -297,7 +297,7 @@ func TestResolveDefaultsErrorNamesTheCreatePath(t *testing.T) {
 		return http.StatusOK, defaultedService()
 	})
 
-	_, err := c.CompareManifest(context.Background(), "my-svc", []byte(validManifest),
+	_, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest),
 		"local/manifest.yaml", PlanOptions{ResolveDefaults: true})
 	if err == nil {
 		t.Fatal("CompareManifest() error = nil, want the permission failure to surface")

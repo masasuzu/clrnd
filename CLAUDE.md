@@ -12,6 +12,9 @@ which has no ecspresso counterpart because splitting traffic between revisions i
 model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
+Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy` so far; issue #96 tracks running
+them): the top-level commands stay the services' so existing invocations keep working, and the
+group is spelled the way gcloud spells it (`gcloud run jobs`).
 
 ## Commands
 
@@ -49,11 +52,17 @@ revision-name conflicts, asynchronous rollout failures).
   stdin in a goroutine.
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
   its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
-  `*cobra.Command` var, following the standard cobra layout.
+  `*cobra.Command` var, following the standard cobra layout. The exception is the commands a job
+  shares with a service — `deploy`, `diff`, `verify`: they are built by `newDeployCmd(target)` and
+  friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
+  [cmd/jobs.go](cmd/jobs.go)), with their flags in a per-command options struct instead of package
+  vars. A `target` ([cmd/target.go](cmd/target.go)) carries the `cloudrun.Kind`, the noun used in
+  help and messages, and how the name is resolved; anything only a service has (`--no-traffic`, the
+  pinned-revision warning) is gated on `target.isService()`.
 - Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional and
-  `resolveService`/`resolveManifest` fill them from the config file when absent (positional →
+  `resolveService` (or `resolveJob`)/`resolveManifest` fill them from the config file when absent (positional →
   config); args fill service first, then manifest. Only the commands that take **both** a
-  service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy`.
+  service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy` (and their `jobs` forms).
   Every other command uses `MaximumNArgs(1)`: `init`, `status`,
   `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
   only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
@@ -144,18 +153,40 @@ revision-name conflicts, asynchronous rollout failures).
   credential discovery. `deploy` therefore calls `cloudrun.Validate` itself before building the
   client, even though `Plan` validates again (the check is pure and cheap); otherwise a manifest
   problem hides behind "project is required" or "could not find default credentials".
+- **Every manifest-driven flow is written once, against `Kind`** ([internal/cloudrun/kind.go](internal/cloudrun/kind.go)).
+  `KindService` and `KindJob` are the values; each is a generic `kindOf[T]` (`serviceKind` in
+  `cloudrun.go`, `jobKind` in [job.go](internal/cloudrun/job.go)) that supplies only what differs —
+  the API calls, the manifest's `apiVersion`, `meta`/`workload`/`status` accessors, and hooks:
+  `prepare` (rewrites desired before diff and apply; the service uses it for `--no-traffic`, the job
+  refuses `KeepTraffic`) and `align` (the comparison-only `alignRevisionName`). The exported entry
+  points take the kind: `Validate`, `CheckSyntax`, `ApplyImageOverrides`, `VerifyRemote`,
+  `Client.Plan`, `Client.CompareManifest`. `Kind`'s methods are unexported so nothing outside the
+  package can add one. A worker pool would be another `kindOf` (its v1 API shares the Service's
+  `RevisionTemplate`). Jobs were confirmed against the real API before being put on this path: the
+  same CAS semantics, a dry run that returns the defaults, and `observedGeneration`/`Ready` that
+  settle the same way.
+- `kindOf.parse` checks the manifest's `kind` **before** the strict parse (`checkManifestKind`):
+  a job manifest parsed strictly as a service fails on the first job-only field, and that error
+  points at a field instead of at `clrnd jobs`. Only kinds in `kindHints` get the redirect; an
+  unknown kind falls through to `validate`'s "kind must be".
 - Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
-  `Client.PlanService` (`Get` the live service, compute the `Diff` of live vs desired; `Create` when
-  404 via `isNotFound`/`googleapi.Error`). Commands that edit the live definition rather than a
-  manifest — `rollback`, and `refresh` — go straight to `PlanService`. `PlanService` also copies the
-  `resourceVersion` of the service it just fetched onto `desired` (`setResourceVersion`), so **every
+  `kindOf.planObject` (`Get` the live object, compute the `Diff` of live vs desired; `Create` when
+  404 via `isNotFound`/`googleapi.Error`). `Client.PlanService` is `planObject` for services, the
+  entry for commands that edit the live definition rather than a manifest — `rollback`, `traffic`
+  and `refresh`. `planObject` also copies the
+  `resourceVersion` of the object it just fetched onto `desired` (`setResourceVersion`), so **every
   write is a compare-and-swap against the exact state the diff was computed from**. Verified against
-  the real API: a write with no `resourceVersion` is accepted as an unconditional overwrite (so two
+  the real API, for services and jobs alike: a write with no `resourceVersion` is accepted as an
+  unconditional overwrite (so two
   concurrent deploys silently lose one of the changes), a stale-but-well-formed one gets a `409`,
   and a malformed one gets a `400` — which is why nothing may ever be invented for the field.
   `Apply` translates that 409 (`isConflict`) into "changed after the diff was computed; re-run",
-  keeping the API message. `DeployPlan.Apply`
-  (the actual `Create`/`ReplaceService`). The print → confirm → apply → wait sequence itself lives
+  keeping the API message. A job adds `conflictHint`: **running a job changes its
+  `resourceVersion`** (when the execution starts and again when it ends), so a run between diff and
+  apply produces the same 409 with nobody having edited the job. `DeployPlan.Apply`
+  (the actual create/replace) returns the generation it applied, and `DeployPlan.Wait` waits on
+  whatever kind the plan holds; `DeployPlan.desired` is `any`, asserted back to the kind's type in
+  `kindOf.apply`. The print → confirm → apply → wait sequence itself lives
   in `applyPlan` ([cmd/apply.go](cmd/apply.go)), shared by every mutating command; `cmd/deploy.go`
   only builds the plan and hands it over. `applyPlan` prints `plan.Diff` (stdout), then `confirm`s
   on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
@@ -179,8 +210,10 @@ revision-name conflicts, asynchronous rollout failures).
   omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
   an explicit missing `--config` IS an error — except for `init`, which *writes* the config: it
   carries `Annotations[annotationConfigOptional]`, so `loadConfig` reads an explicit `--config`
-  only when it already exists). Config holds `project`, `region`, `service`,
-  `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
+  only when it already exists). Config holds `project`, `region`, **one of** `service`
+  and `job` (`config.Load` refuses more than one; `resolveService` refuses a config that names only
+  a job, and `resolveJob` the reverse, so a command of one kind never acts on a same-named resource
+  of the other), `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
   replaces the config list, otherwise the config list is used. Relative paths from the config
   (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
   `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
@@ -195,13 +228,16 @@ revision-name conflicts, asynchronous rollout failures).
   asserts against). `run.googleapis.com/client-name` / `client-version` are treated as
   server-managed on purpose: they record which tool last wrote, not configuration, so keeping them
   would bake "gcloud" into a manifest `init` produced.
+  The lists are shared by every kind: a job records its writer as `run.googleapis.com/creator` /
+  `lastModifier` and carries a `run.googleapis.com/lastUpdatedTime` **label** — a timestamp that
+  differs between the live job and the dry run, so leaving it in makes every job diff non-empty.
   `ToManifest` applies it to a fetched service. YAML is produced with `sigs.k8s.io/yaml`
   (JSON tags → YAML), which sorts keys alphabetically.
 - `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
-  **`compareServices` is the single comparison path**: it aligns the desired definition with the
-  live service, normalizes both through `ToManifest`, and diffs them (a nil `current` means the
-  service does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
-  `diff`) and `Client.PlanService` (used by `deploy`, `rollback`, `refresh`) both go through it, so
+  **`kindOf.compareObjects` is the single comparison path**: it aligns the live definition with the
+  desired one, normalizes both through `toManifest`, and diffs them (a zero `current` means the
+  resource does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
+  `diff`) and `planObject` (used by `deploy`, `rollback`, `refresh`) both go through it, so
   the commands can never drift apart. Both also run the same pre-processing before anything is sent
   — `setNamespace` puts the target project on the body — because while server defaults are being
   resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
@@ -234,7 +270,7 @@ revision-name conflicts, asynchronous rollout failures).
   configuration: doing so fails with a 409, sometimes only when the rollout runs. clrnd therefore
   does not manage revision names: `WithoutRevisionName` (pure — it shallow-copies the
   Spec/Template/Metadata chain rather than mutating its argument) removes the field from what
-  `init` scaffolds, and `alignRevisionName` (called from `compareServices`) drops the live value
+  `init` scaffolds, and `alignRevisionName` (the service kind's `align`, called from `compareObjects`) drops the live value
   from the comparison
   **when the local manifest does not pin one** — without that, every manifest without a revision
   name would show a permanent diff. When the manifest *does* pin a name it is kept on both sides
@@ -250,10 +286,11 @@ revision-name conflicts, asynchronous rollout failures).
 - What a manifest *runs* — containers, volumes, the service account and the template annotations —
   is read through `workload` ([internal/cloudrun/workload.go](internal/cloudrun/workload.go)),
   never by walking `spec.template.spec` directly. `VerifyRemote`'s checks, `--image` and the
-  container rules in `validate` all take a `workload`, and `serviceWorkload` is the only place
-  that knows where a Service keeps it. This is groundwork for Cloud Run jobs (#96), which keep the
-  same fields one template deeper: supporting one means writing its extractor, not forking every
-  check. `workload.Path` is that location, so error messages name the field a user actually wrote.
+  container rules in `validate` all take a `workload`, and each kind's extractor (`serviceWorkload`,
+  `jobWorkload`) is the only place that knows where that kind keeps it. A job keeps the containers
+  one template deeper (`spec.template.spec.template.spec`, the task) while the annotations Cloud Run
+  reads stay on the execution template's metadata. `workload.Path` is that location, so error
+  messages name the field a user actually wrote.
 - `VerifyRemote` (in [internal/cloudrun/verify.go](internal/cloudrun/verify.go)) complements
   `Validate` with API existence checks, aligning `verify`'s semantics with ecspresso. It confirms
   the manifest's service account (IAM `projects.serviceAccounts.get`) and the Secret Manager secrets
@@ -388,11 +425,14 @@ revision-name conflicts, asynchronous rollout failures).
   `waitProgress` deliberately withholds the `Ready` value until `observedGeneration` reaches the
   awaited generation — the condition visible before then belongs to the *previous* generation and
   reads as "already finished".
-  `DeployPlan.Apply` returns the applied `*run.Service` so `deploy` can wait for exactly the
-  generation it just applied (`AppliedGeneration`). **`deploy` waits by default** and fails when the
+  `DeployPlan.Apply` returns the generation it applied so `deploy` can wait for exactly that
+  generation. **`deploy` waits by default** and fails when the
   rollout fails — without that, a broken revision still exited 0 and CI treated it as success.
-  `--no-wait` restores the old behaviour. `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the
-  shared entry point that prints progress to stderr.
+  `--no-wait` restores the old behaviour. The polling loop itself is `waitReady`, which takes a
+  `fetch` function and a `subject` (`service "x"`, `job "x"`) for its messages; `Client.Wait` and
+  `DeployPlan.Wait` are thin wrappers, and a job's state is read through `newJobStatus` (generations
+  and conditions only). `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the shared entry point
+  that prints progress to stderr, given whichever wait function applies.
 - `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
   is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`

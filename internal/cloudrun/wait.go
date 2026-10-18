@@ -48,6 +48,21 @@ type WaitOptions struct {
 // The returned *Status is the last observed state, and it is returned on error as well (if one
 // was fetched).
 func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*Status, error) {
+	return waitReady(ctx, subject(serviceKind.noun, service), func(ctx context.Context) (*Status, error) {
+		return c.Status(ctx, service)
+	}, opts)
+}
+
+// subject is how wait messages name what they wait for, e.g. `service "my-svc"`.
+func subject(noun, name string) string {
+	return fmt.Sprintf("%s %q", noun, name)
+}
+
+// waitReady is the polling loop behind Wait, shared by every kind that settles through a Ready
+// condition and observedGeneration. fetch reads the current state; subject names what is being
+// waited for in the messages.
+func waitReady(ctx context.Context, subject string, fetch func(context.Context) (*Status, error),
+	opts WaitOptions) (*Status, error) {
 	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -60,7 +75,7 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 	// prevent.
 	var lastErr error
 	for {
-		status, err := c.Status(waitCtx, service)
+		status, err := fetch(waitCtx)
 		switch {
 		case err == nil:
 			lastErr = nil
@@ -72,17 +87,17 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 					opts.OnUpdate(progress)
 				}
 			}
-			if done, doneErr := waitDone(status, service, opts.Generation); done {
+			if done, doneErr := waitDone(status, subject, opts.Generation); done {
 				return status, doneErr
 			}
 
 		case waitCtx.Err() != nil:
 			// A cancel/deadline during the wait is returned as the outcome of the wait, not as an
 			// API error.
-			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
+			return last, waitInterrupted(ctx, waitCtx, subject, last, timeout, opts.Generation, lastErr)
 
 		case !isRetryable(err):
-			// A failure that waiting will not fix. A service that does not exist (404) will not
+			// A failure that waiting will not fix. A resource that does not exist (404) will not
 			// appear, and a bad request (400) or missing authentication/permission (401/403) does
 			// not change with time either.
 			return last, err
@@ -97,7 +112,7 @@ func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*S
 
 		select {
 		case <-waitCtx.Done():
-			return last, waitInterrupted(ctx, waitCtx, service, last, timeout, opts.Generation, lastErr)
+			return last, waitInterrupted(ctx, waitCtx, subject, last, timeout, opts.Generation, lastErr)
 		case <-time.After(interval):
 		}
 
@@ -200,7 +215,7 @@ func nextWaitInterval(interval time.Duration) time.Duration {
 //
 // As the Cloud Run documentation describes, until observedGeneration catches up to the target
 // generation the conditions belong to the previous generation, so no judgement is made.
-func waitDone(s *Status, service string, generation int64) (bool, error) {
+func waitDone(s *Status, subject string, generation int64) (bool, error) {
 	if s.ObservedGeneration < generation {
 		return false, nil
 	}
@@ -212,7 +227,7 @@ func waitDone(s *Status, service string, generation int64) (bool, error) {
 	case conditionTrue:
 		return true, nil
 	case conditionFalse:
-		return true, fmt.Errorf("service %q failed to become ready: %s", service, conditionDetail(ready))
+		return true, fmt.Errorf("%s failed to become ready: %s", subject, conditionDetail(ready))
 	}
 	// Unknown: not converged yet.
 	return false, nil
@@ -220,21 +235,21 @@ func waitDone(s *Status, service string, generation int64) (bool, error) {
 
 // waitInterrupted builds the reason the wait was cut short. If the caller's ctx was cancelled it
 // is an interruption (Ctrl-C and the like); otherwise it is a timeout.
-func waitInterrupted(parent, waitCtx context.Context, service string, last *Status,
+func waitInterrupted(parent, waitCtx context.Context, subject string, last *Status,
 	timeout time.Duration, generation int64, lastErr error) error {
 	if parent.Err() != nil {
-		return fmt.Errorf("interrupted while waiting for service %q: %w", service, parent.Err())
+		return fmt.Errorf("interrupted while waiting for %s: %w", subject, parent.Err())
 	}
 	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
 		// If the last fetch was still failing, do not hide its cause.
 		if lastErr != nil {
-			return fmt.Errorf("timed out after %s waiting for service %q; the last poll failed: %w",
-				timeout, service, lastErr)
+			return fmt.Errorf("timed out after %s waiting for %s; the last poll failed: %w",
+				timeout, subject, lastErr)
 		}
-		return fmt.Errorf("timed out after %s waiting for service %q to become ready (last seen: %s)",
-			timeout, service, waitProgress(last, generation))
+		return fmt.Errorf("timed out after %s waiting for %s to become ready (last seen: %s)",
+			timeout, subject, waitProgress(last, generation))
 	}
-	return fmt.Errorf("stopped waiting for service %q: %w", service, waitCtx.Err())
+	return fmt.Errorf("stopped waiting for %s: %w", subject, waitCtx.Err())
 }
 
 // waitProgress returns a one-line representation of the state, used for progress display and for
