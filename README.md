@@ -3,8 +3,8 @@
 `clrnd` is a command-line tool for deploying services to [Google Cloud Run](https://cloud.google.com/run).
 It takes a service name and a manifest file as arguments and provides the subcommands
 `verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`,
-`delete`, and `refresh`. Cloud Run jobs are deployed the same way through `clrnd jobs` (see
-[jobs](#jobs)).
+`delete`, and `refresh`. Cloud Run jobs are deployed the same way, and run, through `clrnd jobs`
+(see [jobs](#jobs)).
 
 ## Installation
 
@@ -110,6 +110,7 @@ gcloud auth application-default login
 | `jobs verify` | the same as `verify` |
 | `jobs diff` | `run.jobs.get` **and `run.jobs.update`** — plus `run.jobs.create` for a job that does not exist yet, for the same reason as `diff` |
 | `jobs deploy` | `run.jobs.get`, `run.jobs.update`, and `run.jobs.create` for a job that does not exist yet |
+| `jobs run` | `run.jobs.run` — `run.jobs.runWithOverrides` instead when `--args` / `--env` / `--task-count` / `--task-timeout` is given — plus `run.executions.get` for the wait |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -348,9 +349,10 @@ express. These live next to it and are deliberately out of scope:
   capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
   silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
   or Terraform.
-- **Running Cloud Run jobs.** `clrnd jobs` deploys, diffs and verifies a job definition, but does
-  not run it, wait for an execution, show a job's status or delete one yet. Use
-  `gcloud run jobs execute` / `describe` / `delete` for those.
+- **The rest of a Cloud Run job's lifecycle.** `clrnd jobs` deploys, diffs, verifies and runs a
+  job, but does not yet show its status, list or cancel its executions, delete it, or scaffold a
+  manifest from it. Use `gcloud run jobs describe` / `executions list` / `executions cancel` /
+  `delete` for those.
 - **Cloud Run worker pools.** A `kind: WorkerPool` manifest is refused with a message saying so.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
@@ -383,7 +385,7 @@ clrnd [command]
 | `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
-| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`. |
+| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -1002,6 +1004,41 @@ What differs from a service:
 
 Each kind's commands refuse the other's manifest before contacting the API and say where it
 belongs (`kind is "Job", but this command takes a Service: ... use the 'clrnd jobs' commands`).
+
+#### Running a job
+
+`clrnd jobs run` (or `clrnd jobs execute`, gcloud's name for it) starts an execution and waits until
+it finishes. It fails when the execution fails or is cancelled, so a CI step that runs a migration
+fails with it. The execution's name goes to stdout as soon as it is created, and progress goes to
+stderr:
+
+```sh
+clrnd jobs deploy my-job job.yaml --auto-approve
+clrnd jobs run my-job                              # waits; exit 1 if the execution fails
+EXEC=$(clrnd jobs run my-job --no-wait)            # just start it
+clrnd jobs run my-job --args migrate --args --up --env DRY_RUN=1 --task-count 1
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--args` | An argument for the container, replacing the job's arguments. Repeatable, one argument each. |
+| `--env` | `NAME=VALUE` set for this execution only. Repeatable. |
+| `--container` | The container `--args` / `--env` apply to; needed only when the job has more than one. |
+| `--task-count` | Number of tasks for this execution (default: the job's own). |
+| `--task-timeout` | How long each task may run, in whole seconds (default: the job's own). |
+| `--no-wait` | Return as soon as the execution is created. |
+| `--timeout` | Give up waiting after this long. **No limit by default.** |
+| `--interval` | Initial polling interval (default `2s`, backing off up to `15s`). |
+
+The overrides apply to that one execution; the job's definition is unchanged, and running with any
+of them needs `run.jobs.runWithOverrides` rather than `run.jobs.run`.
+
+The wait has no time limit by default because the job already bounds itself (its task timeout and
+retries), and giving up on the CLI side would not stop anything: it would only turn an execution
+that later succeeds into a failed CI step. For the same reason, **stopping the wait — Ctrl-C, or
+`--timeout` — never cancels the execution.** The error says it is still running and prints the
+`gcloud run jobs executions cancel` command that stops it. There is no confirmation prompt, as with
+gcloud and ecspresso: running a job changes no definition.
 
 ## Exit codes
 
