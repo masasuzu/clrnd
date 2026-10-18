@@ -12,8 +12,8 @@ which has no ecspresso counterpart because splitting traffic between revisions i
 model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
-Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy` so far; issue #96 tracks running
-them): the top-level commands stay the services' so existing invocations keep working, and the
+Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, and `run` with its alias
+`execute`, gcloud's name for it): the top-level commands stay the services' so existing invocations keep working, and the
 group is spelled the way gcloud spells it (`gcloud run jobs`).
 
 ## Commands
@@ -433,6 +433,19 @@ revision-name conflicts, asynchronous rollout failures).
   `DeployPlan.Wait` are thin wrappers, and a job's state is read through `newJobStatus` (generations
   and conditions only). `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the shared entry point
   that prints progress to stderr, given whichever wait function applies.
+- `jobs run` ([cmd/jobs_run.go](cmd/jobs_run.go), [internal/cloudrun/execution.go](internal/cloudrun/execution.go))
+  calls `Client.RunJob` and then `Client.WaitExecution`, which polls the **Execution**, not the job
+  (a job stays `Ready=True` throughout a run). `executionDone` decides on the `Completed`
+  condition's **status only**: confirmed against the real API, a cancel goes Unknown/`Cancelling`
+  → Unknown with no reason → False/`Cancelled`, so the reason is not reliable mid-change. It differs
+  from `Wait` on purpose: a zero `Timeout` means **no limit** (an execution is bounded
+  by its own task timeout and retries, and a CLI-side default would only fail CI for a job that
+  goes on to succeed), and stopping the wait never cancels the execution — every interrupted /
+  timed-out message says it keeps running and prints the `gcloud run jobs executions cancel`
+  command. The same transient-error rules (`isRetryable`) apply. `RunOptions.overrides` returns nil
+  when nothing is overridden, so a plain run needs only `run.jobs.run`; any override needs
+  `run.jobs.runWithOverrides`. Overrides are validated (`RunOptions.Validate`, plus the explicit-0
+  checks in `cmd`, since 0 internally means "the job's own") before the client is built.
 - `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
   is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
@@ -511,7 +524,9 @@ revision-name conflicts, asynchronous rollout failures).
   Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`
   print the diff (or, for `delete`, what is about to go) to stdout as data and their status/prompt
   lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout stays data-only. This
-  is intentional, not a violation.
+  is intentional, not a violation. `jobs run` is not one of them: it prints the execution's name
+  on stdout (data a script captures) and has **no prompt** — running a job changes no definition,
+  and neither gcloud nor ecspresso asks — so it needs no `--auto-approve` in CI.
 - When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
   register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
