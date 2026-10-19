@@ -70,7 +70,8 @@ var serviceKind = &kindOf[*run.Service]{
 		}
 		return keepTraffic(desired, current, name)
 	},
-	align: alignRevisionName,
+	template: serviceTemplate,
+	align:    alignRevisionName,
 	// Keeping the live revision name makes the second deploy that changes the template fail with
 	// "a revision with the same name and a different configuration cannot be created". The
 	// scaffold drops it and leaves naming to Cloud Run's automatic numbering.
@@ -248,40 +249,36 @@ func toManifest(obj any) ([]byte, error) {
 	return manifest, nil
 }
 
-// templateSpec extracts a service definition's spec.template.spec (RevisionSpec) nil-safely.
-// Shared by everything that looks under the template: containers, service account, volumes and
-// so on.
-func templateSpec(svc *run.Service) *run.RevisionSpec {
-	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
+// serviceTemplate returns a service's spec.template nil-safely.
+func serviceTemplate(svc *run.Service) *run.RevisionTemplate {
+	if svc == nil || svc.Spec == nil {
 		return nil
 	}
-	return svc.Spec.Template.Spec
+	return svc.Spec.Template
 }
 
-// templateMeta extracts a service definition's spec.template.metadata nil-safely.
-func templateMeta(svc *run.Service) *run.ObjectMeta {
-	if svc == nil || svc.Spec == nil || svc.Spec.Template == nil {
-		return nil
+// withServiceTemplate returns a copy of svc holding t as its spec.template. It does not modify svc:
+// only the service and its spec are copied.
+func withServiceTemplate(svc *run.Service, t *run.RevisionTemplate) *run.Service {
+	out := *svc
+	spec := run.ServiceSpec{}
+	if svc.Spec != nil {
+		spec = *svc.Spec
 	}
-	return svc.Spec.Template.Metadata
+	spec.Template = t
+	out.Spec = &spec
+	return &out
 }
 
-// revisionName extracts spec.template.metadata.name (the revision name) nil-safely.
+// revisionName extracts a service's spec.template.metadata.name (the revision name) nil-safely.
 func revisionName(svc *run.Service) string {
-	meta := templateMeta(svc)
-	if meta == nil {
-		return ""
-	}
-	return meta.Name
+	return revisionNameOf(serviceTemplate(svc))
 }
 
-// RevisionName returns the revision name the manifest pins. The empty string if none is given.
-func RevisionName(manifest []byte) (string, error) {
-	svc, err := parseManifest(manifest)
-	if err != nil {
-		return "", err
-	}
-	return revisionName(svc), nil
+// RevisionName returns the revision name a manifest of the given kind pins: "" when it pins none,
+// and always "" for a kind without revisions (a job).
+func RevisionName(kind Kind, manifest []byte) (string, error) {
+	return kind.revisionName(manifest)
 }
 
 // WithoutRevisionName returns the service with spec.template.metadata.name (the revision name)
@@ -292,20 +289,7 @@ func RevisionName(manifest []byte) (string, error) {
 // set explicitly, a revision with the same name and a different configuration cannot be created.
 // Left as is in a manifest built from live, the second and later deploys that change the template
 // would fail, so it is dropped from the manifest init scaffolds.
-func WithoutRevisionName(svc *run.Service) *run.Service {
-	if revisionName(svc) == "" {
-		return svc
-	}
-	meta := *svc.Spec.Template.Metadata
-	meta.Name = ""
-	tmpl := *svc.Spec.Template
-	tmpl.Metadata = &meta
-	spec := *svc.Spec
-	spec.Template = &tmpl
-	out := *svc
-	out.Spec = &spec
-	return &out
-}
+var WithoutRevisionName = withoutRevisionNameOf(serviceTemplate, withServiceTemplate)
 
 // alignRevisionName, when desired does not specify a revision name, returns the current used for
 // the comparison with its revision name dropped. It does not modify its arguments.
@@ -316,12 +300,7 @@ func WithoutRevisionName(svc *run.Service) *run.Service {
 // a server-managed field is correct. Otherwise a manifest that does not write a revision name would
 // keep showing a diff that never goes away against a service one of those tools last wrote.
 // When the local side sets one explicitly, it is kept on both sides and shown as a diff.
-func alignRevisionName(current, desired *run.Service) *run.Service {
-	if current == nil || revisionName(desired) != "" {
-		return current
-	}
-	return WithoutRevisionName(current)
-}
+var alignRevisionName = alignRevisionNameOf(serviceTemplate, withServiceTemplate)
 
 // Diff returns the unified diff of current and desired. It returns the empty string when there
 // are no differences.

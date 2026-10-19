@@ -63,19 +63,7 @@ func RefreshTarget(live *run.Service, service, suffix string) (*run.Service, err
 				"or send traffic back to the latest revision first")
 	}
 
-	meta := run.ObjectMeta{}
-	if live.Spec.Template.Metadata != nil {
-		meta = *live.Spec.Template.Metadata
-	}
-	meta.Name = name
-
-	template := *live.Spec.Template
-	template.Metadata = &meta
-	spec := *live.Spec
-	spec.Template = &template
-	out := *live
-	out.Spec = &spec
-	return &out, nil
+	return withServiceTemplate(live, withRevisionName(live.Spec.Template, name)), nil
 }
 
 // servesLatestRevision reports whether traffic goes to the latest revision.

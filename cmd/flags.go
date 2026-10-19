@@ -172,8 +172,8 @@ func resolveTargetOptional(projectFlag, regionFlag string) (project, region stri
 // configuration, so the next deploy that changes the template is certain to fail. verify and
 // deploy print the same warning (so that even a CI job that only runs deploy learns the reason
 // before the opaque API error).
-func warnPinnedRevision(cmd *cobra.Command, manifest []byte) error {
-	warning, err := pinnedRevisionWarning(manifest)
+func warnPinnedRevision(cmd *cobra.Command, kind cloudrun.Kind, manifest []byte) error {
+	warning, err := pinnedRevisionWarning(kind, manifest)
 	if err != nil || warning == "" {
 		return err
 	}
@@ -200,8 +200,8 @@ func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
 // pinnedRevisionWarning returns the warning text itself (an empty string when nothing is pinned).
 // verify's --format json returns warnings in structured form too, so the output destination is
 // not hard-wired here.
-func pinnedRevisionWarning(manifest []byte) (string, error) {
-	revision, err := cloudrun.RevisionName(manifest)
+func pinnedRevisionWarning(kind cloudrun.Kind, manifest []byte) (string, error) {
+	revision, err := cloudrun.RevisionName(kind, manifest)
 	if err != nil {
 		return "", err
 	}

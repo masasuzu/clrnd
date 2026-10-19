@@ -110,12 +110,10 @@ func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) er
 	if err := cloudrun.Validate(t.kind, manifest, name); err != nil {
 		return err
 	}
-	if t.isService() {
-		// Even a CI job that only runs deploy gets an explanation, ahead of time, of the 409 a
-		// pinned revision name causes.
-		if err := warnPinnedRevision(cmd, manifest); err != nil {
-			return err
-		}
+	// Even a CI job that only runs deploy gets an explanation, ahead of time, of the 409 a pinned
+	// revision name causes. A kind without revisions (a job) pins none.
+	if err := warnPinnedRevision(cmd, t.kind, manifest); err != nil {
+		return err
 	}
 	// --no-traffic ignores the manifest's spec.traffic and replaces it with the current split.
 	// Overwriting it silently would mean "I wrote it and it has no effect", so say so when the

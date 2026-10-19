@@ -32,16 +32,7 @@ type workload struct {
 // serviceWorkload extracts a service's workload nil-safely. What the service does not define is
 // left zero. The slices are shared with svc, so a change through Containers changes svc.
 func serviceWorkload(svc *run.Service) workload {
-	w := workload{Path: "spec.template.spec"}
-	if spec := templateSpec(svc); spec != nil {
-		w.Containers = spec.Containers
-		w.Volumes = spec.Volumes
-		w.ServiceAccountName = spec.ServiceAccountName
-	}
-	if meta := templateMeta(svc); meta != nil {
-		w.Annotations = meta.Annotations
-	}
-	return w
+	return templateWorkload("spec.template.spec", serviceTemplate(svc))
 }
 
 // annotation reads a template annotation with surrounding whitespace removed.

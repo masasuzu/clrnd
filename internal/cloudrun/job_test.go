@@ -603,3 +603,15 @@ func TestJobManifestTakesANumericTaskTimeout(t *testing.T) {
 		t.Errorf("Validate(duplicate key) error = %v, want the duplicate reported", err)
 	}
 }
+
+// TestRevisionNameOfAJobIsAlwaysEmpty checks that a kind without revisions pins none, so the
+// pinned-revision warning needs no check of the kind in cmd.
+func TestRevisionNameOfAJobIsAlwaysEmpty(t *testing.T) {
+	got, err := RevisionName(KindJob, []byte(validJobManifest))
+	if err != nil || got != "" {
+		t.Errorf("RevisionName(KindJob) = %q, %v; want empty", got, err)
+	}
+	if _, err := RevisionName(KindJob, []byte("kind: Job\nbogus: 1\n")); err == nil {
+		t.Error("RevisionName(KindJob, invalid) = nil error, want the parse error")
+	}
+}
