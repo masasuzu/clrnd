@@ -1,20 +1,19 @@
 # CLAUDE.md
 
-This file provides shared guidance to Claude Code and OpenAI Codex when working with code in this repository.
+This file provides shared guidance to Claude Code and OpenAI Codex when working with code in this
+repository. It holds what you need before touching the code and cannot get from the file you are
+editing: the rules that cut across files, where things live, and how to extend clrnd. The reasons
+behind a single function are in that function's comment; keep them there, not here, so the two
+copies cannot drift apart.
 
 ## Overview
 
-`clrnd` is a Go CLI for deploying services and jobs to Google Cloud Run. For a service it takes a
-service name and a manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
-`init`, `status`, `wait`, `revisions`, `rollback`, `traffic`, `delete`, and `refresh` subcommands.
-All of them are implemented: the ecspresso-shaped set Cloud Run's model allows, plus `traffic`,
-which has no ecspresso counterpart because splitting traffic between revisions is Cloud Run's own
-model rather than ECS's. (`init` was formerly `load`; `load`
-remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
-(ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
-Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, `status`, `delete`, `init`, `executions list`/`cancel`, and
-`run` with its alias `execute`, gcloud's name for it): the top-level commands stay the services' so existing invocations keep working, and the
-group is spelled the way gcloud spells it (`gcloud run jobs`).
+`clrnd` is a Go CLI that deploys Cloud Run services and jobs from Knative-style YAML manifests.
+For services it offers the subcommand set ecspresso has where Cloud Run's model allows it (ECS-only
+commands such as `register`/`exec`/`scale` are deliberately absent), plus `traffic`, which splits
+traffic between revisions — Cloud Run's own model. Jobs live under `clrnd jobs`, spelled the way
+gcloud spells it (`gcloud run jobs`); the top-level commands stay the services'. Worker pools are
+next (#142); see [Adding a resource kind](#adding-a-resource-kind).
 
 ## Commands
 
@@ -34,718 +33,142 @@ PROJECT=<project-id> ./test/e2e/run.sh
 ./test/e2e/run.sh --cleanup-orphans   # remove services and jobs a killed run left behind
 ```
 
-[test/e2e](test/e2e/) holds a shell-driven end-to-end test that creates and deletes a real Cloud
-Run service and job. The directory has no Go files, so the whole Go toolchain ignores it; it is opt-in and
-refuses to run without an explicitly configured project. Run it by hand when changing anything that
-talks to the Cloud Run API — it is the only check that covers server-side behaviour (defaulting,
-revision-name conflicts, asynchronous rollout failures).
+[test/e2e](test/e2e/) creates and deletes a real service and job. It is the only check of
+server-side behaviour (defaulting, revision-name conflicts, asynchronous rollout failures, what the
+API echoes back), so run it when you change anything that talks to the Cloud Run API, and extend
+it when you add a command that does.
 
-## Architecture
+## Where things live
 
-- Entry point [main.go](main.go) calls `cmd.Execute()` and exits non-zero on error.
-  `Execute` builds a `signal.NotifyContext` (SIGINT/SIGTERM) and calls `ExecuteContext`, so every
-  subcommand must use `cmd.Context()` (never `context.Background()`) to stay interruptible. It also
-  releases the handler once the context is cancelled (`go func() { <-ctx.Done(); stop() }()`) so a
-  second Ctrl-C restores the default kill — without that, `NotifyContext` swallows every later
-  signal and code that ignores the context becomes unkillable. Anything that blocks (a prompt, a
-  poll) must select on `ctx.Done()`; `confirm` in [cmd/flags.go](cmd/flags.go) does this by reading
-  stdin in a goroutine.
-- [cmd/root.go](cmd/root.go) defines the cobra root command and registers every top-level
-  subcommand in its `init()`; the `jobs` commands are registered on `jobsCmd` in
-  [cmd/jobs.go](cmd/jobs.go), and `jobs executions list`/`wait`/`cancel` on `jobsExecutionsCmd`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
-  `*cobra.Command` var, following the standard cobra layout. The exception is the commands a job
-  shares with a service — `deploy`, `diff`, `verify`, `delete`, `init`, `wait`: they are built by
-  `newDeployCmd(target)` and friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
-  [cmd/jobs.go](cmd/jobs.go)), with their flags in a per-command options struct instead of package
-  vars. A `target` ([cmd/target.go](cmd/target.go)) carries the `cloudrun.Kind`, the noun used in
-  help and messages, its config key, and **what the kind has, as fields** — `hasTraffic`
-  (`--no-traffic`), `hasRevisions` (the pinned-revision warning), what deploy waits for, what
-  delete shows and removes, init's aliases, the help texts. Commands read those fields and never
-  ask which kind it is (there is no `isService()`): a worker pool is then one more target that
-  says what it has, not a third branch in every command. `TestTargetsAreComplete` fails when a
-  target leaves a field empty.
-  `jobs status` and `jobs run` are ordinary commands: a job's state and its executions have nothing
-  in common with a service's beyond `Ready`. `jobsCmd` itself has `Args: cobra.NoArgs` and a
-  `RunE` that prints the help — without a Run, cobra never validates a group's arguments, so
-  `clrnd jobs lod` (a typo) printed the help and exited 0.
-- Invocation form is `clrnd <subcommand> [service] [manifest]`. Positional args are optional and
-  `resolveService` (or `resolveJob`)/`resolveManifest` fill them from the config file when absent (positional →
-  config); args fill service first, then manifest. Only the commands that take **both** a
-  service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy` (and their `jobs` forms).
-  The other commands that take a name use `MaximumNArgs(1)`: `init`, `status`,
-  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait`, their `jobs`
-  forms, and `jobs run` (job only), and `render` (**manifest
-  only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
-  `jobs executions wait` and `cancel` take exactly one execution (`ExactArgs(1)`: an execution never
-  comes from the config file), and the groups `jobs` and `jobs executions` take none (`NoArgs`, so a
-  mistyped subcommand is an error rather than the help and exit 0).
-  `render` does not match the service name, so it calls `resolveManifestAt(args, 0)` rather than
-  `resolveManifest`.
-- All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
-  Subcommands in `cmd/` only parse flags and do I/O, then call into this package.
-- `clrnd --version` is served by [cmd/version.go](cmd/version.go): the `version` var is filled by
-  goreleaser's ldflags (`-X github.com/masasuzu/clrnd/cmd.version=...`), falling back to
-  `debug.ReadBuildInfo` (for `go install module@version`) and then `(devel)`.
-- Manifests are rendered as Go `text/template` by [internal/render](internal/render/render.go)
-  BEFORE parsing/validation. `verify`/`render`/`diff`/`deploy` call `renderManifest` (in
-  [cmd/flags.go](cmd/flags.go)) right after `os.ReadFile`. The `render` subcommand prints this
-  rendered output as-is (no parse/normalize), for debugging template output. Template funcs (ecspresso-compatible):
-  `{{ tfstate "addr" }}`, `{{ tfstatef "fmt" args }}`, `{{ env "VAR" ["default"] }}`,
-  `{{ must_env "VAR" }}`, `{{ value | json_escape }}` (escapes the *body* of a JSON string — the
-  surrounding quotes belong to the manifest, which is what makes it usable inside an annotation
-  holding JSON). It escapes for JSON, **not** for YAML, so the documented form wraps the line in a
-  block scalar: inside `'...'` an apostrophe in the value would still break the document, and
-  inside `"..."` YAML would eat the backslashes it just added. HTML escaping is turned off
-  (`SetEscapeHTML(false)`) because `&`/`<`/`>` reaching a reader that does not re-parse the JSON
-  would show up as `\u0026`; invalid UTF-8 is an error rather than `json.Marshal`'s silent
-  replacement with U+FFFD, which would deploy a mangled secret without a word. The `tfstate`/`tfstatef` funcs resolve Terraform state via
-  `fujiwara/tfstate-lookup`; states are declared with the repeatable
-  `--tfstate <location>|<name>=<location>` flag and lazy-loaded (a state is only read when a
-  placeholder references it, so manifests without placeholders need no `--tfstate`). A *named* state
-  follows ecspresso's `func_prefix` model: the `<name>` is used verbatim as the function-name prefix,
-  so `--tfstate net_=<loc>` registers `{{ net_tfstate "addr" }}` / `{{ net_tfstatef "fmt" args }}`
-  (NOT a 2-arg `{{ tfstate "name" "addr" }}` form, which does not exist). `<name>` must be a valid Go
-  identifier prefix (`^[A-Za-z_][A-Za-z0-9_]*$`); this is validated in `render.Render` via
-  `render.IsValidName` (a clean error, not a `template.Funcs` panic) so it covers BOTH the flag and
-  config paths. The flag parser (`parseTfstateSources`) also uses `render.IsValidName` to decide
-  whether `name=` is a name or part of the location.
-  Per-state registration in `render.Render` means referencing an unconfigured prefix is a
-  `text/template` parse error ("function ... not defined"), matching ecspresso. `'` in an address is
-  rewritten to `"` for convenience. `init` takes no manifest, so it is not rendered.
+- [main.go](main.go) → `cmd.Execute`. [cmd/](cmd/) parses flags and does I/O only;
+  [internal/cloudrun](internal/cloudrun/) holds every API call and all manifest handling.
+- Commands: one file per command in [cmd/](cmd/), registered on `rootCmd` ([cmd/root.go](cmd/root.go)),
+  `jobsCmd` ([cmd/jobs.go](cmd/jobs.go)) or `jobsExecutionsCmd`. The commands both kinds have —
+  `verify`, `diff`, `deploy`, `delete`, `init`, `wait` — are built once per `target`
+  ([cmd/target.go](cmd/target.go)) by `newXCmd(t)` factories.
+- Shared cmd pieces: the apply flow and confirmation ([cmd/apply.go](cmd/apply.go)), target and
+  format flags and resolution ([cmd/flags.go](cmd/flags.go)), file writing
+  ([cmd/write.go](cmd/write.go)), exit codes ([cmd/exit.go](cmd/exit.go)), error printing
+  (`reportError` in [cmd/root.go](cmd/root.go)).
+- [internal/cloudrun](internal/cloudrun/), by concern:
+  - kinds and the plan/diff/apply flow: [kind.go](internal/cloudrun/kind.go); the service kind and
+    manifest normalization: [cloudrun.go](internal/cloudrun/cloudrun.go); the job kind:
+    [job.go](internal/cloudrun/job.go); revision-template helpers:
+    [template.go](internal/cloudrun/template.go); what a manifest runs:
+    [workload.go](internal/cloudrun/workload.go)
+  - the client and target validation: [client.go](internal/cloudrun/client.go),
+    [target.go](internal/cloudrun/target.go)
+  - API existence checks: [verify.go](internal/cloudrun/verify.go), [image.go](internal/cloudrun/image.go)
+  - waiting: [wait.go](internal/cloudrun/wait.go); listing: [paging.go](internal/cloudrun/paging.go)
+  - per-command logic: `status.go`, `revisions.go`, `rollback.go`, `traffic.go`, `refresh.go`,
+    `jobstatus.go`, `execution.go`, `executions.go`, `imageoverride.go`
+- Manifest templating (ecspresso-compatible `tfstate`, `env`, `must_env`, `json_escape`):
+  [internal/render](internal/render/render.go). The config file: [internal/config](internal/config/config.go).
 
-### internal/cloudrun (the core logic)
+## Invariants
 
-- Cloud Run API calls go through `Client` ([internal/cloudrun/client.go](internal/cloudrun/client.go)),
-  which holds the `*run.APIService` plus the target project/region so callers do not pass them
-  around. `NewClient(ctx, project, region, opts ...option.ClientOption)` appends `opts` **after**
-  the default endpoint option, which is the injection point tests use
-  (`option.WithEndpoint(httptestURL)` + `option.WithHTTPClient`) — see `newTestClient` in
-  [internal/cloudrun/client_test.go](internal/cloudrun/client_test.go) and `startFakeAPI` in
-  [cmd/integration_test.go](cmd/integration_test.go). Add new API calls as `Client` methods, and
-  cover them against the fake API rather than leaving them untested.
-  `VerifyRemote` ([internal/cloudrun/verify.go](internal/cloudrun/verify.go)) builds its own IAM /
-  Secret Manager / Artifact Registry / Serverless VPC Access / Cloud SQL Admin clients but takes the
-  same variadic `option.ClientOption`, so
-  `cmd` passes `clientOptions` through and one fake server can answer all of those APIs (they are
-  routed by path). It takes the region **only** for one thing: a
-  `run.googleapis.com/vpc-access-connector` written as a bare name has to be resolved to
-  `projects/<p>/locations/<region>/connectors/<n>`, and a connector is a regional resource. Nothing
-  else needs it — the Artifact Registry location comes from the image reference, the Cloud SQL
-  project comes from the `<project>:<region>:<instance>` connection name, and neither IAM nor
-  Secret Manager is regional. A connector written as a full resource name is used as written, so a
-  connector in another project or region is not rewritten to the deploy target's.
-  It looks the service account up as `projects/-/serviceAccounts/<email>`: Cloud Run allows a
-  service account from **another** project, and pinning the project would turn a valid setup into a
-  404, which `RemoteCheck.Missing` reports as a hard failure.
-  Secret **versions** are checked separately from the secret (`secrets.versions.get`, with the
-  version coming from `key`, then from a `/versions/<v>` suffix on the name, then `latest`, as
-  Cloud Run assumes) — and the returned `state` is what decides, not just the 200: Secret Manager
-  hands back `DISABLED` and `DESTROYED` versions successfully (only *accessing* them fails), so a
-  check that stopped at the 404 would pass exactly the case it was added for because a live secret whose referenced version was
-  destroyed fails only at deploy time — but the version lookup is skipped once the secret itself
-  came back 404, since "no such secret" and "no such version of it" say the same thing twice and
-  bury the real cause.
-  It also checks `containers[].image` against Artifact Registry
-  ([internal/cloudrun/image.go](internal/cloudrun/image.go) parses the reference; `checkImages` in
-  `verify.go` makes the call). Only `<location>-docker.pkg.dev` is checkable, and the location and
-  project come from the *image*, not from the target — a digest goes to `dockerImages.get` and a tag
-  to `packages/<path>/tags/<tag>` (a tag written next to a digest, `img:v1@sha256:…`, is dropped:
-  the digest decides, and keeping the tag looked up an image named `img:v1`), with the image path's `/` written as `%2F` **exactly once** (the
-  API returns names in that form and rejects a double-escaped one with a 404). Images on other
-  registries are **skipped silently, not reported as `Unchecked`**: warning about every Docker Hub
-  image would put a `warning:` line on every run and train people to ignore them. Confirmed against
-  the real API: a missing repository/package/tag/digest is a `404`, a project that does not exist or
-  cannot be read is a `403` (so a typo in the project never becomes a false `Missing`), and a public
-  image such as `us-docker.pkg.dev/cloudrun/container/hello` is readable with ordinary ADC.
-  Auth is **Application Default Credentials**, picked up automatically by `run.NewService`
-  (`google.golang.org/api/run/v1`). The user runs `gcloud auth application-default login` once;
-  no credentials are passed explicitly.
-- `cmd/` builds the client via `newCloudRunClient` in [cmd/flags.go](cmd/flags.go), which resolves
-  project/region and passes the package var `clientOptions` (empty in production, set by tests).
-  Create the client **after** all the local work — reading/rendering the manifest, checking for
-  existing files, **and validating** — so local errors surface before target resolution and
-  credential discovery. `deploy` therefore calls `cloudrun.Validate` itself before building the
-  client, even though `Plan` validates again (the check is pure and cheap); otherwise a manifest
-  problem hides behind "project is required" or "could not find default credentials".
-- **Every manifest-driven flow is written once, against `Kind`** ([internal/cloudrun/kind.go](internal/cloudrun/kind.go)).
-  `KindService` and `KindJob` are the values; each is a generic `kindOf[T]` (`serviceKind` in
-  `cloudrun.go`, `jobKind` in [job.go](internal/cloudrun/job.go)) that supplies only what differs —
-  the API calls, the manifest's `apiVersion`, `meta`/`workload`/`status` accessors, and hooks:
-  `prepare` (rewrites desired before diff and apply; the service uses it for `--no-traffic`, the job
-  refuses `KeepTraffic`) and `align` (the comparison-only `alignRevisionName`). The exported entry
-  points take the kind: `Validate`, `CheckSyntax`, `ApplyImageOverrides`, `VerifyRemote`,
-  `Client.Plan`, `Client.CompareManifest`. `Kind`'s methods are unexported so nothing outside the
-  package can add one. A worker pool would be another `kindOf` (its v1 API shares the Service's
-  `RevisionTemplate`). Everything about revisions is written against that template in
-  [internal/cloudrun/template.go](internal/cloudrun/template.go) — the pinned name
-  (`revisionNameOf`/`withRevisionName`), what runs (`templateWorkload`), and the `align`/`scaffold`
-  hooks (`alignRevisionNameOf`/`withoutRevisionNameOf`) — so a kind that holds one supplies only
-  how to reach it (`template`, also what `RevisionName(kind, …)` reads; nil for a job) and how to
-  put a changed one back, as the service kind does with `serviceTemplate`/`withServiceTemplate`. Jobs were confirmed against the real API before being put on this path: the
-  same CAS semantics, a dry run that returns the defaults, and `observedGeneration`/`Ready` that
-  settle the same way.
-- `kindOf.parse` checks the manifest's `kind` **before** the strict parse (`checkManifestKind`):
-  a job manifest parsed strictly as a service fails on the first job-only field, and that error
-  points at a field instead of at `clrnd jobs`. Only kinds in `kindHints` get the redirect; an
-  unknown kind falls through to `validate`'s "kind must be".
-  It also **drops `metadata.resourceVersion`**: a manifest made from `gcloud ... describe
-  --format=yaml` keeps one, and `setResourceVersion` (which must keep a version that came from a
-  live read) would send it — every write then got a 409 no re-run fixed, while the diff, which
-  never shows the field, looked clean (reproduced against the real API).
-  `kindOf.retype` runs only when the strict parse **fails**, rewrites the value the generated type
-  will not take, and parses again; a manifest that parses as written is never touched, so the
-  strict parse keeps catching what it catches (duplicate keys, misspellings). The rewrite reads the
-  manifest strictly as well: it rebuilds the manifest from a map, and a lenient read would quietly
-  keep one of two duplicate keys. The job kind uses it
-  for the task `timeoutSeconds`, which `TaskSpec` tags `json:",string"`: `timeoutSeconds: 600`
-  failed with "invalid use of ,string struct tag".
-- **An explicit zero is lost by the generated types**: they drop an int64 that is 0 when they
-  marshal, unless the field is named in `ForceSendFields`, and decoding never fills that in. For
-  almost every field that is harmless — confirmed against the real API, a job's `parallelism`,
-  `taskCount` and task `timeoutSeconds`, and a service's `containerConcurrency`, `timeoutSeconds`
-  and probe periods all take 0 as unset. **A job's `maxRetries` is the exception**: left out it
-  becomes 3, while 0 is kept and read back as 0. So `maxRetries: 0` used to deploy as 3, with an
-  empty diff. The job kind therefore forces the field in both directions: `kindOf.explicit` (a
-  parse hook that sees the raw manifest) forces it when the manifest writes the key, and `fromAPI`
-  forces it on every job `get`/`create`/`replace` returns, because the API always sends it. A
-  manifest that omits it still sends nothing, so the default keeps applying — and so does a YAML
-  null (`maxRetries:` as a template with an unset variable renders it), which parses to 0. Probe a
-  new field the same way before adding it here.
-- Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
-  `kindOf.planObject` (`Get` the live object, compute the `Diff` of live vs desired; `Create` when
-  404 via `isNotFound`/`googleapi.Error`), which reads the live object and hands over to
-  `planAgainst`. The commands that edit the live definition rather than apply a manifest —
-  `rollback`, `traffic` and `refresh` — read the service **once** and call `Client.PlanEdit(ctx,
-  live, desired)`, which plans against that same read (`planAgainst`, no second GET);
-  `ListServiceRevisions` lists revisions from it too. They used to read it up to three times, so
-  the diff could describe a newer state than the one edited (`TestLiveEditsReadTheServiceOnce`).
-  `planAgainst` also copies the
-  `resourceVersion` of the object it just fetched onto `desired` (`setResourceVersion`), so **every
-  write is a compare-and-swap against the exact state the diff was computed from**. Verified against
-  the real API, for services and jobs alike: a write with no `resourceVersion` is accepted as an
-  unconditional overwrite (so two
-  concurrent deploys silently lose one of the changes), a stale-but-well-formed one gets a `409`,
-  and a malformed one gets a `400` — which is why nothing may ever be invented for the field.
-  `Apply` translates that 409 (`isConflict`) into "changed after the diff was computed; re-run",
-  keeping the API message. A job adds `conflictHint`: **running a job changes its
-  `resourceVersion`** (when the execution starts and again when it ends), so a run between diff and
-  apply produces the same 409 with nobody having edited the job. `DeployPlan.Apply`
-  (the actual create/replace) returns the generation it applied, and `DeployPlan.Wait` waits on
-  whatever kind the plan holds; `DeployPlan.desired` is `any`, asserted back to the kind's type in
-  `kindOf.apply`. The print → confirm → apply → wait sequence itself lives
-  in `applyPlan` ([cmd/apply.go](cmd/apply.go)), shared by every mutating command; `cmd/deploy.go`
-  only builds the plan and hands it over. `applyPlan` prints `plan.Diff` (stdout), then `confirm`s
-  on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
-  (`isInteractive`, via `term.IsTerminal`) without `--auto-approve` refuses to apply. It must ask
-  the terminal itself: the old `os.ModeCharDevice` check took `/dev/null` (a character device, and
-  CI's usual stdin) for a terminal, so the command prompted, read EOF as "no" and exited 0 having
-  applied nothing. An empty diff
-  skips the apply but still waits (see the `cmd/apply.go` entry under Conventions).
-  `--dry-run` passes `dryRun=all` for server-side validation with no mutation; when it
-  is off the `DryRun` setter is **not** called at all (passing `""` would send an empty `dryRun=`
-  query parameter).
-- The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
-  via `option.WithEndpoint`), so a region is mandatory.
-- `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and
-  resolved by `resolveProject`/`resolveRegion` from **the flag, then the config file — never the
-  environment**. gcloud's `CLOUDSDK_CORE_PROJECT`/`GOOGLE_CLOUD_PROJECT`/`CLOUDSDK_RUN_REGION`/
-  `GOOGLE_CLOUD_REGION` used to come between the two; they are set by CI auth actions and Cloud
-  Shell to a project nobody chose as the deploy target, and so sent deploys to the wrong project
-  with nothing on screen to say so. Do not add them back, even as a lowest fallback: a config
-  without `project:` would still pick up the ambient one. They are only *named*
-  (`ignoredEnvHint`) in the "is required" error, for someone who relied on them.
-  Error if neither is set. NOT `MarkFlagRequired` (that would reject the config-only case).
-- The project and region are **validated** (`cloudrun.ValidateRegion` / `ValidateProject`, in
-  [internal/cloudrun/target.go](internal/cloudrun/target.go)) by `NewClient` and `VerifyRemote`,
-  i.e. wherever they are turned into requests. The region becomes the endpoint's **host name**
-  (`regionalEndpoint`), and the client sends the ADC access token there, so an unchecked
-  `region: "attacker.example/"` in a cloned repo's `clrnd.yml` would send the token away (shown
-  with a local server). A well-formed region Cloud Run does not have gets a 404 **web page** from
-  Google's front end rather than an API error; `isNotFound` only counts an API 404 (`isAPIError`),
-  so that is not read as "the service does not exist, create it", and `errorMessage` in
-  [cmd/root.go](cmd/root.go) replaces the page with a hint to check the region. That is why the
-  root has `SilenceErrors` and `Execute` prints errors itself.
-- Every command that writes through `applyPlan`, `revisions --prune` and `jobs run` prints its target
-  (`printTarget`: the name, project and region) on stderr first, as `delete` always has — the
-  realistic accident is the right name in the wrong project.
-  `render` needs neither; `verify` accepts them optionally — `resolveTargetOptional` (in
-  [cmd/flags.go](cmd/flags.go)) resolves with the same precedence but returns `ok=false` instead of
-  erroring, so the API existence check runs only when a target is available.
-- The `-c`/`--config` persistent flag loads a YAML config via [internal/config](internal/config/config.go)
-  in the root's `PersistentPreRunE` (`loadConfig`), into the package var `cfg`. When `--config` is
-  omitted it auto-detects `clrnd.yml`/`clrnd.yaml` in the cwd (absent → empty config, not an error;
-  an explicit missing `--config` IS an error — except for `init`, which *writes* the config: it
-  carries `Annotations[annotationConfigOptional]`, so `loadConfig` reads an explicit `--config`
-  only when it already exists). Config holds `project`, `region`, **one of** `service`
-  and `job` (`config.Load` refuses more than one; `target.resolveName` refuses a config that names
-  another kind instead — it checks every target in `targets` — so a command of one kind never acts
-  on a same-named resource of another), `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
-  replaces the config list, otherwise the config list is used. Relative paths from the config
-  (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
-  `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
-- `sanitizeMap` strips server-managed read-only fields (`status`, the `serverManagedMetaFields` of
-  `metadata` — `uid`, `resourceVersion`, `ownerReferences`, … — and the `serverManagedAnnotations` /
-  `serverManagedLabels` of **both** `metadata` and `spec.template.metadata`), and drops
-  `spec.template.metadata` entirely when nothing is left in it (local manifests normally have no
-  template metadata, so an empty `metadata: {}` would be a diff line that never goes away).
-  Anything missing from those slices becomes a diff that never goes away under
-  `--no-server-defaults` (with server defaults on, the dry-run response fills it back in on both
-  sides and hides the omission — which is why the `--no-server-defaults` path is the one the E2E
-  asserts against). `run.googleapis.com/client-name` / `client-version` are treated as
-  server-managed on purpose: they record which tool last wrote, not configuration, so keeping them
-  would bake "gcloud" into a manifest `init` produced.
-  The lists are shared by every kind: a job records its writer as `run.googleapis.com/creator` /
-  `lastModifier` and carries a `run.googleapis.com/lastUpdatedTime` **label** — a timestamp that
-  differs between the live job and the dry run, so leaving it in makes every job diff non-empty.
-  `ToManifest` applies it to a fetched service. YAML is produced with `sigs.k8s.io/yaml`
-  (JSON tags → YAML), which sorts keys alphabetically.
-- `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
-  **`kindOf.compareObjects` is the single comparison path**: it aligns the live definition with the
-  desired one, normalizes both through `toManifest`, and diffs them (a zero `current` means the
-  resource does not exist yet, so everything is an addition). **`diff` is `deploy` without the
-  apply**: `Client.CompareManifest` (`kindOf.compare`) parses and validates, then calls the same
-  `planObject` as `deploy`, `rollback`, `traffic`, `refresh` and the `jobs` forms, and returns the
-  plan's diff — only the label of the desired side differs (the manifest's path). It used to be a
-  second copy of that sequence, and drifted twice (a 404 for a resource deploy would create;
-  validation only on the dry-run path); `TestDiffAndPlanAgree` holds them together now. The
-  pre-processing is therefore shared too — `setNamespace` puts the target project on the body,
-  and `setResourceVersion` the live version — which matters because while server defaults are
-  being resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
-  (dry-run) write and gets the same validation as `deploy`.
-  `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
-  a manifest problem is not hidden behind a credentials error.
-- **Server defaults** (`--no-server-defaults`, `PlanOptions.ResolveDefaults`): Cloud Run fills in a lot
-  of fields on create (`containerConcurrency`, container `ports`, `resources.limits`, `startupProbe`,
-  `serviceAccountName`, `timeoutSeconds`, `spec.traffic`, several annotations and labels), so a
-  hand-written minimal manifest never diffs clean (issue #11). A `dryRun=all` write returns the
-  service *with those defaults applied* — verified against the real API — so `resolveDefaults` sends
-  the desired definition through one and compares that instead. What matters: it is **on by
-  default** (like `kubectl diff`), which means `diff` now needs permission to update the service —
-  `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
-  `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
-  clrnd never writes back values the server computed (which would pin today's defaults forever).
-  Going through `planObject`, `diff` runs the same `validate` as `deploy` **regardless of the
-  option**, so the two commands agree on what a valid input is (scoping it to the dry-run path once
-  let `diff` render a "you can rename a service" diff that `deploy` would refuse), and handles a 404
-  the same way (`current = nil`, everything is an addition), so `diff` works on a service that does
-  not exist yet — passing `create` to `resolveDefaults`, since a *replace* dry run would 404 too.
-  That path is checked against `run.services.create`, not `run.services.update`, so the failure
-  message names whichever call was actually made: telling someone to grant `update` when the dry
-  run was a `create` sends them to fix the wrong permission. `resolveDefaults` wraps failures without claiming a cause — permission is the likely
-  one, but a rejected manifest or a service deleted mid-run look the same from here.
-- **Revision names**: `spec.template.metadata.name` is optional on write (Cloud Run generates one),
-  and a name Cloud Run generated is **never echoed back** — the field is only present on read when a
-  client set it (`gcloud run deploy --revision-suffix`, a Terraform `template.metadata.name`, or a
-  manifest that pins one). An existing revision name cannot be reused with a different
-  configuration: doing so fails with a 409, sometimes only when the rollout runs. clrnd therefore
-  does not manage revision names: `WithoutRevisionName` (pure — it copies only the
-  Spec/Template/Metadata chain rather than mutating its argument) removes the field from what
-  `init` scaffolds, and `alignRevisionName` (the service kind's `align`, called from `compareObjects`) drops the live value
-  from the comparison
-  **when the local manifest does not pin one** — without that, every manifest without a revision
-  name would show a permanent diff. When the manifest *does* pin a name it is kept on both sides
-  and shows up as a normal diff, and **both `verify` and `deploy`** warn (`warnPinnedRevision` in
-  [cmd/flags.go](cmd/flags.go), via `RevisionName`) that the next template-changing deploy will
-  fail with a 409. `deploy` warns too because a CI job that only runs `deploy` would otherwise see
-  nothing but the opaque API error. The warning is not a failure: pinning is legitimate for a
-  one-shot deploy.
-- `Validate` checks a local manifest with no API access: strict YAML unmarshal into the kind's
-  API type (catches unknown/misspelled fields), required-field checks, and that `metadata.name`
-  matches the name argument. Returns `errors.Join` of all problems so the user sees them at once. The local
-  `Validate` needs no `--project`/`--region` and no credentials.
-- What a manifest *runs* — containers, volumes, the service account and the template annotations —
-  is read through `workload` ([internal/cloudrun/workload.go](internal/cloudrun/workload.go)),
-  never by walking `spec.template.spec` directly. `VerifyRemote`'s checks, `--image` and the
-  container rules in `validate` all take a `workload`, and each kind's extractor (`serviceWorkload`,
-  `jobWorkload`) is the only place that knows where that kind keeps it. A job keeps the containers
-  one template deeper (`spec.template.spec.template.spec`, the task) while the annotations Cloud Run
-  reads stay on the execution template's metadata. `workload.Path` is that location, so error
-  messages name the field a user actually wrote.
-- `VerifyRemote` (in [internal/cloudrun/verify.go](internal/cloudrun/verify.go)) complements
-  `Validate` with API existence checks, aligning `verify`'s semantics with ecspresso. It confirms
-  the manifest's service account (IAM `projects.serviceAccounts.get`) and the Secret Manager secrets
-  used by `secretKeyRef`/secret volumes (`projects.secrets.get`) exist. It returns a `RemoteCheck`
-  that separates `Missing` (404 — resource confirmed absent, fails verify) from `Unchecked`
-  (client-init failure, permission denied, API disabled — could not decide, surfaced by
-  `cmd/verify.go` as a `warning:` on stderr and NOT a failure). This split keeps an ambient
-  project/region in CI from turning a passing offline lint red. Auth is the same ADC; the IAM/Secret
-  Manager clients are subpackages of `google.golang.org/api` (no new module). `cmd/verify.go` runs it
-  only when a target resolves and `--local-only` is off. When a target does not resolve it warns
-  **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a config
-  file that sets only one of them is skipped silently. `cmd/verify.go` still requires *both* project and region to resolve before running the
-  remote checks, even though the region only matters to one of them (resolving a short VPC
-  connector name): a half-configured target is
-  more likely a mistake than an intent, and quietly reaching for whatever project is ambient is the
-  worse failure.
-- `refresh` (in [internal/cloudrun/refresh.go](internal/cloudrun/refresh.go)) re-applies the **live**
-  definition unchanged so a new revision is created — it never reads a local manifest.
-  This is the **one deliberate exception** to "clrnd does not manage revision names": Cloud Run only
-  creates a revision when `spec.template` changes, so forcing a rollout requires naming the revision
-  explicitly (`<service>-r<UTC timestamp>`, or `--revision-suffix`). The name is dropped again by the
-  next `deploy` from a manifest, and `alignRevisionName` keeps `diff` clean in the meantime because
-  the local manifest pins nothing. `validateRevisionName` rejects names the API would reject, using
-  the constraints confirmed against the real API: only lowercase letters, digits and hyphens,
-  starting with a letter, not ending with a hyphen, and shorter than 64 characters. It does **not**
-  check the `<service>-` prefix Cloud Run also requires — that one is guaranteed by construction in
-  `RefreshTarget`, which builds the name as `<service>-<suffix>`.
-  `RefreshTarget` also refuses situations where the command would succeed without doing its job:
-  a name equal to the one already on `spec.template` (no new revision is created, so the diff is
-  empty and `applyPlan` reports "No changes."), and a service whose `spec.traffic` pins every target
-  to a specific revision (`servesLatestRevision`) — the state `rollback` leaves behind, where a new
-  revision would be created but serve nothing.
-- `delete` (in [cmd/delete.go](cmd/delete.go)) destroys a whole service or job, so it
-  fetches it first: a missing service fails before any prompt, and what is about to go is
-  printed to stderr **with the project and region** — the realistic accident is deleting the right
-  service name in the wrong project. It does not use `applyPlan` (there is no diff to show) but
-  shares `confirmAction`, so the "no TTY and no `--auto-approve` → refuse" rule is identical.
-  `--dry-run` skips the prompt because nothing is destroyed, matching `deploy`.
-  **Deletion is asynchronous too**: the DELETE returns while the service is still readable for a
-  while, so `delete` polls with `Client.WaitDeleted` until a 404 comes back (`--no-wait` opts out).
-  Without it, "delete then recreate" races. `WaitDeleted` shares `waitDefaults`/`nextWaitInterval`
-  and the same transient-error tolerance as `Wait`. `Client.Delete` and `Client.WaitDeleted` take
-  the `Kind`, and `jobs delete` is the same command built for jobs; what `deleteDetails` adds to
-  the target differs (a service's URL, a job's execution count, since the executions go with it).
-- `rollback` (in [internal/cloudrun/rollback.go](internal/cloudrun/rollback.go)) repoints
-  `spec.traffic` at an earlier revision. It touches **only** the traffic split — `spec.template` is
-  left alone, so no new revision is created and the revision-name conflict cannot apply. Traffic
-  tags are kept (pinned at 0%) so a rollback does not silently remove tag URLs; untagged entries
-  (including `latestRevision`) are dropped because the target now takes all of it.
-  `RollbackTarget` shallow-copies the Spec rather than mutating the live service.
-  `SelectRollbackRevision` picks the first ready revision *older* than the **newest revision that is
-  serving any traffic** — not the one with the largest share. Mid-canary (new 10% / stable 90%) the
-  largest share is the *stable* revision, so choosing by share rolls straight past the known-good
-  version. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
-  its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
-  `False`, so "the previous working version" is still findable.
-  Without `--revision` it **refuses while the newest revision serves nothing and is not Ready**
-  (`unfinishedRolloutError`): after a failed deploy, `latestRevision` keeps traffic on the last
-  ready revision, so stepping back from the serving one would downgrade past the version that was
-  fine. Pinning the serving revision instead is no better — the template still describes the
-  failed revision, so the service stays not Ready and the wait fails. A newer revision that *is*
-  Ready with 0% (`deploy --no-traffic`) does not trigger this.
-- `traffic` (in [internal/cloudrun/traffic.go](internal/cloudrun/traffic.go)) is the general form of
-  what `rollback` does: it rewrites **only** `spec.traffic`, so no revision is created.
-  `ShiftTrafficTarget` shallow-copies the Spec rather than mutating its argument, and
-  `ValidateTrafficRequest` is split out so `cmd` can reject a bad flag combination **before**
-  building the client — the same "local checks first" rule the rest of `cmd` follows.
-  A `--percent` below 100 puts the remainder on `largestShare`, the revision currently serving the
-  most, because that is the canary shape (stable 90% / new 10%) and it makes the result
-  predictable: always a two-way split. Ties break by name so the same input cannot pick a different
-  revision on the next run. When that revision **is** the target, `remainderRevision` refuses
-  instead of falling through to the runner-up: mid-canary (stable 90% / old 10%), promoting the
-  runner-up would drop the stable revision to `--percent` and hand 90% to a retired one. When
-  nothing is serving at all there is no honest answer either, so that errors too. `--to-latest` writes `latestRevision: true`
-  rather than a name, which is also the way out of a `rollback`: while traffic is pinned, `refresh`
-  refuses to run and only a `deploy` with a real change would move it.
-- **`deploy --no-traffic`** (`PlanOptions.KeepTraffic` → `keepTraffic`) replaces the desired
-  `spec.traffic` with `pinnedTraffic(current)` — the live split with `latestRevision` resolved to
-  concrete revision names. It cannot be expressed in a manifest: the new revision's name is not
-  known until after the write, and `latestRevision` would hand it all the traffic. The pinning
-  happens **before** `setResourceVersion` and the diff, so what is applied and what is shown are
-  the same definition. It refuses on a service that does not exist yet (the first revision has to
-  serve).
-- `revisions` (in [internal/cloudrun/revisions.go](internal/cloudrun/revisions.go)) is read-only.
-  Traffic shares live on the **Service** (`status.traffic`) while the revisions themselves come from
-  `Namespaces.Revisions.List`, so `ListRevisions` fetches both and joins them; a revision can appear
-  in `status.traffic` more than once (a percentage entry plus a tag entry), so the shares are summed
-  and the tags collected. The list is paged through with the `Continue` token, with
-  guards: it stops when the same token comes back (the next page would repeat the last one) and
-  after `listMaxPages` pages (the guards live in `listAll` in
-  [internal/cloudrun/paging.go](internal/cloudrun/paging.go), shared with the executions list). Without them a server that keeps returning the same token
-  grows `items` without bound, and a `ctx` with no deadline has no way to stop it. The guards
-  **return an error rather than the partial list**: only an empty `Continue` ends the paging
-  normally. A truncated list is not just short — the repeated-token case has read the same page
-  twice, so it can hold duplicates as well as gaps, and `rollback` picks both the current revision
-  and the one to return to out of it, so treating it as complete can roll back to the wrong
-  version (or report that there is nothing to roll back to). `newRevisions` is the
-  pure conversion and `Revisions.Text()` the pure `text/tabwriter` formatting, both testable without
-  the API. `--prune` is the one part of it that writes: `SelectPrunableRevisions` (pure) drops the
-  newest `keep` entries and then skips anything with traffic, a tag, or a name in `spec.traffic`
-  (`Revision.Pinned`), and `Client.DeleteRevision` removes what is left. The spec side matters
-  because `status.traffic` carries no share until a rollout settles — protecting only by the live
-  split would, mid-rollout, make every revision look idle. `latestRevision: true` needs its own
-  handling there: it names no revision, so `pinnedRevisionNames` falls back to
-  `status.latestCreatedRevisionName` and `latestReadyRevisionName` when it sees one. Without that,
-  a `--prune --keep 0` during a rollout deletes the revision that is about to take the traffic.
-  The fallback is deliberately conditional: once traffic is pinned by name (after a `rollback`),
-  the newest revision is genuinely idle and should stay prunable. `keep` counts from the newest down
-  regardless of protection, so it is a "how far back do I look" number, not a promise about how
-  many survive; the docs say so rather than claiming a fixed count. A negative `keep` is a CLI
-  error rather than a silent clamp to 0 (a miscomputed `--keep "$N"` would otherwise delete
-  everything unprotected), and `--keep`/`--dry-run`/`--auto-approve` without `--prune` are rejected
-  instead of ignored. The command shares `confirmAction` with `delete` (no TTY and no
-  `--auto-approve` → refuse) rather than `applyPlan`, since there is no diff to show. `Revision.Images` holds **every** container image in spec order (Cloud Run services can
-  have sidecars), joined with `,` for the `IMAGE` column; returning only the first one meant an
-  image that was actually running never appeared anywhere in the output. `Revision.Image` is kept
-  as `Images[0]` **only** for JSON compatibility — `--format json` is a published interface and
-  dropping the key would make an existing `jq '.[].image'` return `null` without an error. Keep
-  both in sync in `newRevisions`; new code reads `Images`. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
-  (Cloud Run numbers them sequentially) when the timestamp will not parse.
-- **Every wait reads `WaitOptions.Timeout` the same way: 0 means no limit** (`withWaitTimeout`), and
-  the CLI's 10-minute default for a rollout or a deletion is the flag's (`defaultRolloutTimeout`).
-  It used to be 10 minutes inside the rollout and deletion waits and no limit inside the
-  execution wait, so `--timeout 0` meant two things; a negative value was silently 10 minutes on
-  some commands and an error on others. `validateWaitFlags` now refuses a negative `--timeout` and
-  a non-positive `--interval` in every command that waits, before the client is built.
-- `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
-  the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
-  `status.observedGeneration` reaches the generation being waited for (otherwise the *previous*
-  generation's `Ready=True` reads as success). With no generation given (`wait`, `jobs wait`, an
-  empty diff), `waitReady` takes the one the **first read** reports — taking "any generation"
-  let `deploy --no-wait` followed by `wait` succeed before the change was observed. It then succeeds on `Ready=True` and **fails
-  immediately** on `Ready=False` rather than burning the timeout. The interval backs off from 2s to
-  15s, and the whole loop honours `cmd.Context()` so Ctrl-C stops it.
-  A failed *poll* is not a failed rollout: the generated API client does not retry, so a single
-  transient 503 would otherwise make an already-applied `deploy` exit non-zero — the very CI
-  false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
-  errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
-  out. Which errors those are is `isRetryable` (in
-  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), applied by `poll`, the
-  one loop every wait goes through: 408/429/5xx and any error with no HTTP status (a dropped
-  connection, DNS, EOF) are retried, every other 4xx returns at once. Waiting out a 400/401/403
-  ends in the same failure ten minutes later, having held a CI job the whole time; 404 falls out of
-  the same rule (a service that does not exist will not appear). The one 403 that *is* retried is a
-  rate limit — Google's APIs report quota exhaustion as 403 with a `rateLimitExceeded`-style
-  `reason`, and that does clear on its own, so `retryableForbiddenReasons` separates it from a
-  permission problem.
-  `waitProgress` deliberately withholds the `Ready` value until `observedGeneration` reaches the
-  awaited generation — the condition visible before then belongs to the *previous* generation and
-  reads as "already finished".
-  `DeployPlan.Apply` returns the generation it applied so `deploy` can wait for exactly that
-  generation. **`deploy` waits by default** and fails when the
-  rollout fails — without that, a broken revision still exited 0 and CI treated it as success.
-  `--no-wait` restores the old behaviour. **There is one polling loop, `poll`**
-  (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)), behind every wait — a rollout
-  (`waitReady`), a deletion (`waitDeleted`), an execution and its cancel (`pollExecution`). Each
-  supplies a `poller`: how to read the state, its progress line, when it is done, an error that
-  ends it successfully (a deletion's 404), and how to explain an interrupted wait. They used to be
-  three copies of the loop, which had already started to differ. `waitReady` takes a `fetch`
-  function and a `subject` (`service "x"`, `job "x"`) for its messages; `Client.Wait` and
-  `DeployPlan.Wait` are thin wrappers, and a job's state is read through `newJobStatus` (generations
-  and conditions only). `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the shared entry point
-  that prints progress to stderr, given whichever wait function applies.
-- `jobs run` ([cmd/jobs_run.go](cmd/jobs_run.go), [internal/cloudrun/execution.go](internal/cloudrun/execution.go))
-  calls `Client.RunJob` and then `Client.WaitExecution`, which polls the **Execution**, not the job
-  (a job stays `Ready=True` throughout a run). `executionDone` decides on the `Completed`
-  condition's **status only**: confirmed against the real API, a cancel goes Unknown/`Cancelling`
-  → Unknown with no reason → False/`Cancelled`, so the reason is not reliable mid-change. Its CLI default differs
-  from `Wait`'s: `jobs run` passes no timeout at all (an execution is bounded
-  by its own task timeout and retries, and a CLI-side default would only fail CI for a job that
-  goes on to succeed), and stopping the wait never cancels the execution — every interrupted /
-  timed-out message says it keeps running and prints the `clrnd jobs executions cancel`
-  command. The same transient-error rules (`isRetryable`) apply. `RunOptions.overrides` returns nil
-  when nothing is overridden, so a plain run needs only `run.jobs.run`; any override needs
-  `run.jobs.runWithOverrides`. Overrides are validated (`RunOptions.Validate`, plus the explicit-0
-  checks in `cmd`, since 0 internally means "the job's own") before the client is built.
-- `jobs executions list` / `cancel` ([cmd/jobs_executions.go](cmd/jobs_executions.go),
-  [internal/cloudrun/executions.go](internal/cloudrun/executions.go)) sit in their own group, as in
-  gcloud. `ListExecutions` gets the job first (a typo is an error, not an empty list that reads as
-  "never ran"), filters by the `run.googleapis.com/job` label and pages through `listAll`; the order
-  is sorted here rather than trusted to the API across pages. `executionStatus` names the state from
-  `Completed` plus the `run.googleapis.com/cancelTime` label: confirmed against the real API, a
-  cancel leaves `Completed` Unknown with **no reason** for a while, so only the label tells
-  `Cancelling` from `Running`. The label only stands in for a **missing** reason: a task that fails
-  while a cancel is pending ends False with its own reason and the label both, and that is a
-  `Failed`, not a `Cancelled`. `cancel` fetches the execution first and refuses a finished one with
-  its state (the API's own answer is a bare 400 "not running"), prints the target with
-  `printTarget` and confirms with `confirmAction` like `delete` — but has no `--dry-run`, because
-  the API has none for a cancel. It then waits with `WaitExecutionStopped`, the same poll loop as
-  `WaitExecution` (`pollExecution`) with a different end: False is the goal, and True means it
-  succeeded before the cancel took effect, which fails the command. Its interrupted message says
-  the cancel goes on rather than suggesting to cancel again.
-  An execution's finish time is `completionTime` in every JSON output: `jobs executions list` and
-  `jobs status`'s `latestExecution`. The latter first shipped it as `completed`, which is kept
-  with the same value for the same reason as `revisions`' `image` (a published `jq` filter must
-  not silently start returning `null`); new code reads `CompletionTime`.
-- `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
-  is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
-  presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
-  finds the `Ready` condition and is meant to be reused by `wait`. The JSON form is the `Status`
-  struct itself (`--format json`), so the two outputs cannot drift apart.
-- `init` (in [cmd/init.go](cmd/init.go), formerly `load` — the alias is kept for services only)
-  fetches a service or job through `Client.LiveManifest` (the kind's `scaffold` hook: a service
-  drops its revision name) and scaffolds `manifest.yaml` (the `--output` file) plus the config file, refusing to
-  overwrite existing files without `--force`. The config goes to `--config` when given, otherwise
-  to the config `loadConfig` found (`loadedConfig`: writing a new `clrnd.yml` next to a
-  `clrnd.yaml` would shadow it), otherwise `clrnd.yml` (`initConfigFile`). `--force` over the config
-  it read keeps that config's `tfstate:` (`keptTfstate`), the one thing in it init cannot scaffold.
-  The recorded `manifest:` is made relative to the config's directory by `manifestPathFor`, because
-  `resolveConfigPath` resolves it from there; both paths are made absolute first, since
-  `filepath.Rel` cannot relate an absolute config path (`-c ~/infra/clrnd.yml`) to the relative
-  default manifest. Both files are written
-  `0600` (they can carry plaintext `env[].value`) through `writeScaffold`. If the config write fails
-  after the manifest was
-  overwritten, `restoreManifest` puts the manifest back (best-effort) so `--force` cannot leave the
-  old manifest destroyed with no config to show for it.
-- Every file clrnd generates goes through [cmd/write.go](cmd/write.go), never `os.WriteFile`:
-  `writeFilePrivate` writes a temporary file in the same directory and `rename`s it into place, and
-  `writeFileExclusive` creates with `O_CREATE|O_EXCL`. `os.WriteFile` is wrong for both of clrnd's
-  outputs because its `perm` only applies when the file is **created** — an existing `0644` output
-  stays `0644` after a secret is written into it — and because it truncates first, so a failed write
-  destroys the previous good content. The `rename` fixes both (`Chmod` on the temp file pins `0600`
-  regardless of umask, and the destination only ever holds the old or the new content). **Both of
-  those guarantees are Unix ones.** Windows' `os.Rename` is `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`,
-  whose replacement the OS does not promise to be atomic, and Go maps a file mode there to the
-  read-only bit, so `0600` carries no confidentiality. What still holds on Windows is the part that
-  matters most in practice: a write that fails never touches the destination, so the previous
-  content survives. Do not restate the atomic-replacement claim without that scoping — and do not
-  reach for a library to fix it, because none of them can: `renameio` is Linux-only and the
-  alternatives call the same `os.Rename` underneath. The one
-  exception is a destination that already exists and is **not a regular file** (`/dev/null`, a
-  process substitution): there is nothing to replace and nothing to chmod, so it is written
-  directly. `writeFileExclusive` is what `init` uses **without** `--force`, so a file created
-  between the `fileExists` check and the write is not silently overwritten; `--force` takes the
-  `writeFilePrivate` path.
-- `render -o` also writes `0600`, and refuses (`sameFile`, via `os.SameFile`) to write over the very
-  manifest it is rendering — otherwise the template source is replaced by its own output.
+Break one of these and something that looks fine fails for a user. Each is explained where it is
+implemented.
 
-## Conventions
+- **Interruptible.** Every command uses `cmd.Context()`, never `context.Background()`; anything that
+  blocks (a prompt, a poll) selects on `ctx.Done()`.
+- **Local checks first.** Read, render (`renderManifest`), apply `--image`, validate
+  (`cloudrun.Validate` / `CheckSyntax`) and check flags *before* `newCloudRunClient`, so a local
+  mistake is never hidden behind "project is required" or a credentials error.
+- **The target is named on purpose.** Project and region come from the flag, then the config file —
+  never from the environment (gcloud's `CLOUDSDK_*`/`GOOGLE_CLOUD_*` are set by CI auth actions and
+  Cloud Shell; see `resolveProject`). Do not add them back, even as a lowest fallback. Both are
+  validated where requests are built (`NewClient`, `VerifyRemote`): the region becomes the API's
+  host name.
+- **Every write is a compare-and-swap** on the `resourceVersion` of the read the diff was computed
+  from (`setResourceVersion`). Never invent one, and never send one a manifest carried (`parse`
+  drops it).
+- **diff is deploy without the apply.** Both go through `planObject`/`planAgainst`
+  (`TestDiffAndPlanAgree`). Commands that edit the live definition (rollback, traffic, refresh) read
+  it once and plan against that read with `PlanEdit`.
+- **Server defaults are for the diff only.** The dry-run copy is compared, never written back.
+- **clrnd does not manage revision names**: `init` drops them and `diff` ignores a live one the
+  manifest does not pin. `refresh` is the one exception.
+- **One polling loop.** Every wait goes through `poll` with a `poller`; do not write another loop.
+  `WaitOptions.Timeout` 0 means no limit everywhere (the CLI's 10-minute default is the flag's), and
+  with no generation given a wait pins the one its first read reports. Retries follow `isRetryable`.
+- **Lists are complete or an error.** Paging goes through `listAll`, which errors rather than return
+  a partial list.
+- **Files clrnd writes go through [cmd/write.go](cmd/write.go)**, never `os.WriteFile`.
+- **`--image` is the only field a flag may override**, and only on `verify`/`diff`/`deploy`.
 
-- Everything written in the repository is in **English**: user-facing strings (cobra
-  `Short`/`Long`, flag usage, error messages), code comments in Go, shell and YAML alike, test
-  names and failure messages, and documentation. Comments written before this rule were in
-  Japanese; if you come across one that is left, translate it rather than editing it in Japanese.
-- Commit messages (subject and body), issue titles and bodies, PR titles and descriptions, and
-  review comments and replies are written in **English**. Older history is in Japanese; leave it as
-  it is rather than rewriting or translating it. The PR title matters in particular, because the
-  squash merge turns it into the commit subject on `main`.
-- **Do not write a count unless the number itself matters.** "provides twelve subcommands",
-  "three things to know", "refuses two cases", "CI's third job" all summarize a list, so every one
-  of them has to be edited whenever the list changes, and nothing checks that it was: README said
-  `eleven` long after `traffic` made it twelve (#114). Name the items, or say "the following", and
-  let the list speak for itself. When unsure, ask whether adding an item to the list would make the
-  sentence wrong; if it would, drop the number. "Both" over a list that can grow has the same
-  problem — say "each" or "all of them". This applies everywhere clrnd's text lives — README, this file,
-  help text, code comments, commit messages and PR descriptions. Keep a number when it *is* the
-  fact: a timeout, a page limit, the lines of context in a diff, a two-way traffic split, "only when
-  there is exactly one container".
-- `rootCmd.SilenceUsage` is on, so a runtime error prints only the error. Cobra applies that to
-  flag and argument errors too, so `SetFlagErrorFunc` adds a one-line `Run '<cmd> --help' for usage`
-  instead of the whole block. Note that cobra prints usage with `Println`, i.e. to `OutOrStderr()` —
-  in tests that redirect `SetOut` it lands on **stdout**, so assertions about it must look at both
-  streams.
-- Exit codes live in [cmd/exit.go](cmd/exit.go): `ExitCode` maps an error to a code and `main.go`
-  applies it. `diff --exit-code` returns the `errDiffFound` sentinel, which becomes **2** and is the
-  one error `reportError` (in [cmd/root.go](cmd/root.go)) does not print: differences are the
-  result, not a failure. The split
-  (0 clean / 1 error / 2 differences) is `terraform plan -detailed-exitcode`'s, chosen so that
-  errors keep 1 and existing scripts are unaffected.
-- Subcommands succeed **silently on stdout**: on success they emit only data (e.g. the manifest)
-  there, never a confirmation message. Errors are returned from `RunE` so cobra prints them to
-  stderr and sets a non-zero exit code. Advisory `warning:` lines (a pinned revision name in
-  `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
-  not fail the command — stdout stays data-only, which is what the rule protects.
-  `verify --format json` does not break that rule: the result object is the data, so it goes to
-  stdout, while a failure is still returned as an error (printed to stderr) so the exit
-  code is unchanged. **Every** failure after the format is validated goes through `finishVerify`,
-  including an unreadable manifest and a template that does not render — those used to return
-  before it, leaving `| jq` with an empty stdout on the commonest CI failure (an unset `must_env`).
-  `finishVerify` is the single place that decides text-vs-JSON, which is why the
-  pinned-revision text lives in `pinnedRevisionWarning` (a value) rather than being printed where
-  it is discovered.
-  Exception: the commands that confirm are interactive. Those that apply a plan print the diff to
-  stdout as data, and `revisions --prune` the revisions it is about to delete; their target
-  (`Target:` / `About to delete:` / `About to cancel:`), status and prompt lines (`No changes.`,
-  the `[y/N]` prompt, `Aborted.`) go to **stderr**, so stdout stays data-only. `delete`, `jobs
-  delete` and `jobs executions cancel` have no diff, so all they print goes to stderr. This
-  is intentional, not a violation. `jobs run` is not one of them: it prints the execution's name
-  on stdout (data a script captures) and has **no prompt** — running a job changes no definition,
-  and neither gcloud nor ecspresso asks — so it needs no `--auto-approve` in CI.
-- When adding a subcommand: create `cmd/<name>.go`, set `RunE`, and register it on its parent
-  (`rootCmd` in [cmd/root.go](cmd/root.go), `jobsCmd` in [cmd/jobs.go](cmd/jobs.go)). Prefer a
-  `newXCmd(...)` factory with its flags in an options struct, as `deploy`/`delete`/`init` and
-  `jobs executions cancel` are, over package-level flag vars: a command that may later serve
-  another kind can then be built once per target.
-- Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
-  `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout` / `--interval`, and `applyPlan` runs
-  the one flow
-  (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
-  text differs per command. Do not re-implement that sequence.
-  An **empty diff still waits** (for the generation live reports, since none was applied): a deploy that
-  failed its rollout leaves live == desired, so a retry with the same manifest produces no diff, and
-  returning early there would hand CI a green run over a broken service — the exact failure the wait
-  exists to catch. `confirmAction` in the same file is
-  the confirmation rule on its own, for destructive commands that have no plan to show (`delete`).
-- A `cmd` test that wants a command to fail **inside** `RunE` must keep `loadConfig`
-  (`PersistentPreRunE`) happy first. Pointing `--config` at something unreadable — a directory, say
-  — fails before `RunE` ever runs, and a test written that way passes while never executing the
-  code it names (`TestInitRestoresTheManifestWhenTheConfigWriteFails` did exactly that: `runInit`
-  and `restoreManifest` were both at 0% coverage). To fail a *write* instead, point it somewhere
-  that cannot be created but can be skipped by the reader, e.g. `nodir/clrnd.yml`, and assert the
-  error names that path so the test cannot silently slide back to failing early.
-- `executeRoot` in [cmd/integration_test.go](cmd/integration_test.go) pins stdin to an empty
-  `strings.Reader`. Without it `cmd.InOrStdin()` falls back to `os.Stdin`, and the confirmation
-  tests pass or fail depending on whether `go test` was started from a terminal.
-- CI's `release-build` job cross-compiles **the release matrix** before any tag exists, by
-  running `goreleaser check` and `goreleaser build --snapshot --clean` — the ordinary `Build` step
-  only ever compiles for the runner (linux/amd64), so a Windows-only compile error or a broken
-  `.goreleaser.yaml` used to surface after the tag was pushed. It drives GoReleaser rather than a
-  hand-written `GOOS`/`GOARCH` matrix precisely so the covered targets cannot drift from
-  [.goreleaser.yaml](.goreleaser.yaml); `--snapshot` publishes nothing and signs nothing. Its
-  GoReleaser version is pinned to the same value as `release.yml` — raise them together, or the
-  config a PR validated is not the one that builds the release.
-- Beyond Go, `verify.yml` checks the parts of the repo that `go test` cannot see: `go mod tidy
-  -diff` (a PR whose `go.mod`/`go.sum` are not tidy fails), `bash -n` plus ShellCheck on
-  [test/e2e/run.sh](test/e2e/run.sh) and `.github/scripts/*.sh` — which live outside the Go
-  toolchain entirely, so nothing else would notice them breaking — and `actionlint` on the workflows. ShellCheck is installed from a
-  pinned release **with its SHA-256 checked** rather than taken from the runner image, because an
-  image-provided version silently changes what the check accepts; `actionlint` then reuses that same
-  binary for the `run:` blocks. Every job carries a `timeout-minutes`, and `ci.yml` uses a per-ref
-  `concurrency` group with `cancel-in-progress: true` so a new push stops the previous PR run —
-  `release.yml` deliberately does the opposite (see the CI bullet below).
-- **Pinned tool versions are maintained by hand, and CI checks they agree.** Dependabot covers
-  action SHAs and `go.mod`; it does not see a `version:` input handed to an action, a
-  `go run tool@vX`, or the ShellCheck release the lint job downloads. Those live in more than one
-  place each (workflow + README, or `verify.yml` + `release.yml` for GoReleaser), so
-  [.github/scripts/check-tool-pins.sh](.github/scripts/check-tool-pins.sh) compares every copy and
-  fails when they diverge — that divergence is exactly what #73 was. Bump a tool in **all** the
-  places at once; the script also fails when it cannot read a version at all, so changing the
-  spelling of a pin does not quietly disable the check.
-- CI checks live in [.github/workflows/verify.yml](.github/workflows/verify.yml), which is
-  `workflow_call`-only: [ci.yml](.github/workflows/ci.yml) calls it on `pull_request`/`push` to
-  main, and [release.yml](.github/workflows/release.yml) calls it as `needs:` of the GoReleaser job.
-  **Add new checks there, not in `ci.yml`.** Tag pushes do not match `ci.yml`'s branch filter, so
-  before this split a tag on an untested (or not-even-on-main) commit produced a fully signed
-  release; signing and provenance attest *which commit was built*, never that it passed anything.
-  The called workflow checks out the same ref as its caller, so the verified SHA is the SHA
-  GoReleaser builds. Every checkout in the repository passes `persist-credentials: false`: these
-  jobs compile and run the code from a pull request, and there is no reason for that code to be
-  able to read the token `actions/checkout` would otherwise leave in `.git/config` (nothing here
-  does an authenticated git operation — GoReleaser authenticates through `GITHUB_TOKEN` in the
-  environment). Note the consequence of gating on `govulncheck`: an advisory published after a
-  tag blocks re-running that release until the dependency (or the Go toolchain in `go.mod`) is
-  bumped. Other properties of `release.yml` are deliberate too. Its `concurrency` group is the
-  **fixed** string `release`, not one derived from `github.ref`: a per-tag group is a different
-  group for every tag, so two tags pushed back to back would run GoReleaser concurrently against
-  the same release list. And the `guard` job (which `verify` needs, so nothing else starts before
-  it) requires the tag's commit to be an ancestor of `main` — passing checks alone would otherwise
-  let a branch that never reached main produce a signed, attested release.
-  The job's last step publishes a signed [packslip](https://packslip.dev) manifest
-  (`packslip.sigstore.json`), which mise's `packslip:` backend reads instead of guessing from file
-  names. It only covers the release its own tag run builds: a past release gets a manifest only
-  from a separate run that passes `tag:` and fetches the archives with `download:`. Such a run
-  records its own `github.sha` as the source commit (the action has no input to override it), so
-  unless it was started from that tag, the manifest names a commit other than the tag's. It uses
-  `attest: link`, so it only points at the provenance the step before it registered: its
-  `artifacts` globs must match that step's `subject-path`, or the links resolve to nothing. The
-  step only runs on a tag, but its output can be checked beforehand by running `packslip create`
-  (signed with a throwaway `packslip keygen` key and `--no-log`) and `packslip show` over the
-  archives from `goreleaser release --snapshot`. Linux archives come out as `libc: gnu` — packslip
-  has no way to drop libc short of `portable`, which drops os/arch too — so a musl host cannot
-  install through `packslip:` even though the binary is static; `github:` still works there.
-- `--image` (`ApplyImageOverrides` in
-  [internal/cloudrun/imageoverride.go](internal/cloudrun/imageoverride.go)) is the **one** field a
-  flag may override, because the image tag is the one part of a manifest that legitimately changes
-  on every deploy. It is registered by `addImageFlag` on `verify` / `diff` / `deploy` — the
-  commands whose answer must describe the same thing — but **not** on `render`, which prints the
-  template expansion without parsing it and would have to round-trip the YAML to apply an override.
-  With no `--image` the manifest bytes are returned untouched, so nothing is reformatted when the
-  flag is unused. The container name may be omitted only when there is exactly one container: with
-  a sidecar, silently rewriting the first one is how you deploy a new proxy build to the app
-  container. `=` is a safe separator because it appears in neither container names nor image
-  references.
-- Flag naming: `-o`/`--output` means **a file to write to** (`render`, `init`). A machine-readable
-  output *format* is `--format text|json` with no shorthand (gcloud's spelling), so the same flag
-  name never means two different things. `addFormatFlag`, `validateFormat`, and `writeFormatted` in
-  [cmd/flags.go](cmd/flags.go) are the shared pieces — validate the format value **before** building
-  the client, like every other local check.
+## Adding a resource kind
+
+Worker pools (#142) are the next kind. The shape to follow:
+
+1. **Probe the real API first**, as jobs were: compare-and-swap on `resourceVersion` (409/400), a
+   dry run that returns the defaults, `observedGeneration`/`Ready` settling, async deletion, the
+   annotations and labels the server manages (they go into the `serverManaged*` lists in
+   cloudrun.go), and every integer field where 0 might differ from leaving it out — the generated
+   types drop a 0 unless the field is in `ForceSendFields` (see `maxRetries` in job.go).
+2. **internal/cloudrun:** a `kindOf[T]` with the API calls, `apiVersion`, `meta`, a `workload`
+   extractor and `status`, plus the hooks it needs. A kind holding a `RevisionTemplate` supplies
+   `template` and reuses [template.go](internal/cloudrun/template.go) for `align`/`scaffold`. Add the
+   type to `resource`; `kindHints` already names `WorkerPool`.
+3. **cmd:** a `target` in [cmd/target.go](cmd/target.go), added to `targets`
+   (`TestTargetsAreComplete` fails on a missing field), a command group with `Args: cobra.NoArgs`
+   and a `RunE` that prints the help (otherwise a mistyped subcommand exits 0), and a config key in
+   [internal/config](internal/config/config.go).
+4. **Docs and E2E:** README (commands, permissions table), a phase in test/e2e.
+
+## CLI conventions
+
+- **stdout is data only.** Diffs, manifests, JSON and execution names go to stdout; status lines,
+  warnings, prompts and errors go to stderr. Commands that confirm print their target
+  (`printTarget`) and prompt on stderr.
+- **Mutations share one flow.** Commands that apply a plan use `addApplyFlags` and `applyPlan`
+  (diff → confirm → apply → wait; an empty diff still waits). Commands with no plan to show
+  (`delete`, `revisions --prune`, `jobs executions cancel`) use `confirmAction`: no TTY and no
+  `--auto-approve` means refuse. `jobs run` has no prompt.
+- **Exit codes** are in [cmd/exit.go](cmd/exit.go): 0 success, 1 error, 2 for `diff --exit-code`
+  differences (printed without an `Error:` line).
+- **Flags.** `-o`/`--output` is a file to write; `--format text|json` is an output format. Validate
+  values before building the client. `--timeout`/`--interval` go through `validateWaitFlags`.
+- **`--format json` is a published interface.** A renamed key keeps its old name alongside, as
+  `revisions` keeps `image` and `jobs status` keeps `completed`.
+- **Positional arguments** are `[name] [manifest]`; each falls back to the config file. A name that
+  is not given and a config that names another kind is an error (`target.resolveName`).
+- **Adding a subcommand:** a `newXCmd(...)` factory with its flags in an options struct, registered
+  on its parent; build it per target when another kind may need it.
+
+## Testing
+
+- API calls are tested against a fake API: `NewClient` appends its `opts` after the default
+  endpoint, so tests inject `option.WithEndpoint` + `option.WithHTTPClient` (`newTestClient` in
+  internal/cloudrun, `startFakeAPI` + `clientOptions` in cmd). Add a test for every new API call.
+- `executeRoot` runs the root command with stdin pinned to an empty reader and the target
+  environment cleared, so results do not depend on the terminal or the developer's environment.
+- A test meant to fail inside `RunE` must get past `loadConfig` first; assert on the error text so
+  it cannot pass by failing earlier.
+- Behaviour-preserving changes: check that a new test fails without the change, or say why it
+  passes on both sides.
+
+## CI and release
+
+- Checks live in [.github/workflows/verify.yml](.github/workflows/verify.yml), called by both
+  `ci.yml` and `release.yml`; add new checks there.
+- Every checkout sets `persist-credentials: false`.
+- Pinned tool versions are bumped by hand in every place they are written;
+  [.github/scripts/check-tool-pins.sh](.github/scripts/check-tool-pins.sh) fails when the copies
+  disagree (it reads the golangci-lint line in this file too).
+- Releases are cut from `main` only: `v*` tags, a guard that the commit is on `main`, the same
+  checks as CI, then GoReleaser, signing, provenance and packslip. The workflow comments explain
+  each choice.
+
+## Writing rules
+
+- Everything written in the repository is in **English**: user-facing strings, code comments (Go,
+  shell, YAML), test names and messages, and documentation. Translate any Japanese comment left from
+  before this rule rather than editing it in Japanese.
+- Commit messages, issues, PR titles and descriptions, and review replies are in **English**. Older
+  history is in Japanese; leave it. The PR title becomes the squash commit's subject on `main`.
+- **Do not write a count unless the number itself matters.** "Twelve subcommands", "three things to
+  know", "CI's third job" summarize a list and go stale silently (README said `eleven` long after
+  `traffic` made it twelve, #114). Name the items or say "the following". "Both" over a list that
+  can grow has the same problem — say "each" or "all of them". Keep a number when it *is* the fact:
+  a timeout, a page limit, a two-way split, "exactly one container".

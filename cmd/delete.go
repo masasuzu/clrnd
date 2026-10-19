@@ -132,7 +132,8 @@ func printDeleteTarget(cmd *cobra.Command, project, region, noun, name string, d
 	printTarget(cmd, "About to delete:", project, region, noun, name, details)
 }
 
-// printTarget lists what a destructive command is about to act on, on stderr, under heading. The
+// printTarget lists what a command is about to act on — the commands that apply a plan, delete,
+// prune or cancel, and jobs run — on stderr, under heading. The
 // project and region are always printed to prevent the accident of acting on the right name after
 // mixing them up.
 func printTarget(cmd *cobra.Command, heading, project, region, noun, name string, details []targetDetail) {

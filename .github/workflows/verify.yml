@@ -58,6 +58,9 @@ jobs:
       # from go.mod). In practice go.mod was still on go1.25.8 and carried 15 reachable
       # vulnerabilities, first found during the pre-release check for v0.3.0. They must be
       # visible here.
+      #
+      # release.yml runs these checks too, so an advisory published after a tag blocks re-running
+      # that release until the dependency (or the Go toolchain in go.mod) is bumped.
       - name: Vulnerability check
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
         env:

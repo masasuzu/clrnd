@@ -46,6 +46,8 @@ type Source struct {
 // Functions are registered per state (the same approach as ecspresso's func_prefix).
 // The default state gets {{ tfstate "addr" }} / {{ tfstatef "fmt" args }}; a named state gets
 // {{ <name>tfstate "addr" }} / {{ <name>tfstatef ... }}, with the name used verbatim as the prefix.
+// A prefix no state was registered for is therefore a text/template parse error ("function ...
+// not defined"), as in ecspresso, and there is no two-argument {{ tfstate "name" "addr" }} form.
 func Render(ctx context.Context, manifest []byte, sources []Source) ([]byte, error) {
 	funcs := template.FuncMap{
 		"env":         envFunc,
