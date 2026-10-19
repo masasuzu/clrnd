@@ -65,7 +65,8 @@ under its own name.
 
 3. Point the test at it, either with `CLRND_E2E_GCLOUD_CONFIG=~/.config/gcloud-clrnd-e2e`
    or by writing that path into `gcloud-config.env` next to this README (one line,
-   git-ignored).
+   git-ignored). A relative path is resolved from the current directory for the
+   variable and from this directory for the file.
 
 The script then sets `CLOUDSDK_CONFIG` for gcloud **and**
 `GOOGLE_APPLICATION_CREDENTIALS` for clrnd: the Go client libraries do not read

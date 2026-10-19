@@ -106,9 +106,12 @@ resolve_project() {
 # libraries do not read CLOUDSDK_CONFIG; they look for ADC only at
 # ~/.config/gcloud/application_default_credentials.json unless told otherwise.
 resolve_credentials() {
-  local dir="${CLRND_E2E_GCLOUD_CONFIG:-}"
+  # A relative path is taken from where it was written: the current directory for the variable,
+  # this directory for gcloud-config.env.
+  local dir="${CLRND_E2E_GCLOUD_CONFIG:-}" base="$PWD"
   if [ -z "$dir" ] && [ -f "$HERE/gcloud-config.env" ]; then
     dir="$(head -n1 "$HERE/gcloud-config.env" | tr -d '[:space:]')"
+    base="$HERE"
   fi
   if [ -z "$dir" ]; then
     ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
@@ -116,7 +119,11 @@ resolve_credentials() {
     return
   fi
   dir="${dir/#\~/$HOME}"
+  case "$dir" in /*) ;; *) dir="$base/$dir" ;; esac
   [ -d "$dir" ] || die "gcloud config directory $dir does not exist (see test/e2e/README.md, Credentials)"
+  # Absolute from here on: the tests cd into their scratch directories, and both variables below
+  # are read from wherever clrnd and gcloud happen to run.
+  dir="$(cd "$dir" && pwd)" || die "cannot resolve gcloud config directory $dir"
   ADC_FILE="$dir/application_default_credentials.json"
   [ -f "$ADC_FILE" ] || die "$dir has no application default credentials: run" \
     "CLOUDSDK_CONFIG=$dir gcloud auth application-default login --impersonate-service-account <service-account>"
