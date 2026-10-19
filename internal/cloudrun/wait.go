@@ -35,7 +35,8 @@ type WaitOptions struct {
 	// interval given above that is kept as it is.
 	Interval time.Duration
 	// Generation means "wait until this generation or later is observed". Used right after a
-	// deploy to look only at the rollout of the generation it applied. 0 means any generation.
+	// deploy to look only at the rollout of the generation it applied. 0 means the generation the
+	// first read reports, i.e. the definition as it is when the wait starts.
 	Generation int64
 	// OnUpdate is called with a one-line message for display whenever the state changes
 	// (it is also called on the first fetch). nil does nothing.
@@ -44,16 +45,14 @@ type WaitOptions struct {
 	OnRetry func(err error)
 }
 
-// Wait polls until the service settles. It succeeds once Ready=True, and returns a failure as
-// soon as Ready=False (rather than waiting for nothing).
+// Wait polls until the service or job settles. It succeeds once Ready=True, and returns a failure
+// as soon as Ready=False (rather than waiting for nothing).
 // It returns immediately when ctx is cancelled, so Ctrl-C can interrupt it.
 //
 // The returned *Status is the last observed state, and it is returned on error as well (if one
 // was fetched).
-func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*Status, error) {
-	return waitReady(ctx, subject(serviceKind.noun, service), func(ctx context.Context) (*Status, error) {
-		return c.Status(ctx, service)
-	}, opts)
+func (c *Client) Wait(ctx context.Context, kind Kind, name string, opts WaitOptions) (*Status, error) {
+	return kind.wait(ctx, c, name, opts)
 }
 
 // subject is how wait messages name what they wait for, e.g. `service "my-svc"`.
@@ -66,12 +65,22 @@ func subject(noun, name string) string {
 // waited for in the messages.
 func waitReady(ctx context.Context, subject string, fetch func(context.Context) (*Status, error),
 	opts WaitOptions) (*Status, error) {
+	// With no generation given, wait for the one the first read reports: the definition as it is
+	// now. Taking any generation instead let a wait right after a write that had not been observed
+	// yet (deploy --no-wait, then wait) succeed on the previous generation's Ready=True.
+	generation := opts.Generation
 	return poll(ctx, opts, poller[*Status]{
-		fetch:    fetch,
-		progress: func(s *Status) string { return waitProgress(s, opts.Generation) },
-		done:     func(s *Status) (bool, error) { return waitDone(s, subject, opts.Generation) },
+		fetch: func(ctx context.Context) (*Status, error) {
+			s, err := fetch(ctx)
+			if err == nil && generation == 0 {
+				generation = s.Generation
+			}
+			return s, err
+		},
+		progress: func(s *Status) string { return waitProgress(s, generation) },
+		done:     func(s *Status) (bool, error) { return waitDone(s, subject, generation) },
 		interrupted: func(parent, waitCtx context.Context, last *Status, timeout time.Duration, lastErr error) error {
-			return waitInterrupted(parent, waitCtx, subject, last, timeout, opts.Generation, lastErr)
+			return waitInterrupted(parent, waitCtx, subject, last, timeout, generation, lastErr)
 		},
 	})
 }

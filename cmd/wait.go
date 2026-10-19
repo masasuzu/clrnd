@@ -16,47 +16,55 @@ const (
 	defaultRolloutInterval = 2 * time.Second
 )
 
-var (
-	waitProject  string
-	waitRegion   string
-	waitTimeout  time.Duration
-	waitInterval time.Duration
-)
-
-var waitCmd = &cobra.Command{
-	Use:   "wait [service]",
-	Short: "Wait until a service is ready",
-	Long: "Poll the service until its Ready condition becomes True. If it becomes False the\n" +
-		"command fails immediately instead of waiting for the timeout. Progress is reported\n" +
-		"on stderr; nothing is written to stdout. Ctrl-C stops the wait.\n" +
-		"service may be omitted when set in the config file.",
-	Args: cobra.MaximumNArgs(1),
-	RunE: runWait,
+// waitOptions are wait's flags. Each wait command (services, jobs) has its own.
+type waitOptions struct {
+	project  string
+	region   string
+	timeout  time.Duration
+	interval time.Duration
 }
 
-func init() {
-	addTargetFlags(waitCmd, &waitProject, &waitRegion)
-	waitCmd.Flags().DurationVar(&waitTimeout, "timeout", defaultRolloutTimeout, timeoutUsage("the rollout"))
-	waitCmd.Flags().DurationVar(&waitInterval, "interval", defaultRolloutInterval, intervalUsage)
+var waitCmd = newWaitCmd(serviceTarget)
+
+// newWaitCmd builds wait for a target: it waits for what deploy waits for after applying, for
+// when deploy ran with --no-wait or something else changed the resource.
+func newWaitCmd(t target) *cobra.Command {
+	o := &waitOptions{}
+	cmd := &cobra.Command{
+		Use:   fmt.Sprintf("wait [%s]", t.noun),
+		Short: fmt.Sprintf("Wait until a %s is ready", t.noun),
+		Long: fmt.Sprintf("Poll the %[1]s until its Ready condition becomes True. If it becomes False the\n"+
+			"command fails immediately instead of waiting for the timeout. Progress is reported\n"+
+			"on stderr; nothing is written to stdout. Ctrl-C stops the wait.\n"+
+			"%[1]s may be omitted when set in the config file.", t.noun),
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWait(cmd, args, t, o)
+		},
+	}
+	addTargetFlags(cmd, &o.project, &o.region)
+	cmd.Flags().DurationVar(&o.timeout, "timeout", defaultRolloutTimeout, timeoutUsage(t.waitFor))
+	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval, intervalUsage)
+	return cmd
 }
 
-func runWait(cmd *cobra.Command, args []string) error {
-	service, err := resolveService(args)
+func runWait(cmd *cobra.Command, args []string, t target, o *waitOptions) error {
+	name, err := t.resolveName(args)
 	if err != nil {
 		return err
 	}
-	if err := validateWaitFlags(waitTimeout, waitInterval); err != nil {
+	if err := validateWaitFlags(o.timeout, o.interval); err != nil {
 		return err
 	}
-	client, err := newCloudRunClient(cmd, waitProject, waitRegion)
+	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {
 		return err
 	}
-	return waitForRollout(cmd, service, func(ctx context.Context, opts cloudrun.WaitOptions) (*cloudrun.Status, error) {
-		return client.Wait(ctx, service, opts)
+	return waitForRollout(cmd, name, func(ctx context.Context, opts cloudrun.WaitOptions) (*cloudrun.Status, error) {
+		return client.Wait(ctx, t.kind, name, opts)
 	}, cloudrun.WaitOptions{
-		Timeout:  waitTimeout,
-		Interval: waitInterval,
+		Timeout:  o.timeout,
+		Interval: o.interval,
 	})
 }
 

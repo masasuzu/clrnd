@@ -13,9 +13,9 @@ import (
 // exist.
 var jobsExecutionsCmd = &cobra.Command{
 	Use:   "executions",
-	Short: "List and cancel a job's executions",
-	Long: "Commands for the executions of a job: list them, and cancel one that is running.\n" +
-		"Starting an execution is 'clrnd jobs run'.",
+	Short: "List, wait for and cancel a job's executions",
+	Long: "Commands for the executions of a job: list them, wait for one to finish, and cancel one\n" +
+		"that is running. Starting an execution is 'clrnd jobs run'.",
 	// The same as jobsCmd: without a Run, a mistyped command would print the help and exit 0.
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -88,6 +88,7 @@ func init() {
 	addFormatFlag(jobsExecutionsListCmd, &jobsExecutionsListFormat)
 	jobsExecutionsCmd.AddCommand(jobsExecutionsListCmd)
 	jobsExecutionsCmd.AddCommand(jobsExecutionsCancelCmd)
+	jobsExecutionsCmd.AddCommand(newJobsExecutionsWaitCmd())
 }
 
 func runJobsExecutionsList(cmd *cobra.Command, args []string) error {
@@ -155,4 +156,49 @@ func runJobsExecutionsCancel(cmd *cobra.Command, execution string, o *cancelOpti
 		},
 	})
 	return err
+}
+
+// executionWaitOptions are jobs executions wait's flags.
+type executionWaitOptions struct {
+	project  string
+	region   string
+	timeout  time.Duration
+	interval time.Duration
+}
+
+// newJobsExecutionsWaitCmd builds jobs executions wait: the wait jobs run does, for an execution
+// started with jobs run --no-wait (or by anything else). It has jobs run's defaults: no time limit,
+// and stopping the wait never cancels the execution.
+func newJobsExecutionsWaitCmd() *cobra.Command {
+	o := &executionWaitOptions{}
+	cmd := &cobra.Command{
+		Use:   "wait <execution>",
+		Short: "Wait for an execution to finish",
+		Long: "Wait until an execution of a job finishes, as 'clrnd jobs run' does after starting one.\n" +
+			"The command fails when the execution fails or is cancelled, so a CI step can start a job\n" +
+			"with 'clrnd jobs run --no-wait', do something else, and wait for it here. Progress goes\n" +
+			"to stderr; nothing is written to stdout.\n" +
+			"There is no time limit by default; stopping the wait — Ctrl-C, or --timeout — never\n" +
+			"cancels the execution.\n" +
+			"execution is the name 'clrnd jobs run' prints and 'clrnd jobs executions list' shows.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runJobsExecutionsWait(cmd, args[0], o)
+		},
+	}
+	addTargetFlags(cmd, &o.project, &o.region)
+	cmd.Flags().DurationVar(&o.timeout, "timeout", 0, timeoutUsage("the execution to finish"))
+	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval, intervalUsage)
+	return cmd
+}
+
+func runJobsExecutionsWait(cmd *cobra.Command, execution string, o *executionWaitOptions) error {
+	if err := validateWaitFlags(o.timeout, o.interval); err != nil {
+		return err
+	}
+	client, err := newCloudRunClient(cmd, o.project, o.region)
+	if err != nil {
+		return err
+	}
+	return waitForExecution(cmd, client, execution, o.timeout, o.interval)
 }
