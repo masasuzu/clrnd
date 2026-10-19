@@ -61,6 +61,11 @@ type kindOf[T resource] struct {
 	workload  func(T) workload
 	status    func(T) *Status
 
+	// explicit adjusts a strictly parsed manifest for what only the raw manifest can tell: whether
+	// a field was written at all. A zero value and an absent field parse to the same thing. nil
+	// adds nothing.
+	explicit func(manifest []byte, obj T) error
+
 	// The API calls. They return the API's error as is; the callers add what they were doing.
 	get     func(ctx context.Context, c *Client, name string) (T, error)
 	create  func(ctx context.Context, c *Client, obj T, dryRun bool) (T, error)
@@ -95,6 +100,11 @@ func (k *kindOf[T]) parse(manifest []byte) (T, error) {
 	obj := k.newObject()
 	if err := yaml.UnmarshalStrict(manifest, obj); err != nil {
 		return zero, fmt.Errorf("failed to parse the manifest: %w", err)
+	}
+	if k.explicit != nil {
+		if err := k.explicit(manifest, obj); err != nil {
+			return zero, err
+		}
 	}
 	return obj, nil
 }

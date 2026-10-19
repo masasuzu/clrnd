@@ -57,7 +57,8 @@ func liveJob(image string) *run.Job {
 			Template: &run.ExecutionTemplateSpec{
 				Spec: &run.ExecutionSpec{
 					Template: &run.TaskTemplateSpec{
-						Spec: &run.TaskSpec{Containers: []*run.Container{{Image: image}}},
+						// The API always returns maxRetries, filling in 3 when it was left out.
+						Spec: &run.TaskSpec{Containers: []*run.Container{{Image: image}}, MaxRetries: 3},
 					},
 				},
 			},
@@ -297,7 +298,9 @@ func TestJobDiffIgnoresServerManagedFields(t *testing.T) {
 	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
 		return http.StatusOK, liveJob("gcr.io/project/job:v1")
 	})
-	diff, err := c.CompareManifest(context.Background(), KindJob, "my-job", []byte(validJobManifest),
+	// maxRetries is configuration the server defaults, not a field it manages, so write it.
+	manifest := withMaxRetries(validJobManifest, "3")
+	diff, err := c.CompareManifest(context.Background(), KindJob, "my-job", []byte(manifest),
 		"job.yaml", PlanOptions{})
 	if err != nil {
 		t.Fatalf("CompareManifest() error = %v", err)
@@ -430,5 +433,101 @@ func TestVerifyRemoteChecksAJob(t *testing.T) {
 	}
 	if !containsPath(recorded(), "/v1/projects/-/serviceAccounts/runner@p.iam.gserviceaccount.com") {
 		t.Errorf("requests = %v, want the service account looked up", recorded())
+	}
+}
+
+// withMaxRetries writes maxRetries into a job manifest's task spec.
+func withMaxRetries(manifest, value string) string {
+	return strings.Replace(manifest, "          containers:\n",
+		"          maxRetries: "+value+"\n          containers:\n", 1)
+}
+
+// TestJobDeploySendsAnExplicitZeroMaxRetries checks that maxRetries: 0 reaches the API and shows up
+// in the diff. The generated type drops an int64 that is 0, and the API then retries the task
+// three times: a job written not to retry did, and the diff said nothing.
+func TestJobDeploySendsAnExplicitZeroMaxRetries(t *testing.T) {
+	c, api := newTestClient(t, func(*http.Request) (int, interface{}) {
+		return http.StatusOK, liveJob("gcr.io/project/job:v1")
+	})
+	plan, err := c.Plan(context.Background(), KindJob, "my-job", []byte(withMaxRetries(validJobManifest, "0")),
+		PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if !strings.Contains(plan.Diff, "-          maxRetries: 3") || !strings.Contains(plan.Diff, "+          maxRetries: 0") {
+		t.Errorf("diff does not show maxRetries going from 3 to 0:\n%s", plan.Diff)
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if put := lastRequest(t, api, http.MethodPut); !strings.Contains(string(put.Body), `"maxRetries":0`) {
+		t.Errorf("replace body = %s, want maxRetries 0 in it", put.Body)
+	}
+}
+
+// TestJobDeployLeavesAnOmittedMaxRetriesOut checks the other side: a manifest without maxRetries
+// does not send 0, which would turn the API's default of 3 into no retries.
+func TestJobDeployLeavesAnOmittedMaxRetriesOut(t *testing.T) {
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodGet {
+			return http.StatusNotFound, googleAPIError(404, "not found")
+		}
+		return http.StatusOK, liveJob("gcr.io/project/job:v1")
+	})
+	plan, err := c.Plan(context.Background(), KindJob, "my-job", []byte(validJobManifest), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if post := lastRequest(t, api, http.MethodPost); strings.Contains(string(post.Body), "maxRetries") {
+		t.Errorf("create body = %s, want no maxRetries", post.Body)
+	}
+}
+
+// TestJobWithZeroMaxRetriesRoundTrips checks the read side: a job the API reports with maxRetries 0
+// is scaffolded with it, and the scaffold diffs clean against the job. Dropping it there would make
+// the next deploy of that manifest put the retries back.
+func TestJobWithZeroMaxRetriesRoundTrips(t *testing.T) {
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		job := liveJob("gcr.io/project/job:v1")
+		job.Spec.Template.Spec.Template.Spec.MaxRetries = 0
+		return http.StatusOK, job
+	})
+	manifest, err := c.LiveManifest(context.Background(), KindJob, "my-job")
+	if err != nil {
+		t.Fatalf("LiveManifest() error = %v", err)
+	}
+	if !strings.Contains(string(manifest), "maxRetries: 0") {
+		t.Fatalf("scaffolded manifest has no maxRetries: 0:\n%s", manifest)
+	}
+	diff, err := c.CompareManifest(context.Background(), KindJob, "my-job", manifest, "job.yaml", PlanOptions{})
+	if err != nil {
+		t.Fatalf("CompareManifest() error = %v", err)
+	}
+	if diff != "" {
+		t.Errorf("diff of the scaffold against the job = %s, want none", diff)
+	}
+}
+
+// TestJobDiffWithServerDefaultsKeepsAZeroMaxRetries checks the default diff, which compares
+// against the dry run's answer: that answer, too, has to keep the 0 it was sent.
+func TestJobDiffWithServerDefaultsKeepsAZeroMaxRetries(t *testing.T) {
+	var api *fakeAPI
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodPut { // the dry run: the server keeps what it was sent
+			got := api.recorded()
+			return http.StatusOK, json.RawMessage(got[len(got)-1].Body)
+		}
+		return http.StatusOK, liveJob("gcr.io/project/job:v1")
+	})
+	diff, err := c.CompareManifest(context.Background(), KindJob, "my-job",
+		[]byte(withMaxRetries(validJobManifest, "0")), "job.yaml", PlanOptions{ResolveDefaults: true})
+	if err != nil {
+		t.Fatalf("CompareManifest() error = %v", err)
+	}
+	if !strings.Contains(diff, "+          maxRetries: 0") {
+		t.Errorf("diff does not show maxRetries 0:\n%s", diff)
 	}
 }
