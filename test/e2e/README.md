@@ -15,6 +15,8 @@ hand when you change anything that talks to the Cloud Run API.
 
 ## Setup
 
+- `go` and `python3` on `PATH`: the script builds the binary under test, and uses Python to read
+  JSON and edit manifests
 - `gcloud` on `PATH`, authenticated with Application Default Credentials
   (`gcloud auth application-default login`, or better a dedicated config; see
   [Credentials](#credentials))
@@ -101,6 +103,7 @@ KEEP=1 ./run.sh                 # keep the service and job for inspection
 ONLY=current ./run.sh           # only the current-binary service phase (phase 1)
 ONLY=jobs ./run.sh              # only the jobs phase
 OLD_REF=<git-ref> ./run.sh      # also build that ref and compare its behaviour
+ONLY=old OLD_REF=<git-ref> ./run.sh   # only the comparison (phase 2)
 REGION=<region> ./run.sh        # default: asia-northeast1
 WORK_ROOT=<dir> ./run.sh        # parent of the build/scratch dir (default: $TMPDIR)
 CLRND_E2E_GCLOUD_CONFIG=<dir> ./run.sh   # gcloud config dir to act from (see Credentials)

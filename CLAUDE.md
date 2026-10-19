@@ -4,8 +4,8 @@ This file provides shared guidance to Claude Code and OpenAI Codex when working 
 
 ## Overview
 
-`clrnd` is a Go CLI for deploying services to Google Cloud Run. It takes a service name and a
-manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
+`clrnd` is a Go CLI for deploying services and jobs to Google Cloud Run. For a service it takes a
+service name and a manifest file (Knative-style Service YAML) and exposes `verify`, `render`, `diff`, `deploy`,
 `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`, `delete`, and `refresh` subcommands.
 All of them are implemented: the ecspresso-shaped set Cloud Run's model allows, plus `traffic`,
 which has no ecspresso counterpart because splitting traffic between revisions is Cloud Run's own
@@ -50,8 +50,9 @@ revision-name conflicts, asynchronous rollout failures).
   signal and code that ignores the context becomes unkillable. Anything that blocks (a prompt, a
   poll) must select on `ctx.Done()`; `confirm` in [cmd/flags.go](cmd/flags.go) does this by reading
   stdin in a goroutine.
-- [cmd/root.go](cmd/root.go) defines the cobra root command and registers every subcommand in
-  its `init()`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
+- [cmd/root.go](cmd/root.go) defines the cobra root command and registers every top-level
+  subcommand in its `init()`; the `jobs` commands are registered on `jobsCmd` in
+  [cmd/jobs.go](cmd/jobs.go), and `jobs executions list`/`cancel` on `jobsExecutionsCmd`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout. The exception is the commands a job
   shares with a service — `deploy`, `diff`, `verify`, `delete`, `init`: they are built by
   `newDeployCmd(target)` and friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
@@ -67,9 +68,13 @@ revision-name conflicts, asynchronous rollout failures).
   `resolveService` (or `resolveJob`)/`resolveManifest` fill them from the config file when absent (positional →
   config); args fill service first, then manifest. Only the commands that take **both** a
   service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy` (and their `jobs` forms).
-  Every other command uses `MaximumNArgs(1)`: `init`, `status`,
-  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only) and `render` (**manifest
+  The other commands that take a name use `MaximumNArgs(1)`: `init`, `status`,
+  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only), their `jobs`
+  forms and `jobs run` (job only), and `render` (**manifest
   only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
+  `jobs executions cancel` takes exactly one execution (`ExactArgs(1)`: an execution never comes
+  from the config file), and the groups `jobs` and `jobs executions` take none (`NoArgs`, so a
+  mistyped subcommand is an error rather than the help and exit 0).
   `render` does not match the service name, so it calls `resolveManifestAt(args, 0)` rather than
   `resolveManifest`.
 - All Cloud Run access and manifest handling lives in [internal/cloudrun](internal/cloudrun/cloudrun.go).
@@ -285,7 +290,8 @@ revision-name conflicts, asynchronous rollout failures).
   **`kindOf.compareObjects` is the single comparison path**: it aligns the live definition with the
   desired one, normalizes both through `toManifest`, and diffs them (a zero `current` means the
   resource does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
-  `diff`) and `planObject` (used by `deploy`, `rollback`, `refresh`) both go through it, so
+  `diff`) and `planObject` (used by `deploy`, `rollback`, `traffic`, `refresh` and the `jobs`
+  forms) both go through it, so
   the commands can never drift apart. Both also run the same pre-processing before anything is sent
   — `setNamespace` puts the target project on the body — because while server defaults are being
   resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
@@ -327,9 +333,9 @@ revision-name conflicts, asynchronous rollout failures).
   fail with a 409. `deploy` warns too because a CI job that only runs `deploy` would otherwise see
   nothing but the opaque API error. The warning is not a failure: pinning is legitimate for a
   one-shot deploy.
-- `Validate` checks a local manifest with no API access: strict YAML unmarshal into `run.Service`
-  (catches unknown/misspelled fields), required-field checks, and that `metadata.name` matches the
-  service argument. Returns `errors.Join` of all problems so the user sees them at once. The local
+- `Validate` checks a local manifest with no API access: strict YAML unmarshal into the kind's
+  API type (catches unknown/misspelled fields), required-field checks, and that `metadata.name`
+  matches the name argument. Returns `errors.Join` of all problems so the user sees them at once. The local
   `Validate` needs no `--project`/`--region` and no credentials.
 - What a manifest *runs* — containers, volumes, the service account and the template annotations —
   is read through `workload` ([internal/cloudrun/workload.go](internal/cloudrun/workload.go)),
@@ -371,8 +377,8 @@ revision-name conflicts, asynchronous rollout failures).
   empty and `applyPlan` reports "No changes."), and a service whose `spec.traffic` pins every target
   to a specific revision (`servesLatestRevision`) — the state `rollback` leaves behind, where a new
   revision would be created but serve nothing.
-- `delete` (in [cmd/delete.go](cmd/delete.go)) is the one command that destroys something, so it
-  fetches the service first: a missing service fails before any prompt, and what is about to go is
+- `delete` (in [cmd/delete.go](cmd/delete.go)) destroys a whole service or job, so it
+  fetches it first: a missing service fails before any prompt, and what is about to go is
   printed to stderr **with the project and region** — the realistic accident is deleting the right
   service name in the wrong project. It does not use `applyPlan` (there is no diff to show) but
   shares `confirmAction`, so the "no TTY and no `--auto-approve` → refuse" rule is identical.
@@ -476,8 +482,8 @@ revision-name conflicts, asynchronous rollout failures).
   false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
   errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
   out. Which errors those are is `isRetryable` (in
-  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), shared by `Wait` and
-  `WaitDeleted` so the two cannot drift: 408/429/5xx and any error with no HTTP status (a dropped
+  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), shared by every wait loop
+  (`waitReady`, `waitDeleted`, `pollExecution`) so they cannot drift: 408/429/5xx and any error with no HTTP status (a dropped
   connection, DNS, EOF) are retried, every other 4xx returns at once. Waiting out a 400/401/403
   ends in the same failure ten minutes later, having held a CI job the whole time; 404 falls out of
   the same rule (a service that does not exist will not appear). The one 403 that *is* retried is a
@@ -614,14 +620,19 @@ revision-name conflicts, asynchronous rollout failures).
   `finishVerify` is the single place that decides text-vs-JSON, which is why the
   pinned-revision text lives in `pinnedRevisionWarning` (a value) rather than being printed where
   it is discovered.
-  Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`
-  print the diff (or, for `delete`, what is about to go) to stdout as data and their status/prompt
-  lines (`No changes.`, the `[y/N]` prompt, `Aborted.`) to **stderr**; stdout stays data-only. This
+  Exception: the commands that confirm are interactive. Those that apply a plan print the diff to
+  stdout as data, and `revisions --prune` the revisions it is about to delete; their target
+  (`Target:` / `About to delete:` / `About to cancel:`), status and prompt lines (`No changes.`,
+  the `[y/N]` prompt, `Aborted.`) go to **stderr**, so stdout stays data-only. `delete`, `jobs
+  delete` and `jobs executions cancel` have no diff, so all they print goes to stderr. This
   is intentional, not a violation. `jobs run` is not one of them: it prints the execution's name
   on stdout (data a script captures) and has **no prompt** — running a job changes no definition,
   and neither gcloud nor ecspresso asks — so it needs no `--auto-approve` in CI.
-- When adding a subcommand: create `cmd/<name>.go` with a `*cobra.Command` var, set `RunE`, and
-  register it with `rootCmd.AddCommand` in [cmd/root.go](cmd/root.go).
+- When adding a subcommand: create `cmd/<name>.go`, set `RunE`, and register it on its parent
+  (`rootCmd` in [cmd/root.go](cmd/root.go), `jobsCmd` in [cmd/jobs.go](cmd/jobs.go)). Prefer a
+  `newXCmd(...)` factory with its flags in an options struct, as `deploy`/`delete`/`init` and
+  `jobs executions cancel` are, over package-level flag vars: a command that may later serve
+  another kind can then be built once per target.
 - Anything that mutates a service shares [cmd/apply.go](cmd/apply.go): `addApplyFlags` registers
   `--dry-run` / `--auto-approve` / `--no-wait` / `--timeout` / `--interval`, and `applyPlan` runs
   the one flow
@@ -652,13 +663,13 @@ revision-name conflicts, asynchronous rollout failures).
   config a PR validated is not the one that builds the release.
 - Beyond Go, `verify.yml` checks the parts of the repo that `go test` cannot see: `go mod tidy
   -diff` (a PR whose `go.mod`/`go.sum` are not tidy fails), `bash -n` plus ShellCheck on
-  [test/e2e/run.sh](test/e2e/run.sh) — which lives outside the Go toolchain entirely, so nothing
-  else would notice it breaking — and `actionlint` on the workflows. ShellCheck is installed from a
+  [test/e2e/run.sh](test/e2e/run.sh) and `.github/scripts/*.sh` — which live outside the Go
+  toolchain entirely, so nothing else would notice them breaking — and `actionlint` on the workflows. ShellCheck is installed from a
   pinned release **with its SHA-256 checked** rather than taken from the runner image, because an
   image-provided version silently changes what the check accepts; `actionlint` then reuses that same
   binary for the `run:` blocks. Every job carries a `timeout-minutes`, and `ci.yml` uses a per-ref
   `concurrency` group with `cancel-in-progress: true` so a new push stops the previous PR run —
-  `release.yml` deliberately does the opposite (see the release bullet above).
+  `release.yml` deliberately does the opposite (see the CI bullet below).
 - **Pinned tool versions are maintained by hand, and CI checks they agree.** Dependabot covers
   action SHAs and `go.mod`; it does not see a `version:` input handed to an action, a
   `go run tool@vX`, or the ShellCheck release the lint job downloads. Those live in more than one

@@ -7,8 +7,9 @@ import (
 )
 
 // target is the kind of resource a command works on: services (the top-level commands) or jobs
-// (under 'clrnd jobs'). deploy, diff and verify are built once per target from the same code, so
-// what they do for a job cannot drift from what they do for a service.
+// (under 'clrnd jobs'). The commands both kinds have — deploy, diff, verify, delete and init — are
+// built once per target from the same code, so what they do for a job cannot drift from what they
+// do for a service.
 type target struct {
 	kind cloudrun.Kind
 	// noun is what help and messages call one ("service", "job").

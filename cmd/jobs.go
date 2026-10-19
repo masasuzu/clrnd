@@ -6,10 +6,11 @@ import "github.com/spf13/cobra"
 // services, so existing invocations keep working; gcloud spells the group the same way
 // (gcloud run jobs).
 //
-// A job is deployed the same way a service is, so deploy, diff and verify are the services'
-// commands built for jobs (newDeployCmd and friends, which also covers delete and init). What a service has and a job does not —
-// revisions, traffic — has no counterpart here, and what a job has and a service does not — running it —
-// is its own command (jobsRunCmd).
+// A job is deployed, inspected and removed the same way a service is, so deploy, diff, verify,
+// delete and init are the services' commands built for jobs (newDeployCmd and friends). What a
+// service has and a job does not — revisions, traffic — has no counterpart here, and what a job has
+// and a service does not — running it, and its executions — are commands of their own (jobsRunCmd,
+// jobsExecutionsCmd).
 var jobsCmd = &cobra.Command{
 	Use:   "jobs",
 	Short: "Deploy and run Cloud Run jobs",
