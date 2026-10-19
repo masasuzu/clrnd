@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/render"
@@ -354,4 +355,25 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// intervalUsage is --interval's usage text, the same wherever a command waits.
+const intervalUsage = "initial polling interval (it backs off up to 15s)"
+
+// timeoutUsage is --timeout's usage text for a wait for what, e.g. "the rollout".
+func timeoutUsage(what string) string {
+	return "how long to wait for " + what + " (0: no limit)"
+}
+
+// validateWaitFlags checks --timeout and --interval the same way for every command that waits,
+// before the client is built. A negative timeout used to become 10 minutes on some commands and an
+// error on others; 0 now means no limit everywhere.
+func validateWaitFlags(timeout, interval time.Duration) error {
+	if timeout < 0 {
+		return fmt.Errorf("--timeout must not be negative, got %s (0 means no limit)", timeout)
+	}
+	if interval <= 0 {
+		return fmt.Errorf("--interval must be positive, got %s", interval)
+	}
+	return nil
 }

@@ -590,8 +590,8 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 | `--no-server-defaults` | Show the diff against the manifest as written, without resolving Cloud Run's defaults. |
 | `--no-traffic`   | Create the revision without sending traffic to it; the current split is kept. |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
-| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
-| `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+| `--interval`     | Initial polling interval (default `2s`; it backs off up to `15s`). |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`; `0` waits with no limit). |
 
 **`--image` covers the usual CI case**: a manifest committed to the repository, deployed with the
 tag that was just built.
@@ -677,6 +677,9 @@ Cloud Run deletes asynchronously — the request is accepted while the service i
 a little longer — so `delete` waits until it is actually gone. Pass `--no-wait` to return as soon
 as the request is accepted, or `--timeout` to change how long it waits (default `10m`).
 
+Every command that waits treats `--timeout` and `--interval` the same way: a timeout of `0` means no
+limit, a negative timeout and an interval that is not positive are refused before anything is sent.
+
 | Flag             | Description                                                    |
 | ---------------- | ------------------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
@@ -684,8 +687,8 @@ as the request is accepted, or `--timeout` to change how long it waits (default 
 | `--auto-approve` | Delete without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without deleting anything (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the service to disappear. |
-| `--interval`     | How long to wait between polls while the deletion completes (default `2s`). |
-| `--timeout`      | How long to wait for the service to disappear (default `10m`). |
+| `--interval`     | Initial polling interval (default `2s`; it backs off up to `15s`). |
+| `--timeout`      | How long to wait for the service to disappear (default `10m`; `0` waits with no limit). |
 
 ### init
 
@@ -887,8 +890,8 @@ leaves behind, where a new revision would be created but would serve nothing.
 | `--auto-approve`    | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`         | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`         | Return as soon as the request is accepted, without waiting for the rollout. |
-| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
-| `--timeout`         | How long to wait for the rollout to finish (default `10m`).    |
+| `--interval`     | Initial polling interval (default `2s`; it backs off up to `15s`). |
+| `--timeout`         | How long to wait for the rollout to finish (default `10m`; `0` waits with no limit). |
 
 ### rollback
 
@@ -922,8 +925,8 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
-| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
-| `--timeout`      | How long to wait for the rollout to finish (default `10m`).    |
+| `--interval`     | Initial polling interval (default `2s`; it backs off up to `15s`). |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`; `0` waits with no limit). |
 
 A `--revision` that is not `Ready` is a warning on stderr, not an error: the rollback goes ahead.
 Sending traffic to a revision that failed is sometimes what you want (to reproduce a failure), and
@@ -964,8 +967,8 @@ something would move it.
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
-| `--interval`     | How long to wait between rollout polls (default `2s`; it backs off up to `15s`). |
-| `--timeout`      | How long to wait for the rollout to finish (default `10m`). |
+| `--interval`     | Initial polling interval (default `2s`; it backs off up to `15s`). |
+| `--timeout`      | How long to wait for the rollout to finish (default `10m`; `0` waits with no limit). |
 
 ### wait
 
@@ -982,8 +985,8 @@ clrnd wait --timeout 5m --interval 5s
 | ------------ | ------------------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
 | `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
-| `--timeout`  | How long to wait before giving up (default `10m`).             |
-| `--interval` | How long to wait between polls (default `2s`). The interval backs off up to `15s`; a value you set is never shrunk below that cap. |
+| `--timeout`  | How long to wait before giving up (default `10m`; `0` waits with no limit). |
+| `--interval` | Initial polling interval (default `2s`). It backs off up to `15s`; a value you set above that is kept. |
 
 A failed poll is not a failed rollout: a transient error is reported and retried until the timeout,
 because a single 503 would otherwise turn an already-applied deploy into a red CI run. Retried means
@@ -1068,7 +1071,7 @@ clrnd jobs run my-job --args migrate --args --up --env DRY_RUN=1 --task-count 1
 | `--task-count` | Number of tasks for this execution (default: the job's own). |
 | `--task-timeout` | How long each task may run, in whole seconds (default: the job's own). |
 | `--no-wait` | Return as soon as the execution is created. |
-| `--timeout` | Give up waiting after this long. **No limit by default.** |
+| `--timeout` | Give up waiting after this long. **No limit by default** (`0`). |
 | `--interval` | Initial polling interval (default `2s`, backing off up to `15s`). |
 
 The overrides apply to that one execution; the job's definition is unchanged, and running with any
@@ -1109,7 +1112,7 @@ before the cancel took effect, since then nothing was cancelled.
 | ---- | ------- |
 | `0`  | Success. Also what `diff` returns when it found differences, unless `--exit-code` is given, and what any command returns when you answer `n` at a confirmation prompt. |
 | `1`  | Something went wrong. The message is on stderr. |
-| `2`  | `diff --exit-code` only: the command succeeded and there **is** a difference. |
+| `2`  | `diff --exit-code` only: the command succeeded and there **is** a difference. The diff is on stdout, and nothing is printed to stderr. |
 
 The split follows `terraform plan -detailed-exitcode`, so a drift check reads naturally:
 

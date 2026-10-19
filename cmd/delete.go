@@ -51,10 +51,9 @@ func newDeleteCmd(t target) *cobra.Command {
 		"delete without the interactive confirmation prompt (for CI/CD)")
 	cmd.Flags().BoolVar(&o.noWait, "no-wait", false,
 		fmt.Sprintf("return as soon as the request is accepted, without waiting for the %s to disappear", t.noun))
-	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval,
-		"how long to wait between polls while the deletion completes")
+	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval, intervalUsage)
 	cmd.Flags().DurationVar(&o.timeout, "timeout", defaultRolloutTimeout,
-		fmt.Sprintf("how long to wait for the %s to disappear", t.noun))
+		timeoutUsage(fmt.Sprintf("the %s to disappear", t.noun)))
 	return cmd
 }
 
@@ -64,6 +63,9 @@ func runDelete(cmd *cobra.Command, args []string, t target, o *deleteOptions) er
 		return err
 	}
 
+	if err := validateWaitFlags(o.timeout, o.interval); err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {

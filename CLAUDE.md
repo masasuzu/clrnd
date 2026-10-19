@@ -459,6 +459,12 @@ revision-name conflicts, asynchronous rollout failures).
   dropping the key would make an existing `jq '.[].image'` return `null` without an error. Keep
   both in sync in `newRevisions`; new code reads `Images`. Sorting is newest-first by `creationTimestamp`, falling back to the revision name
   (Cloud Run numbers them sequentially) when the timestamp will not parse.
+- **Every wait reads `WaitOptions.Timeout` the same way: 0 means no limit** (`withWaitTimeout`), and
+  the CLI's 10-minute default for a rollout or a deletion is the flag's (`defaultRolloutTimeout`).
+  It used to be 10 minutes inside the rollout and deletion waits and no limit inside the
+  execution wait, so `--timeout 0` meant two things; a negative value was silently 10 minutes on
+  some commands and an error on others. `validateWaitFlags` now refuses a negative `--timeout` and
+  a non-positive `--interval` in every command that waits, before the client is built.
 - `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
   the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
   `status.observedGeneration` reaches the generation being waited for (otherwise the *previous*
@@ -493,8 +499,8 @@ revision-name conflicts, asynchronous rollout failures).
   calls `Client.RunJob` and then `Client.WaitExecution`, which polls the **Execution**, not the job
   (a job stays `Ready=True` throughout a run). `executionDone` decides on the `Completed`
   condition's **status only**: confirmed against the real API, a cancel goes Unknown/`Cancelling`
-  → Unknown with no reason → False/`Cancelled`, so the reason is not reliable mid-change. It differs
-  from `Wait` on purpose: a zero `Timeout` means **no limit** (an execution is bounded
+  → Unknown with no reason → False/`Cancelled`, so the reason is not reliable mid-change. Its CLI default differs
+  from `Wait`'s: `jobs run` passes no timeout at all (an execution is bounded
   by its own task timeout and retries, and a CLI-side default would only fail CI for a job that
   goes on to succeed), and stopping the wait never cancels the execution — every interrupted /
   timed-out message says it keeps running and prints the `clrnd jobs executions cancel`
@@ -590,7 +596,9 @@ revision-name conflicts, asynchronous rollout failures).
   in tests that redirect `SetOut` it lands on **stdout**, so assertions about it must look at both
   streams.
 - Exit codes live in [cmd/exit.go](cmd/exit.go): `ExitCode` maps an error to a code and `main.go`
-  applies it. `diff --exit-code` returns the `errDiffFound` sentinel, which becomes **2**. The split
+  applies it. `diff --exit-code` returns the `errDiffFound` sentinel, which becomes **2** and is the
+  one error `reportError` (in [cmd/root.go](cmd/root.go)) does not print: differences are the
+  result, not a failure. The split
   (0 clean / 1 error / 2 differences) is `terraform plan -detailed-exitcode`'s, chosen so that
   errors keep 1 and existing scripts are unaffected.
 - Subcommands succeed **silently on stdout**: on success they emit only data (e.g. the manifest)
@@ -599,8 +607,11 @@ revision-name conflicts, asynchronous rollout failures).
   `verify`/`deploy`, a `VerifyRemote` check that could not be completed) go to **stderr** and do
   not fail the command — stdout stays data-only, which is what the rule protects.
   `verify --format json` does not break that rule: the result object is the data, so it goes to
-  stdout, while a failure is still returned as an error (cobra prints it to stderr) so the exit
-  code is unchanged. `finishVerify` is the single place that decides text-vs-JSON, which is why the
+  stdout, while a failure is still returned as an error (printed to stderr) so the exit
+  code is unchanged. **Every** failure after the format is validated goes through `finishVerify`,
+  including an unreadable manifest and a template that does not render — those used to return
+  before it, leaving `| jq` with an empty stdout on the commonest CI failure (an unset `must_env`).
+  `finishVerify` is the single place that decides text-vs-JSON, which is why the
   pinned-revision text lives in `pinnedRevisionWarning` (a value) rather than being printed where
   it is discovered.
   Exception: the mutating commands are interactive — `deploy`, `rollback`, `refresh` and `delete`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -50,11 +51,21 @@ func Execute() error {
 		stop()
 	}()
 	err := rootCmd.ExecuteContext(ctx)
-	if err != nil {
-		// Printed here rather than by cobra (SilenceErrors), so the message can be fixed up first.
-		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", errorMessage(err))
-	}
+	reportError(rootCmd.ErrOrStderr(), err)
 	return err
+}
+
+// reportError prints err the way cobra would, as "Error: <message>". Errors are printed here rather
+// than by cobra (SilenceErrors), so the message can be fixed up first (errorMessage).
+//
+// diff --exit-code's "there are differences" is a result, not an error: the diff is on stdout and
+// exit code 2 says the rest, as with git diff --exit-code and terraform plan -detailed-exitcode. An
+// "Error:" line there made a drift check's log read as a failure, so nothing is printed for it.
+func reportError(w io.Writer, err error) {
+	if err == nil || errors.Is(err, errDiffFound) {
+		return
+	}
+	fmt.Fprintln(w, "Error:", errorMessage(err))
 }
 
 // errorMessage is what Execute prints for err: its own text, except that a 404 which did not come

@@ -29,7 +29,7 @@ var rollbackCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(rollbackCmd, &rollbackProject, &rollbackRegion)
-	addApplyFlags(rollbackCmd, &rollbackApply)
+	addApplyFlags(rollbackCmd, &rollbackApply, "the rollout")
 	rollbackCmd.Flags().StringVar(&rollbackRevision, "revision", "",
 		"revision to send traffic to (default: the one before the revision currently serving)")
 }
@@ -41,6 +41,9 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
+	if err := rollbackApply.validate(); err != nil {
+		return err
+	}
 	client, err := newCloudRunClient(cmd, rollbackProject, rollbackRegion)
 	if err != nil {
 		return err

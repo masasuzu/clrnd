@@ -82,52 +82,57 @@ func newVerifyCmd(t target) *cobra.Command {
 }
 
 func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) error {
-	name, err := t.resolveName(args)
-	if err != nil {
-		return err
-	}
-	manifestPath, err := resolveManifest(args)
-	if err != nil {
-		return err
-	}
-	// Validate the output format before creating the client, like the other local checks.
+	// Validate the output format first, like the other local checks, and so that every failure
+	// after it can be reported in that format.
 	if err := validateFormat(o.format); err != nil {
 		return err
 	}
-	ctx := cmd.Context()
-
-	manifest, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to read manifest %s: %w", manifestPath, err)
+	// From here on, every failure goes through finishVerify: for --format json users, any path
+	// that ends with an empty stdout makes `clrnd verify --format json | jq ...` fail on unreadable
+	// output — and a template that does not render (an unset must_env) is the commonest failure
+	// in CI.
+	var result verifyResult
+	fail := func(err error) error {
+		result.Errors = append(result.Errors, strings.Split(err.Error(), "\n")...)
+		return finishVerify(cmd, o.format, result, err)
 	}
-	manifest, err = renderManifest(ctx, manifest, o.tfstate)
+	name, err := t.resolveName(args)
 	if err != nil {
-		return err
+		return fail(err)
 	}
-
-	result := verifyResult{Manifest: manifestPath}
 	if t.isService() {
 		result.Service = name
 	} else {
 		result.Job = name
 	}
+	manifestPath, err := resolveManifest(args)
+	if err != nil {
+		return fail(err)
+	}
+	result.Manifest = manifestPath
+	ctx := cmd.Context()
+
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fail(fmt.Errorf("failed to read manifest %s: %w", manifestPath, err))
+	}
+	manifest, err = renderManifest(ctx, manifest, o.tfstate)
+	if err != nil {
+		return fail(err)
+	}
 
 	// Apply the same overrides so that what gets verified is what deploy applies (the image
-	// existence check also runs against the overridden image). Every failure from here on goes
-	// through finishVerify: for --format json users, any path that ends with an empty stdout makes
-	// `clrnd verify --format json | jq ...` fail on unreadable output.
+	// existence check also runs against the overridden image).
 	manifest, err = cloudrun.ApplyImageOverrides(t.kind, manifest, o.images)
 	if err != nil {
-		result.Errors = strings.Split(err.Error(), "\n")
-		return finishVerify(cmd, o.format, result, err)
+		return fail(err)
 	}
 
 	// Local schema validation always runs. Validate returns an errors.Join, so split it into one
 	// entry per line for the structured form (the text output still prints them together as one
 	// error, as before).
 	if err := cloudrun.Validate(t.kind, manifest, name); err != nil {
-		result.Errors = strings.Split(err.Error(), "\n")
-		return finishVerify(cmd, o.format, result, err)
+		return fail(err)
 	}
 
 	// A pinned revision name is syntactically valid, but the next deploy that changes the template
@@ -136,7 +141,7 @@ func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) er
 	if t.isService() {
 		warning, err := pinnedRevisionWarning(manifest)
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		if warning != "" {
 			result.Warnings = append(result.Warnings, warning)
@@ -145,8 +150,7 @@ func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) er
 
 	if !o.localOnly {
 		if err := verifyRemote(ctx, cmd, t, o, manifest, &result); err != nil {
-			result.Errors = append(result.Errors, err.Error())
-			return finishVerify(cmd, o.format, result, err)
+			return fail(err)
 		}
 	}
 

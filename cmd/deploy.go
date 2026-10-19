@@ -36,7 +36,11 @@ func newDeployCmd(t target) *cobra.Command {
 	addTargetFlags(cmd, &o.project, &o.region)
 	addManifestFlags(cmd, &o.tfstate)
 	addImageFlag(cmd, &o.images)
-	addApplyFlags(cmd, &o.apply)
+	waitFor := "the rollout"
+	if !t.isService() {
+		waitFor = "the job to be ready"
+	}
+	addApplyFlags(cmd, &o.apply, waitFor)
 	addServerDefaultsFlag(cmd, &o.noDefaults)
 	if t.isService() {
 		cmd.Flags().BoolVar(&o.noTraffic, "no-traffic", false,
@@ -123,6 +127,9 @@ func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) er
 		}
 	}
 
+	if err := o.apply.validate(); err != nil {
+		return err
+	}
 	client, err := newCloudRunClient(cmd, o.project, o.region)
 	if err != nil {
 		return err

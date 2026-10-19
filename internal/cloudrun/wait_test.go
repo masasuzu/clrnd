@@ -582,3 +582,21 @@ func TestIsRetryable(t *testing.T) {
 		})
 	}
 }
+
+// TestAZeroTimeoutMeansNoLimit checks the one meaning --timeout 0 has everywhere: no deadline. A
+// rollout wait used to turn 0 into 10 minutes while an execution wait took it as no limit.
+func TestAZeroTimeoutMeansNoLimit(t *testing.T) {
+	if timeout, _ := waitDefaults(WaitOptions{}); timeout != 0 {
+		t.Errorf("waitDefaults(0).timeout = %s, want 0 (no limit)", timeout)
+	}
+	ctx, cancel := withWaitTimeout(context.Background(), 0)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Error("withWaitTimeout(0) set a deadline, want none")
+	}
+	ctx, cancel = withWaitTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Error("withWaitTimeout(1m) set no deadline")
+	}
+}
