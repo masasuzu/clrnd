@@ -25,10 +25,7 @@ var deleteCmd = newDeleteCmd(serviceTarget)
 // newDeleteCmd builds delete for a target.
 func newDeleteCmd(t target) *cobra.Command {
 	o := &deleteOptions{}
-	goes := "the service, all of its revisions,\nand its URL go away"
-	if !t.isService() {
-		goes = "the job and all of its executions go\naway"
-	}
+	goes := t.deleteGoes
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("delete [%s]", t.noun),
 		Short: fmt.Sprintf("Delete a %s", t.noun),
@@ -74,7 +71,7 @@ func runDelete(cmd *cobra.Command, args []string, t target, o *deleteOptions) er
 
 	// Show what is about to be deleted first. A missing resource is detected here, so there is no
 	// confirmation prompt for one that does not exist.
-	details, err := deleteDetails(ctx, client, t, name)
+	details, err := t.deleteDetails(ctx, client, name)
 	if err != nil {
 		return err
 	}
@@ -107,19 +104,22 @@ type targetDetail struct {
 	label, value string
 }
 
-// deleteDetails fetches the resource (failing when it does not exist) and returns what is worth
-// showing about it before it goes: a service's URL, a job's executions.
-func deleteDetails(ctx context.Context, client *cloudrun.Client, t target, name string) ([]targetDetail, error) {
-	if t.isService() {
-		status, err := client.Status(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-		if status.URL == "" {
-			return nil, nil
-		}
-		return []targetDetail{{"url", status.URL}}, nil
+// serviceDeleteDetails fetches the service (failing when it does not exist) and returns its URL,
+// which goes with it.
+func serviceDeleteDetails(ctx context.Context, client *cloudrun.Client, name string) ([]targetDetail, error) {
+	status, err := client.Status(ctx, name)
+	if err != nil {
+		return nil, err
 	}
+	if status.URL == "" {
+		return nil, nil
+	}
+	return []targetDetail{{"url", status.URL}}, nil
+}
+
+// jobDeleteDetails fetches the job (failing when it does not exist) and returns how many
+// executions go with it.
+func jobDeleteDetails(ctx context.Context, client *cloudrun.Client, name string) ([]targetDetail, error) {
 	status, err := client.GetJobStatus(ctx, name)
 	if err != nil {
 		return nil, err

@@ -46,8 +46,8 @@ var verifyCmd = newVerifyCmd(serviceTarget)
 // newVerifyCmd builds verify for a target.
 func newVerifyCmd(t target) *cobra.Command {
 	o := &verifyOptions{}
-	warnings := "warnings (a check that could not be completed) go to stderr"
-	if t.isService() {
+	warnings := "warnings (a check that could not be completed) go to\nstderr"
+	if t.hasRevisions {
 		warnings = "warnings (a pinned revision name, a check\n" +
 			"that could not be completed) go to stderr"
 	}
@@ -100,11 +100,7 @@ func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) er
 	if err != nil {
 		return fail(err)
 	}
-	if t.isService() {
-		result.Service = name
-	} else {
-		result.Job = name
-	}
+	*t.resultName(&result) = name
 	manifestPath, err := resolveManifest(args)
 	if err != nil {
 		return fail(err)

@@ -58,8 +58,12 @@ revision-name conflicts, asynchronous rollout failures).
   `newDeployCmd(target)` and friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
   [cmd/jobs.go](cmd/jobs.go)), with their flags in a per-command options struct instead of package
   vars. A `target` ([cmd/target.go](cmd/target.go)) carries the `cloudrun.Kind`, the noun used in
-  help and messages, and how the name is resolved; anything only a service has (`--no-traffic`, the
-  pinned-revision warning) is gated on `target.isService()`.
+  help and messages, its config key, and **what the kind has, as fields** — `hasTraffic`
+  (`--no-traffic`), `hasRevisions` (the pinned-revision warning), what deploy waits for, what
+  delete shows and removes, init's aliases, the help texts. Commands read those fields and never
+  ask which kind it is (there is no `isService()`): a worker pool is then one more target that
+  says what it has, not a third branch in every command. `TestTargetsAreComplete` fails when a
+  target leaves a field empty.
   `jobs status` and `jobs run` are ordinary commands: a job's state and its executions have nothing
   in common with a service's beyond `Ready`. `jobsCmd` itself has `Args: cobra.NoArgs` and a
   `RunE` that prints the help — without a Run, cobra never validates a group's arguments, so
@@ -269,9 +273,9 @@ revision-name conflicts, asynchronous rollout failures).
   an explicit missing `--config` IS an error — except for `init`, which *writes* the config: it
   carries `Annotations[annotationConfigOptional]`, so `loadConfig` reads an explicit `--config`
   only when it already exists). Config holds `project`, `region`, **one of** `service`
-  and `job` (`config.Load` refuses more than one; `resolveService` refuses a config that names only
-  a job, and `resolveJob` the reverse, so a command of one kind never acts on a same-named resource
-  of the other), `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
+  and `job` (`config.Load` refuses more than one; `target.resolveName` refuses a config that names
+  another kind instead — it checks every target in `targets` — so a command of one kind never acts
+  on a same-named resource of another), `manifest`, and `tfstate` (list of `{name, location}`). For `--tfstate`, a CLI flag (if any)
   replaces the config list, otherwise the config list is used. Relative paths from the config
   (`manifest`, local `tfstate` locations) are resolved against the config file's directory via
   `resolveConfigPath` (`configDir` is set in `loadConfig`); CLI-arg paths stay cwd-relative.
