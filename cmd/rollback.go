@@ -49,7 +49,13 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	revisions, err := client.ListRevisions(ctx, service)
+	// The service is read once: its revisions are listed from it, and the rollback is planned
+	// against the same read it edits.
+	live, err := client.GetService(ctx, service)
+	if err != nil {
+		return err
+	}
+	revisions, err := client.ListServiceRevisions(ctx, live)
 	if err != nil {
 		return err
 	}
@@ -66,10 +72,6 @@ func runRollback(cmd *cobra.Command, args []string) error {
 			target.Name, readyLabelOrUnknown(target))
 	}
 
-	live, err := client.GetService(ctx, service)
-	if err != nil {
-		return err
-	}
 	desired, err := cloudrun.RollbackTarget(live, target.Name)
 	if err != nil {
 		return err
@@ -77,7 +79,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 
 	// desired comes from the live service, so the defaults are already filled in. No resolution is
 	// needed.
-	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
+	plan, err := client.PlanEdit(ctx, live, desired)
 	if err != nil {
 		return err
 	}

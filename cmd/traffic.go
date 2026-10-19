@@ -68,10 +68,15 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// The service is read once; everything below works on that read.
+	live, err := client.GetService(ctx, service)
+	if err != nil {
+		return err
+	}
 	// When a name is given, confirm that the revision belongs to this service. Applying a typo as
 	// "100% to a revision that does not exist" would leave the service unable to serve.
 	if req.Revision != "" {
-		revisions, err := client.ListRevisions(ctx, service)
+		revisions, err := client.ListServiceRevisions(ctx, live)
 		if err != nil {
 			return err
 		}
@@ -86,10 +91,6 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	live, err := client.GetService(ctx, service)
-	if err != nil {
-		return err
-	}
 	desired, err := cloudrun.ShiftTrafficTarget(live, req)
 	if err != nil {
 		return err
@@ -97,7 +98,7 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 
 	// desired comes from the live service, so the defaults are already filled in. No resolution is
 	// needed.
-	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
+	plan, err := client.PlanEdit(ctx, live, desired)
 	if err != nil {
 		return err
 	}

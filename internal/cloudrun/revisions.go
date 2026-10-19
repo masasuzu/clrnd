@@ -2,6 +2,7 @@ package cloudrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,7 +61,16 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 	if err != nil {
 		return nil, err
 	}
+	return c.ListServiceRevisions(ctx, svc)
+}
 
+// ListServiceRevisions is ListRevisions for a service already read, so a command that goes on to
+// edit that service (rollback, traffic) reads it once.
+func (c *Client) ListServiceRevisions(ctx context.Context, svc *run.Service) (Revisions, error) {
+	if svc == nil || svc.Metadata == nil || svc.Metadata.Name == "" {
+		return nil, errors.New("no service to list the revisions of")
+	}
+	service := svc.Metadata.Name
 	selector := fmt.Sprintf("%s=%s", serviceLabel, service)
 	items, err := listAll(fmt.Sprintf("revisions of service %q", service),
 		func(token string) ([]*run.Revision, string, error) {

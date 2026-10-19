@@ -213,9 +213,13 @@ revision-name conflicts, asynchronous rollout failures).
   new field the same way before adding it here.
 - Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
   `kindOf.planObject` (`Get` the live object, compute the `Diff` of live vs desired; `Create` when
-  404 via `isNotFound`/`googleapi.Error`). `Client.PlanService` is `planObject` for services, the
-  entry for commands that edit the live definition rather than a manifest — `rollback`, `traffic`
-  and `refresh`. `planObject` also copies the
+  404 via `isNotFound`/`googleapi.Error`), which reads the live object and hands over to
+  `planAgainst`. The commands that edit the live definition rather than apply a manifest —
+  `rollback`, `traffic` and `refresh` — read the service **once** and call `Client.PlanEdit(ctx,
+  live, desired)`, which plans against that same read (`planAgainst`, no second GET);
+  `ListServiceRevisions` lists revisions from it too. They used to read it up to three times, so
+  the diff could describe a newer state than the one edited (`TestLiveEditsReadTheServiceOnce`).
+  `planAgainst` also copies the
   `resourceVersion` of the object it just fetched onto `desired` (`setResourceVersion`), so **every
   write is a compare-and-swap against the exact state the diff was computed from**. Verified against
   the real API, for services and jobs alike: a write with no `resourceVersion` is accepted as an
