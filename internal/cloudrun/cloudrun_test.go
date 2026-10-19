@@ -377,7 +377,7 @@ spec:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := RevisionName([]byte(tt.manifest))
+			got, err := RevisionName(KindService, []byte(tt.manifest))
 			if err != nil {
 				t.Fatalf("RevisionName() error = %v", err)
 			}

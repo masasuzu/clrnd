@@ -172,7 +172,12 @@ revision-name conflicts, asynchronous rollout failures).
   points take the kind: `Validate`, `CheckSyntax`, `ApplyImageOverrides`, `VerifyRemote`,
   `Client.Plan`, `Client.CompareManifest`. `Kind`'s methods are unexported so nothing outside the
   package can add one. A worker pool would be another `kindOf` (its v1 API shares the Service's
-  `RevisionTemplate`). Jobs were confirmed against the real API before being put on this path: the
+  `RevisionTemplate`). Everything about revisions is written against that template in
+  [internal/cloudrun/template.go](internal/cloudrun/template.go) — the pinned name
+  (`revisionNameOf`/`withRevisionName`), what runs (`templateWorkload`), and the `align`/`scaffold`
+  hooks (`alignRevisionNameOf`/`withoutRevisionNameOf`) — so a kind that holds one supplies only
+  how to reach it (`template`, also what `RevisionName(kind, …)` reads; nil for a job) and how to
+  put a changed one back, as the service kind does with `serviceTemplate`/`withServiceTemplate`. Jobs were confirmed against the real API before being put on this path: the
   same CAS semantics, a dry run that returns the defaults, and `observedGeneration`/`Ready` that
   settle the same way.
 - `kindOf.parse` checks the manifest's `kind` **before** the strict parse (`checkManifestKind`):
@@ -322,7 +327,7 @@ revision-name conflicts, asynchronous rollout failures).
   client set it (`gcloud run deploy --revision-suffix`, a Terraform `template.metadata.name`, or a
   manifest that pins one). An existing revision name cannot be reused with a different
   configuration: doing so fails with a 409, sometimes only when the rollout runs. clrnd therefore
-  does not manage revision names: `WithoutRevisionName` (pure — it shallow-copies the
+  does not manage revision names: `WithoutRevisionName` (pure — it copies only the
   Spec/Template/Metadata chain rather than mutating its argument) removes the field from what
   `init` scaffolds, and `alignRevisionName` (the service kind's `align`, called from `compareObjects`) drops the live value
   from the comparison

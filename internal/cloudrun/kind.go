@@ -35,6 +35,7 @@ type Kind interface {
 	liveManifest(ctx context.Context, c *Client, name string) ([]byte, error)
 	remove(ctx context.Context, c *Client, name string, dryRun bool) error
 	waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error
+	revisionName(manifest []byte) (string, error)
 }
 
 // The kinds clrnd deploys.
@@ -89,6 +90,9 @@ type kindOf[T resource] struct {
 	// scaffold adjusts a live definition before init writes it out as a manifest. nil leaves it as
 	// it is.
 	scaffold func(T) T
+	// template returns the revision template the resource holds, for a kind that has revisions
+	// (see template.go). nil for one that has none.
+	template func(T) *run.RevisionTemplate
 }
 
 // Name implements Kind.
@@ -96,6 +100,16 @@ func (k *kindOf[T]) Name() string { return k.name }
 
 // Noun implements Kind.
 func (k *kindOf[T]) Noun() string { return k.noun }
+
+// revisionName returns the revision name the manifest pins; always "" for a kind without
+// revisions.
+func (k *kindOf[T]) revisionName(manifest []byte) (string, error) {
+	obj, err := k.parse(manifest)
+	if err != nil || k.template == nil {
+		return "", err
+	}
+	return revisionNameOf(k.template(obj)), nil
+}
 
 // parse parses a manifest strictly; UnmarshalStrict also catches unknown fields (a misspelled
 // field name and the like).

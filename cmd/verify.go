@@ -137,15 +137,13 @@ func runVerify(cmd *cobra.Command, args []string, t target, o *verifyOptions) er
 
 	// A pinned revision name is syntactically valid, but the next deploy that changes the template
 	// is certain to fail, so warn about it (without failing: for a one-shot deploy it is the right
-	// way to write it). A job has no revisions.
-	if t.isService() {
-		warning, err := pinnedRevisionWarning(manifest)
-		if err != nil {
-			return fail(err)
-		}
-		if warning != "" {
-			result.Warnings = append(result.Warnings, warning)
-		}
+	// way to write it). A kind without revisions (a job) pins none.
+	warning, err := pinnedRevisionWarning(t.kind, manifest)
+	if err != nil {
+		return fail(err)
+	}
+	if warning != "" {
+		result.Warnings = append(result.Warnings, warning)
 	}
 
 	if !o.localOnly {
