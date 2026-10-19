@@ -27,7 +27,7 @@ func newDeployCmd(t target) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("deploy [%s] [manifest]", t.noun),
 		Short: "Deploy a manifest to Cloud Run",
-		Long:  deployLong(t),
+		Long:  t.deployLong,
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDeploy(cmd, args, t, o)
@@ -36,33 +36,18 @@ func newDeployCmd(t target) *cobra.Command {
 	addTargetFlags(cmd, &o.project, &o.region)
 	addManifestFlags(cmd, &o.tfstate)
 	addImageFlag(cmd, &o.images)
-	waitFor := "the rollout"
-	if !t.isService() {
-		waitFor = "the job to be ready"
-	}
-	addApplyFlags(cmd, &o.apply, waitFor)
+	addApplyFlags(cmd, &o.apply, t.waitFor)
 	addServerDefaultsFlag(cmd, &o.noDefaults)
-	if t.isService() {
+	if t.hasTraffic {
 		cmd.Flags().BoolVar(&o.noTraffic, "no-traffic", false,
 			"create the revision without sending traffic to it (keep the current split)")
 	}
 	return cmd
 }
 
-func deployLong(t target) string {
-	if !t.isService() {
-		return "Show the diff against the live job, then (after confirmation) apply the manifest to\n" +
-			"Cloud Run, creating the job if it does not exist or replacing it otherwise. The manifest\n" +
-			"is validated locally before the request is sent. Deploying does not run the job.\n" +
-			"After applying, deploy waits until the job is ready; pass --no-wait to return as soon\n" +
-			"as the request is accepted.\n" +
-			"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
-			"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
-			"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
-			"--image replaces a container image without editing the manifest.\n" +
-			"job and manifest may be omitted when set in the config file."
-	}
-	return "Show the diff against the live service, then (after confirmation) apply the manifest to\n" +
+// serviceDeployLong and jobDeployLong are deploy's help text for each target (target.deployLong).
+const (
+	serviceDeployLong = "Show the diff against the live service, then (after confirmation) apply the manifest to\n" +
 		"Cloud Run, creating the service if it does not exist or replacing it otherwise. The manifest\n" +
 		"is validated locally before the request is sent.\n" +
 		"After applying, deploy waits until the new revision is serving and fails if the rollout\n" +
@@ -76,7 +61,17 @@ func deployLong(t target) string {
 		"split is pinned to the revisions serving it now, so you can move traffic over afterwards\n" +
 		"with 'clrnd traffic'.\n" +
 		"service and manifest may be omitted when set in the config file."
-}
+	jobDeployLong = "Show the diff against the live job, then (after confirmation) apply the manifest to\n" +
+		"Cloud Run, creating the job if it does not exist or replacing it otherwise. The manifest\n" +
+		"is validated locally before the request is sent. Deploying does not run the job.\n" +
+		"After applying, deploy waits until the job is ready; pass --no-wait to return as soon\n" +
+		"as the request is accepted.\n" +
+		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
+		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
+		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
+		"--image replaces a container image without editing the manifest.\n" +
+		"job and manifest may be omitted when set in the config file."
+)
 
 func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) error {
 	name, err := t.resolveName(args)

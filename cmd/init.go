@@ -27,10 +27,7 @@ var initCmd = newInitCmd(serviceTarget)
 // newInitCmd builds init for a target.
 func newInitCmd(t target) *cobra.Command {
 	o := &initOptions{}
-	format := "Knative-style YAML"
-	if !t.isService() {
-		format = "YAML"
-	}
+	format := t.manifestFormat
 	cmd := &cobra.Command{
 		Use:   fmt.Sprintf("init [%s]", t.noun),
 		Short: fmt.Sprintf("Initialize a project from an existing %s", t.noun),
@@ -47,11 +44,9 @@ func newInitCmd(t target) *cobra.Command {
 		// exist yet.
 		Annotations: map[string]string{annotationConfigOptional: ""},
 	}
-	if t.isService() {
-		// init was called load once; the old name keeps working for services, which is all it
-		// ever covered.
-		cmd.Aliases = []string{"load"}
-	}
+	// init was called load once; the old name keeps working for services, which is all it ever
+	// covered (target.initAliases).
+	cmd.Aliases = t.initAliases
 	cmd.Flags().StringVarP(&o.manifest, "output", "o", "manifest.yaml", "manifest file to write")
 	cmd.Flags().BoolVar(&o.force, "force", false, "overwrite existing files")
 	addTargetFlags(cmd, &o.project, &o.region)
@@ -203,11 +198,7 @@ func fileExists(path string) bool {
 // (config.Load).
 func scaffoldConfig(t target, project, region, name, manifest string, tfstate []config.Tfstate) ([]byte, error) {
 	c := config.Config{Project: project, Region: region, Manifest: manifest, Tfstate: tfstate}
-	if t.isService() {
-		c.Service = name
-	} else {
-		c.Job = name
-	}
+	*t.configName(&c) = name
 	out, err := yaml.Marshal(c)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build %s: %w", initConfigFile, err)
