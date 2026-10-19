@@ -56,9 +56,8 @@ func init() {
 	f.DurationVar(&jobsRunTaskTimeout, "task-timeout", 0,
 		"how long each task may run, in whole seconds (default: the job's own)")
 	f.BoolVar(&jobsRunNoWait, "no-wait", false, "return as soon as the execution is created")
-	f.DurationVar(&jobsRunTimeout, "timeout", 0, "give up waiting after this long (default: no limit)")
-	f.DurationVar(&jobsRunInterval, "interval", defaultRolloutInterval,
-		"initial polling interval (it backs off up to 15s)")
+	f.DurationVar(&jobsRunTimeout, "timeout", 0, timeoutUsage("the execution to finish"))
+	f.DurationVar(&jobsRunInterval, "interval", defaultRolloutInterval, intervalUsage)
 }
 
 func runJobsRun(cmd *cobra.Command, args []string) error {
@@ -91,8 +90,8 @@ func runJobsRun(cmd *cobra.Command, args []string) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	if jobsRunTimeout < 0 {
-		return fmt.Errorf("--timeout must not be negative, got %s", jobsRunTimeout)
+	if err := validateWaitFlags(jobsRunTimeout, jobsRunInterval); err != nil {
+		return err
 	}
 
 	client, err := newCloudRunClient(cmd, jobsRunProject, jobsRunRegion)

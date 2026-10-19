@@ -21,17 +21,22 @@ type applyOptions struct {
 }
 
 // addApplyFlags registers the flags shared by the apply flow.
-func addApplyFlags(cmd *cobra.Command, o *applyOptions) {
+// waitFor is what the wait after applying waits for, as the help puts it: "the rollout" for a
+// service, "the job to be ready" for a job, which has no rollout.
+func addApplyFlags(cmd *cobra.Command, o *applyOptions, waitFor string) {
 	cmd.Flags().BoolVar(&o.DryRun, "dry-run", false,
 		"validate the request server-side without applying changes")
 	cmd.Flags().BoolVar(&o.AutoApprove, "auto-approve", false,
 		"apply without the interactive confirmation prompt (for CI/CD)")
 	cmd.Flags().BoolVar(&o.NoWait, "no-wait", false,
-		"return as soon as the request is accepted, without waiting for the rollout")
-	cmd.Flags().DurationVar(&o.Interval, "interval", defaultRolloutInterval,
-		"how long to wait between rollout polls")
-	cmd.Flags().DurationVar(&o.Timeout, "timeout", defaultRolloutTimeout,
-		"how long to wait for the rollout to finish")
+		"return as soon as the request is accepted, without waiting for "+waitFor)
+	cmd.Flags().DurationVar(&o.Interval, "interval", defaultRolloutInterval, intervalUsage)
+	cmd.Flags().DurationVar(&o.Timeout, "timeout", defaultRolloutTimeout, timeoutUsage(waitFor))
+}
+
+// validate checks the flags addApplyFlags registered that can be wrong on their own.
+func (o applyOptions) validate() error {
+	return validateWaitFlags(o.Timeout, o.Interval)
 }
 
 // addServerDefaultsFlag registers --no-server-defaults. It is shared by diff and deploy.

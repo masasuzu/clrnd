@@ -33,7 +33,7 @@ var refreshCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(refreshCmd, &refreshProject, &refreshRegion)
-	addApplyFlags(refreshCmd, &refreshApply)
+	addApplyFlags(refreshCmd, &refreshApply, "the rollout")
 	refreshCmd.Flags().StringVar(&refreshSuffix, "revision-suffix", "",
 		"suffix for the new revision name (default: r<UTC timestamp>)")
 }
@@ -45,6 +45,9 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
+	if err := refreshApply.validate(); err != nil {
+		return err
+	}
 	client, err := newCloudRunClient(cmd, refreshProject, refreshRegion)
 	if err != nil {
 		return err

@@ -11,9 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
 	"google.golang.org/api/googleapi"
+	"path/filepath"
+	"time"
 )
 
 func TestConfirm(t *testing.T) {
@@ -463,5 +466,91 @@ func TestErrorMessageReplacesAnEndpointPage(t *testing.T) {
 	apiErr := fmt.Errorf("failed to get service: %w", &googleapi.Error{Code: 404, Message: "Resource 'x' does not exist."})
 	if got := errorMessage(apiErr); got != apiErr.Error() {
 		t.Errorf("errorMessage(API 404) = %q, want %q", got, apiErr.Error())
+	}
+}
+
+func TestReportError(t *testing.T) {
+	var b bytes.Buffer
+	reportError(&b, fmt.Errorf("failed to get service: %w", errors.New("boom")))
+	if b.String() != "Error: failed to get service: boom\n" {
+		t.Errorf("reportError() printed %q", b.String())
+	}
+	// diff --exit-code's differences are a result: exit code 2, and no "Error:" line.
+	b.Reset()
+	reportError(&b, errDiffFound)
+	reportError(&b, nil)
+	if b.String() != "" {
+		t.Errorf("reportError(errDiffFound / nil) printed %q, want nothing", b.String())
+	}
+}
+
+func TestValidateWaitFlags(t *testing.T) {
+	if err := validateWaitFlags(0, time.Second); err != nil {
+		t.Errorf("validateWaitFlags(0, 1s) = %v; 0 means no limit", err)
+	}
+	if err := validateWaitFlags(-time.Minute, time.Second); err == nil || !strings.Contains(err.Error(), "--timeout must not be negative") {
+		t.Errorf("validateWaitFlags(-1m) = %v, want a refusal", err)
+	}
+	for _, interval := range []time.Duration{0, -time.Second} {
+		if err := validateWaitFlags(time.Minute, interval); err == nil || !strings.Contains(err.Error(), "--interval must be positive") {
+			t.Errorf("validateWaitFlags(interval %s) = %v, want a refusal", interval, err)
+		}
+	}
+}
+
+// TestWaitFlagsAreCheckedBeforeAnyRequest checks that every command that waits refuses a negative
+// --timeout the same way, before building the client. It used to become 10 minutes on some of
+// them and an error on others.
+func TestWaitFlagsAreCheckedBeforeAnyRequest(t *testing.T) {
+	requests := 0
+	startFakeAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	manifest := writeManifest(t, localManifest)
+	target := []string{"--project", "test-project", "--region", "asia-northeast1", "--timeout", "-1s"}
+	for _, args := range [][]string{
+		{"deploy", "my-svc", manifest},
+		{"rollback", "my-svc"},
+		{"refresh", "my-svc"},
+		{"traffic", "my-svc", "--to-latest"},
+		{"wait", "my-svc"},
+		{"delete", "my-svc"},
+		{"jobs", "run", "my-job"},
+		{"jobs", "delete", "my-job"},
+		{"jobs", "executions", "cancel", "my-job-abcde"},
+	} {
+		_, _, err := executeRoot(t, append(args, target...)...)
+		if err == nil || !strings.Contains(err.Error(), "--timeout must not be negative") {
+			t.Errorf("%v --timeout -1s error = %v, want a refusal", args, err)
+		}
+	}
+	if requests != 0 {
+		t.Errorf("%d request(s) reached the API, want none", requests)
+	}
+}
+
+// TestVerifyJSONReportsEveryFailure checks that verify --format json prints its result object even
+// when the manifest cannot be read or rendered: an empty stdout breaks `| jq`, and a template with
+// an unset must_env is the commonest failure in CI.
+func TestVerifyJSONReportsEveryFailure(t *testing.T) {
+	clearTargetEnv(t)
+	templated := writeManifest(t, strings.Replace(localManifest, "gcr.io/project/image:new",
+		`{{ must_env "CLRND_TEST_UNSET_VARIABLE" }}`, 1))
+	for name, args := range map[string][]string{
+		"render failure":   {"verify", "my-svc", templated},
+		"missing manifest": {"verify", "my-svc", filepath.Join(t.TempDir(), "nope.yaml")},
+	} {
+		stdout, _, err := executeRoot(t, append(args, "--format", "json", "--local-only")...)
+		if err == nil {
+			t.Errorf("%s: verify succeeded, want a failure", name)
+		}
+		var got struct {
+			OK     bool     `json:"ok"`
+			Errors []string `json:"errors"`
+		}
+		if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil || got.OK || len(got.Errors) == 0 {
+			t.Errorf("%s: stdout = %q (%v), want a result with ok=false and the error", name, stdout, jerr)
+		}
 	}
 }

@@ -36,15 +36,16 @@ var waitCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(waitCmd, &waitProject, &waitRegion)
-	waitCmd.Flags().DurationVar(&waitTimeout, "timeout", defaultRolloutTimeout,
-		"how long to wait before giving up")
-	waitCmd.Flags().DurationVar(&waitInterval, "interval", defaultRolloutInterval,
-		"initial polling interval (it backs off up to 15s)")
+	waitCmd.Flags().DurationVar(&waitTimeout, "timeout", defaultRolloutTimeout, timeoutUsage("the rollout"))
+	waitCmd.Flags().DurationVar(&waitInterval, "interval", defaultRolloutInterval, intervalUsage)
 }
 
 func runWait(cmd *cobra.Command, args []string) error {
 	service, err := resolveService(args)
 	if err != nil {
+		return err
+	}
+	if err := validateWaitFlags(waitTimeout, waitInterval); err != nil {
 		return err
 	}
 	client, err := newCloudRunClient(cmd, waitProject, waitRegion)

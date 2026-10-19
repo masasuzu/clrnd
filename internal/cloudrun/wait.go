@@ -13,9 +13,10 @@ const (
 	conditionFalse = "False"
 )
 
-// Default values for the wait parameters.
+// Default values for the wait parameters. There is no default timeout here: a zero Timeout means
+// no limit, for every wait, and the CLI's own default (10 minutes for a rollout or a deletion) is
+// the flag's.
 const (
-	defaultWaitTimeout  = 10 * time.Minute
 	defaultWaitInterval = 2 * time.Second
 	// Upper bound on the polling interval. The interval grows gradually and then levels off, so
 	// the API is not hit continuously while waiting out a long startup.
@@ -26,7 +27,9 @@ const (
 
 // WaitOptions controls how Wait behaves. The zero value is usable (defaults are filled in).
 type WaitOptions struct {
-	// Timeout is the upper bound on the whole wait. 0 means 10 minutes.
+	// Timeout is the upper bound on the whole wait. 0 means no limit, as in every wait clrnd has:
+	// it used to mean 10 minutes here and no limit for an execution, so the same --timeout 0 meant
+	// two different things depending on the command.
 	Timeout time.Duration
 	// Interval is the first polling interval. 0 means 2 seconds. It then grows up to 15 seconds; an
 	// interval given above that is kept as it is.
@@ -64,7 +67,7 @@ func subject(noun, name string) string {
 func waitReady(ctx context.Context, subject string, fetch func(context.Context) (*Status, error),
 	opts WaitOptions) (*Status, error) {
 	timeout, interval := waitDefaults(opts)
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	waitCtx, cancel := withWaitTimeout(ctx, timeout)
 	defer cancel()
 
 	var last *Status
@@ -124,7 +127,7 @@ func waitReady(ctx context.Context, subject string, fetch func(context.Context) 
 func (k *kindOf[T]) waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error {
 	what := subject(k.noun, name)
 	timeout, interval := waitDefaults(opts)
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	waitCtx, cancel := withWaitTimeout(ctx, timeout)
 	defer cancel()
 
 	var lastErr error
@@ -182,16 +185,23 @@ func waitDeleteInterrupted(parent, waitCtx context.Context, subject string,
 	return fmt.Errorf("stopped waiting for %s to be deleted: %w", subject, waitCtx.Err())
 }
 
-// waitDefaults fills unset parameters with their default values.
+// waitDefaults fills unset parameters with their default values. Only the interval has one; a
+// timeout of 0 (or less) means no limit.
 func waitDefaults(opts WaitOptions) (timeout, interval time.Duration) {
-	timeout, interval = opts.Timeout, opts.Interval
-	if timeout <= 0 {
-		timeout = defaultWaitTimeout
-	}
+	timeout, interval = max(opts.Timeout, 0), opts.Interval
 	if interval <= 0 {
 		interval = defaultWaitInterval
 	}
 	return timeout, interval
+}
+
+// withWaitTimeout is the context a wait runs under: bounded by timeout, or only by ctx when
+// timeout is 0.
+func withWaitTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 // nextWaitInterval returns the next polling interval, growing it gradually up to the upper bound.

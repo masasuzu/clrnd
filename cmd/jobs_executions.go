@@ -78,10 +78,8 @@ func newJobsExecutionsCancelCmd() *cobra.Command {
 		"cancel without the interactive confirmation prompt (for CI/CD)")
 	cmd.Flags().BoolVar(&o.noWait, "no-wait", false,
 		"return as soon as the request is accepted, without waiting for the execution to stop")
-	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval,
-		"initial polling interval while the execution stops (it backs off up to 15s)")
-	cmd.Flags().DurationVar(&o.timeout, "timeout", defaultRolloutTimeout,
-		"how long to wait for the execution to stop")
+	cmd.Flags().DurationVar(&o.interval, "interval", defaultRolloutInterval, intervalUsage)
+	cmd.Flags().DurationVar(&o.timeout, "timeout", defaultRolloutTimeout, timeoutUsage("the execution to stop"))
 	return cmd
 }
 
@@ -112,8 +110,8 @@ func runJobsExecutionsList(cmd *cobra.Command, args []string) error {
 }
 
 func runJobsExecutionsCancel(cmd *cobra.Command, execution string, o *cancelOptions) error {
-	if o.timeout < 0 {
-		return fmt.Errorf("--timeout must not be negative, got %s", o.timeout)
+	if err := validateWaitFlags(o.timeout, o.interval); err != nil {
+		return err
 	}
 	ctx := cmd.Context()
 	client, err := newCloudRunClient(cmd, o.project, o.region)

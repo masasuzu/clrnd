@@ -34,7 +34,7 @@ var trafficCmd = &cobra.Command{
 
 func init() {
 	addTargetFlags(trafficCmd, &trafficProject, &trafficRegion)
-	addApplyFlags(trafficCmd, &trafficApply)
+	addApplyFlags(trafficCmd, &trafficApply, "the rollout")
 	trafficCmd.Flags().StringVar(&trafficRevision, "to", "",
 		"revision to send traffic to")
 	trafficCmd.Flags().BoolVar(&trafficLatest, "to-latest", false,
@@ -60,6 +60,9 @@ func runTraffic(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := cmd.Context()
+	if err := trafficApply.validate(); err != nil {
+		return err
+	}
 	client, err := newCloudRunClient(cmd, trafficProject, trafficRegion)
 	if err != nil {
 		return err

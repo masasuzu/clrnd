@@ -217,10 +217,11 @@ func (c *Client) GetExecution(ctx context.Context, execution string) (*Execution
 // WaitExecution polls until the execution finishes. It succeeds when Completed becomes True and
 // fails when it becomes False (a failed or cancelled execution).
 //
-// Unlike Wait, a zero Timeout means **no limit**: an execution can legitimately run for hours, and
-// is bounded anyway by the job's own task timeout and retries. Giving up on the CLI side would not
-// stop the execution, so a CLI-side default would only turn a job that later succeeds into a
-// failed CI run. Transient failures to read the state are retried, as in Wait.
+// As in every wait, a zero Timeout means no limit — and here that is also the CLI's default: an
+// execution can legitimately run for hours, and is bounded anyway by the job's own task timeout and
+// retries. Giving up on the CLI side would not stop the execution, so a CLI-side default would only
+// turn a job that later succeeds into a failed CI run. Transient failures to read the state are
+// retried, as in Wait.
 //
 // Stopping the wait — Ctrl-C, or the timeout when one is given — never cancels the execution. The
 // error says so and how to cancel it, because "the command ended" is easily read as "the job
@@ -247,15 +248,7 @@ func (c *Client) pollExecution(ctx context.Context, execution string, opts WaitO
 	if interval <= 0 {
 		interval = defaultWaitInterval
 	}
-	var (
-		waitCtx context.Context
-		cancel  context.CancelFunc
-	)
-	if opts.Timeout > 0 {
-		waitCtx, cancel = context.WithTimeout(ctx, opts.Timeout)
-	} else {
-		waitCtx, cancel = context.WithCancel(ctx)
-	}
+	waitCtx, cancel := withWaitTimeout(ctx, opts.Timeout)
 	defer cancel()
 
 	var last *Execution
