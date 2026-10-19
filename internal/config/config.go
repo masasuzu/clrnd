@@ -1,5 +1,5 @@
 // Package config reads clrnd's config file (YAML).
-// It supplies the fallback values used when a flag or an environment variable is not given.
+// It supplies the fallback values used when a flag is not given.
 package config
 
 import (

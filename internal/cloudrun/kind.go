@@ -240,9 +240,10 @@ func (k *kindOf[T]) lookup(ctx context.Context, c *Client, name string) (T, erro
 	return obj, nil
 }
 
-// planObject computes the diff against live using the desired definition as is. It is the
-// entry point for paths that edit live and apply it without going through a manifest, such as
-// rollback and refresh. The desired metadata.namespace is rewritten to match the target.
+// planObject reads the live definition and computes the plan for desired against it (planAgainst).
+// It serves the manifest paths, plan (deploy) and compare (diff); the commands that edit the live
+// definition instead plan against the read they edited, through PlanEdit. The desired
+// metadata.namespace is rewritten to match the target.
 //
 // desiredLabel heads the desired side of the diff: the name for deploy, the manifest's path for
 // diff.

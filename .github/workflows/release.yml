@@ -121,6 +121,11 @@ jobs:
       # mise's packslip: backend reads and verifies this instead of guessing from file names.
       # It is attached only to the release this tag's run produces, not to past releases.
       # Attaching it to a past release takes a separate run that specifies tag: and download:.
+      # Such a run records its own github.sha as the source commit (the action has no input to
+      # override it), so unless it was started from that tag, the manifest names another commit.
+      # The output can be checked before a tag: packslip keygen (a throwaway key), then
+      # packslip create --no-log and packslip show over the archives from
+      # goreleaser release --snapshot.
       #
       # attest: link only references, by digest, the provenance the previous step registered,
       # and does not attest anything itself (the default, true, would register the same

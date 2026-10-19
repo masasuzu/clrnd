@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// applyOptions holds the options of the apply flow, which every command that changes a service
-// through a plan shares (see applyPlan).
+// applyOptions holds the options of the apply flow, which every command that applies a plan shares
+// (deploy, rollback, traffic, refresh and jobs deploy; see applyPlan).
 type applyOptions struct {
 	DryRun      bool
 	AutoApprove bool

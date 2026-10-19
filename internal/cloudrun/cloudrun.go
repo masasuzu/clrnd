@@ -94,6 +94,11 @@ func parseManifest(manifest []byte) (*run.Service, error) {
 // The lists are shared by every kind. A job records who created and last changed it under
 // run.googleapis.com/ rather than serving.knative.dev/; no service carries those keys, so removing
 // them is harmless there.
+//
+// A key missing from these lists shows up as a diff that never goes away, but only under
+// --no-server-defaults: with server defaults resolved, the dry run fills the key in on both sides
+// and hides the omission. That is why the E2E asserts a clean diff on the --no-server-defaults
+// path.
 var serverManagedAnnotations = []string{
 	"run.googleapis.com/operation-id",
 	"run.googleapis.com/ingress-status",

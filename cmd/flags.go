@@ -78,7 +78,8 @@ func writeFormatted(cmd *cobra.Command, format string, value any, text string) e
 // and is used only by tests, to inject an httptest fake API.
 var clientOptions []option.ClientOption
 
-// newCloudRunClient resolves project/region in the order flag > environment variable > config and
+// newCloudRunClient resolves project/region from the flag, then the config file (never the
+// environment; see resolveProject) and
 // creates a Cloud Run Admin API client. It is the common entry point for subcommands that call the
 // API.
 func newCloudRunClient(cmd *cobra.Command, projectFlag, regionFlag string) (*cloudrun.Client, error) {

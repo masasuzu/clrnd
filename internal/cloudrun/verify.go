@@ -34,7 +34,9 @@ type RemoteCheck struct {
 // reference (host name) itself, the Cloud SQL project is in the connection name, and neither IAM
 // nor Secret Manager takes a region, so there is no other use for it.
 //
-// opts, as with NewClient, is the extension point tests use to inject a fake API.
+// opts, as with NewClient, is the extension point tests use to inject a fake API. Every client
+// here takes the same opts, so one fake server can answer all of these APIs: they are told apart
+// by path.
 func VerifyRemote(ctx context.Context, kind Kind, project, region string, manifest []byte,
 	opts ...option.ClientOption) (*RemoteCheck, error) {
 	// The project and region go into the resource names of every API checked here.
@@ -89,7 +91,8 @@ const (
 //
 // The annotation value can be either a short name (just the connector name) or a full resource
 // name. A short name is completed with the deploy target's project and region: a connector is a
-// regional resource, so this is the one place region is needed.
+// regional resource, so this is the one place region is needed. A full resource name is used as
+// written, so a connector in another project or region is not rewritten to the deploy target's.
 func checkVPCConnector(ctx context.Context, res *RemoteCheck, w workload,
 	project, region string, opts ...option.ClientOption) {
 	connector := w.annotation(vpcConnectorAnnotation)

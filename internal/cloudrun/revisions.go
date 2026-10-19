@@ -114,6 +114,8 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 	// During a rollout the new revision can already be in the list while status.traffic shows no
 	// share for it yet, so left as is, --keep 0 could delete "the version about to serve".
 	// Fill in from status which revisions the declaration can resolve to.
+	// Only when traffic follows the latest revision: once it is pinned by name (after a rollback),
+	// the newest revision really is idle and should stay prunable.
 	if followsLatest && svc.Status != nil {
 		for _, name := range []string{
 			svc.Status.LatestReadyRevisionName,   // the revision latestRevision points to now

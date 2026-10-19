@@ -31,6 +31,9 @@ const privateFileMode os.FileMode = 0o600
 //
 // On Windows the rename fails when another process has the destination open, but that is only
 // returned as a failure; the destination's content is not damaged.
+//
+// Do not reach for a library to close the Windows gap: none can. renameio is Linux-only, and the
+// alternatives call the same os.Rename underneath.
 func writeFilePrivate(path string, data []byte) error {
 	// A destination that is not a regular file, such as /dev/null or a process substitution
 	// (>(cmd)), has no content to replace and no permissions to set. It cannot be renamed over

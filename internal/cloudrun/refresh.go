@@ -84,6 +84,8 @@ func servesLatestRevision(live *run.Service) bool {
 
 // validateRevisionName rejects locally the names Cloud Run would reject. Sending them to the
 // server gives the same result, but this says what is wrong up front, in understandable terms.
+// It does not check the "<service>-" prefix Cloud Run also requires: RefreshTarget builds the name
+// as <service>-<suffix>, so that one holds by construction.
 func validateRevisionName(name string) error {
 	if len(name) > maxRevisionNameLen {
 		return fmt.Errorf(
