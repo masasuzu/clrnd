@@ -33,4 +33,5 @@ func init() {
 	jobsCmd.AddCommand(jobsStatusCmd)
 	jobsCmd.AddCommand(newDeleteCmd(jobTarget))
 	jobsCmd.AddCommand(newInitCmd(jobTarget))
+	jobsCmd.AddCommand(jobsExecutionsCmd)
 }

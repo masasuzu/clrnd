@@ -113,6 +113,8 @@ gcloud auth application-default login
 | `jobs run` | `run.jobs.run` — `run.jobs.runWithOverrides` instead when `--args` / `--env` / `--task-count` / `--task-timeout` is given — plus `run.executions.get` for the wait |
 | `jobs status`, `jobs init` | `run.jobs.get` |
 | `jobs delete` | `run.jobs.get`, `run.jobs.delete` |
+| `jobs executions list` | `run.jobs.get`, `run.executions.list` |
+| `jobs executions cancel` | `run.executions.get`, `run.executions.cancel` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -351,9 +353,6 @@ express. These live next to it and are deliberately out of scope:
   capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
   silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
   or Terraform.
-- **A job's executions as a list.** `clrnd jobs` covers a job from `init` to `delete`, and
-  `jobs run` waits for the execution it starts, but there is no command yet to list a job's
-  executions or cancel one. Use `gcloud run jobs executions list` / `cancel` for those.
 - **Cloud Run worker pools.** A `kind: WorkerPool` manifest is refused with a message saying so.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
@@ -386,7 +385,7 @@ clrnd [command]
 | `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
-| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs delete`, `jobs init`. |
+| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions cancel`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -1047,8 +1046,30 @@ The wait has no time limit by default because the job already bounds itself (its
 retries), and giving up on the CLI side would not stop anything: it would only turn an execution
 that later succeeds into a failed CI step. For the same reason, **stopping the wait — Ctrl-C, or
 `--timeout` — never cancels the execution.** The error says it is still running and prints the
-`gcloud run jobs executions cancel` command that stops it. There is no confirmation prompt, as with
+`clrnd jobs executions cancel` command that stops it. There is no confirmation prompt, as with
 gcloud and ecspresso: running a job changes no definition.
+
+#### Executions
+
+`clrnd jobs executions list [job]` lists a job's executions, newest first, with what each one is
+doing or how it ended, its tasks, and when it was created and completed (`--format json` too). A job
+that does not exist is an error, not an empty list.
+
+```
+EXECUTION     STATUS     TASKS                     CREATED                      COMPLETED
+my-job-x7k2p  Running    0/1 succeeded, 1 running  2026-01-02T03:04:05.123456Z  -
+my-job-9qd4m  Failed     0/1 succeeded, 1 failed   2026-01-01T03:04:05.123456Z  2026-01-01T03:05:01.654321Z
+```
+
+The status is one of `Pending`, `Running`, `Cancelling`, `Succeeded`, `Failed` and `Cancelled`.
+
+`clrnd jobs executions cancel <execution>` stops a running execution; the job itself is unchanged.
+It fetches the execution first, so one that does not exist or has already finished fails before
+anything is asked. It shows the execution with its job, project, region and status, and asks before
+cancelling (`--auto-approve` skips the prompt). Cloud Run has no dry run for a cancel. The cancel
+takes effect shortly after it is accepted, so the command waits until the execution has stopped
+(`--no-wait`, `--timeout`, `--interval` as for `delete`). It fails if the execution succeeded
+before the cancel took effect, since then nothing was cancelled.
 
 ## Exit codes
 

@@ -14,17 +14,6 @@ import (
 // serviceLabel is the label naming the service a revision belongs to. Used to filter the List.
 const serviceLabel = "serving.knative.dev/service"
 
-// listRevisionsPageLimit is how many items a single List fetches. The Continue token walks the
-// whole list.
-const listRevisionsPageLimit = 100
-
-// listRevisionsMaxPages is the upper bound on paging. No real service has more than 100 * 1000
-// revisions, so hitting this only happens when something is wrong, such as the server returning
-// the same token over and over. Without a bound, items grows without limit, and a ctx with no
-// --timeout has no way to stop it. When the bound is hit, it returns an error rather than the
-// truncated list (see the ListRevisions comment for why).
-const listRevisionsMaxPages = 1000
-
 // Revision is a summary of a single revision belonging to a service. It is also the structure of
 // the JSON output.
 type Revision struct {
@@ -62,11 +51,10 @@ type Revisions []Revision
 // ListRevisions returns the revisions belonging to a service, newest first.
 // The traffic split exists only on the Service, so it fetches both and joins them.
 //
-// If paging does not end normally (the same Continue token comes back, or a token remains after
-// the page limit is reached), it returns an error rather than the list read so far. Treating an
-// incomplete list as complete can make rollback miss the current revision or the previous Ready
-// revision and roll back to the wrong version. Even for revisions, which only displays, failing is
-// better than silently missing entries.
+// If paging does not end normally it returns an error rather than the list read so far (see
+// listAll). Treating an incomplete list as complete can make rollback miss the current revision or
+// the previous Ready revision and roll back to the wrong version. Even for revisions, which only
+// displays, failing is better than silently missing entries.
 func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, error) {
 	svc, err := c.GetService(ctx, service)
 	if err != nil {
@@ -74,36 +62,20 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 	}
 
 	selector := fmt.Sprintf("%s=%s", serviceLabel, service)
-	var items []*run.Revision
-	token := ""
-	for page := 0; ; page++ {
-		if page >= listRevisionsMaxPages {
-			return nil, fmt.Errorf("failed to list revisions of service %q: gave up after %d pages "+
-				"with more still to read", service, listRevisionsMaxPages)
-		}
-		call := c.api.Namespaces.Revisions.List(c.parent()).
-			LabelSelector(selector).
-			Limit(listRevisionsPageLimit)
-		if token != "" {
-			call = call.Continue(token)
-		}
-		resp, err := call.Context(ctx).Do()
-		if err != nil {
-			return nil, fmt.Errorf("failed to list revisions of service %q: %w", service, err)
-		}
-		if resp.Metadata == nil || resp.Metadata.Continue == "" {
-			items = append(items, resp.Items...)
-			break
-		}
-		// If the same token comes back, the next page will be the same response. Following it
-		// makes no progress, so stop — but the list so far "has read the same page twice" and
-		// can hold both duplicates and gaps.
-		if resp.Metadata.Continue == token {
-			return nil, fmt.Errorf("failed to list revisions of service %q: pagination did not advance "+
-				"(the API returned the same continue token twice)", service)
-		}
-		items = append(items, resp.Items...)
-		token = resp.Metadata.Continue
+	items, err := listAll(fmt.Sprintf("revisions of service %q", service),
+		func(token string) ([]*run.Revision, string, error) {
+			call := c.api.Namespaces.Revisions.List(c.parent()).LabelSelector(selector).Limit(listPageLimit)
+			if token != "" {
+				call = call.Continue(token)
+			}
+			resp, err := call.Context(ctx).Do()
+			if err != nil {
+				return nil, "", err
+			}
+			return resp.Items, continueToken(resp.Metadata), nil
+		})
+	if err != nil {
+		return nil, err
 	}
 
 	return newRevisions(items, newStatus(svc), pinnedRevisionNames(svc)), nil

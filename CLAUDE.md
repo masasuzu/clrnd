@@ -12,7 +12,7 @@ which has no ecspresso counterpart because splitting traffic between revisions i
 model rather than ECS's. (`init` was formerly `load`; `load`
 remains a cobra alias for `init`.) The subcommand set deliberately tracks ecspresso where Cloud Run's model allows
 (ECS-only commands like `register`/`exec`/`scale` have no Cloud Run analog and are not added).
-Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, `status`, `delete`, `init`, and
+Cloud Run jobs live under `clrnd jobs` (`verify`, `diff`, `deploy`, `status`, `delete`, `init`, `executions list`/`cancel`, and
 `run` with its alias `execute`, gcloud's name for it): the top-level commands stay the services' so existing invocations keep working, and the
 group is spelled the way gcloud spells it (`gcloud run jobs`).
 
@@ -379,7 +379,8 @@ revision-name conflicts, asynchronous rollout failures).
   in `status.traffic` more than once (a percentage entry plus a tag entry), so the shares are summed
   and the tags collected. The list is paged through with the `Continue` token, with
   guards: it stops when the same token comes back (the next page would repeat the last one) and
-  after `listRevisionsMaxPages` pages. Without them a server that keeps returning the same token
+  after `listMaxPages` pages (the guards live in `listAll` in
+  [internal/cloudrun/paging.go](internal/cloudrun/paging.go), shared with the executions list). Without them a server that keeps returning the same token
   grows `items` without bound, and a `ctx` with no deadline has no way to stop it. The guards
   **return an error rather than the partial list**: only an empty `Continue` ends the paging
   normally. A truncated list is not just short — the repeated-token case has read the same page
@@ -447,11 +448,25 @@ revision-name conflicts, asynchronous rollout failures).
   from `Wait` on purpose: a zero `Timeout` means **no limit** (an execution is bounded
   by its own task timeout and retries, and a CLI-side default would only fail CI for a job that
   goes on to succeed), and stopping the wait never cancels the execution — every interrupted /
-  timed-out message says it keeps running and prints the `gcloud run jobs executions cancel`
+  timed-out message says it keeps running and prints the `clrnd jobs executions cancel`
   command. The same transient-error rules (`isRetryable`) apply. `RunOptions.overrides` returns nil
   when nothing is overridden, so a plain run needs only `run.jobs.run`; any override needs
   `run.jobs.runWithOverrides`. Overrides are validated (`RunOptions.Validate`, plus the explicit-0
   checks in `cmd`, since 0 internally means "the job's own") before the client is built.
+- `jobs executions list` / `cancel` ([cmd/jobs_executions.go](cmd/jobs_executions.go),
+  [internal/cloudrun/executions.go](internal/cloudrun/executions.go)) sit in their own group, as in
+  gcloud. `ListExecutions` gets the job first (a typo is an error, not an empty list that reads as
+  "never ran"), filters by the `run.googleapis.com/job` label and pages through `listAll`; the order
+  is sorted here rather than trusted to the API across pages. `executionStatus` names the state from
+  `Completed` plus the `run.googleapis.com/cancelTime` label: confirmed against the real API, a
+  cancel leaves `Completed` Unknown with **no reason** for a while, so only the label tells
+  `Cancelling` from `Running`. `cancel` fetches the execution first and refuses a finished one with
+  its state (the API's own answer is a bare 400 "not running"), prints the target with
+  `printTarget` and confirms with `confirmAction` like `delete` — but has no `--dry-run`, because
+  the API has none for a cancel. It then waits with `WaitExecutionStopped`, the same poll loop as
+  `WaitExecution` (`pollExecution`) with a different end: False is the goal, and True means it
+  succeeded before the cancel took effect, which fails the command. Its interrupted message says
+  the cancel goes on rather than suggesting to cancel again.
 - `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
   is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
