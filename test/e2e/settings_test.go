@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -45,12 +44,15 @@ func firstLine(path string) (string, error) {
 	return strings.TrimSpace(strings.SplitN(string(b), "\n", 2)[0]), nil
 }
 
+// readSettings resolves this directory from the working directory, which go test sets to the
+// package's directory. runtime.Caller would not do: under -trimpath it returns a module path.
 func readSettings() (settings, error) {
-	_, file, _, _ := runtime.Caller(0)
-	return readSettingsIn(filepath.Dir(file), valueOr("CLRND_E2E_CALLER_DIR", mustWorkingDirectory()))
+	here, err := os.Getwd()
+	if err != nil {
+		return settings{}, err
+	}
+	return readSettingsIn(here, valueOr("CLRND_E2E_CALLER_DIR", here))
 }
-
-func mustWorkingDirectory() string { dir, _ := os.Getwd(); return dir }
 
 func absoluteFrom(base, path string) (string, error) {
 	if !filepath.IsAbs(path) {

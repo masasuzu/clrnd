@@ -172,9 +172,6 @@ func TestE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.transcript = transcript
-	if s.api, err = newAPI(c); err != nil {
-		t.Fatal(err)
-	}
 	// Orphan cleanup intentionally operates on a prefix; ordinary cleanup only owns this run's names.
 	if c.cleanupOnly {
 		defer func() {
@@ -190,6 +187,10 @@ func TestE2E(t *testing.T) {
 		return
 	}
 	t.Cleanup(func() { s.cleanup(t) })
+	// After the orphan branch, which uses gcloud alone and must work without ADC.
+	if s.api, err = newAPI(c); err != nil {
+		t.Fatal(err)
+	}
 	s.logWork(t, "work directory: ")
 	s.preflight(t)
 	s.build(t, c.root, s.binary)

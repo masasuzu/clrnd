@@ -96,6 +96,26 @@ func TestHarnessSettings(t *testing.T) {
 		t.Fatalf("ONLY error = %v", err)
 	}
 }
+
+// go test runs in the package directory, and readSettings must find the repository from there
+// even under -trimpath, where runtime.Caller reports a module path instead of a file path.
+func TestHarnessPackageDirectory(t *testing.T) {
+	adcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(adcDir, "application_default_credentials.json"), []byte(`{"type":"service_account"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"PROJECT": "test-project", "REPO": "", "ONLY": "", "OLD_REF": "",
+		"WORK_ROOT": "", "CLRND_E2E_CALLER_DIR": "", "CLRND_E2E_GCLOUD_CONFIG": adcDir} {
+		t.Setenv(key, value)
+	}
+	c, err := readSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(c.root, "go.mod")); err != nil {
+		t.Fatalf("root %s is not the repository: %v", c.root, err)
+	}
+}
 func TestHarnessRedaction(t *testing.T) {
 	text := "project-secret clrnd-e2e-20261019123456-abc-job-x7 https://svc-123456789012.run.app ci@example.com 123456789012 tester@project-secret.iam.gserviceaccount.com"
 	got := redact(text, "project-secret")

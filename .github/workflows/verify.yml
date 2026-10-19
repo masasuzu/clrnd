@@ -49,8 +49,9 @@ jobs:
         run: go test -race ./...
 
       # Build the opt-in E2E suite and exercise its harness without cloud credentials.
+      # -trimpath breaks any path derived from the source file's location, as a user's GOFLAGS may.
       - name: Check the E2E harness offline
-        run: go test -race -tags=e2e ./test/e2e -run '^TestHarness' -count=1
+        run: go test -race -trimpath -tags=e2e ./test/e2e -run '^TestHarness' -count=1
 
       # tfstate-lookup pulls in the AWS SDK, the Azure SDK, go-tfe, go-jsonnet and
       # gojq, so most of the dependency tree is indirect. This is the only thing
