@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -159,16 +160,46 @@ func (l *stateLoader) lookup(addr string) (string, error) {
 			l.st, l.err = tfstate.ReadFile(l.ctx, l.loc)
 		}
 	})
+	shown := redactedLocation(l.loc)
 	if l.err != nil {
-		return "", fmt.Errorf("failed to read tfstate %s: %w", l.loc, l.err)
+		return "", fmt.Errorf("failed to read tfstate %s: %w", shown, scrubbed(l.err, l.loc, shown))
 	}
 
 	obj, err := l.st.Lookup(addr)
 	if err != nil {
-		return "", fmt.Errorf("failed to look up %q in tfstate %s: %w", addr, l.loc, err)
+		return "", fmt.Errorf("failed to look up %q in tfstate %s: %w", addr, shown, scrubbed(err, l.loc, shown))
 	}
 	if obj == nil || obj.Value == nil {
-		return "", fmt.Errorf("%q not found in tfstate %s", addr, l.loc)
+		return "", fmt.Errorf("%q not found in tfstate %s", addr, shown)
 	}
 	return obj.String(), nil
 }
+
+// redactedLocation is a state location as it may be shown: a URL with its password masked. A
+// state served over HTTP with basic auth is read from https://user:token@host/..., every error
+// here names the location, and an error lands on stderr — in CI, the job log. Even a typo in an
+// address, after a successful read, used to print the token.
+func redactedLocation(loc string) string {
+	u, err := url.Parse(loc)
+	if err != nil || u.User == nil {
+		return loc
+	}
+	return u.Redacted()
+}
+
+// scrubbed returns err with every occurrence of raw in its message replaced by shown. The tfstate
+// library's own errors repeat the URL it was given; errors.Is/As still reach err.
+func scrubbed(err error, raw, shown string) error {
+	if raw == shown || !strings.Contains(err.Error(), raw) {
+		return err
+	}
+	return &scrubbedError{msg: strings.ReplaceAll(err.Error(), raw, shown), err: err}
+}
+
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }

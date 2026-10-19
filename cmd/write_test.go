@@ -395,3 +395,85 @@ func TestWriteFileExclusiveCreatesAPrivateFile(t *testing.T) {
 		t.Errorf("mode = %o, want 600", perm)
 	}
 }
+
+// TestInitRecordsTheManifestPathForAnAbsoluteConfig checks -c with an absolute path (what the
+// shell makes of ~/infra/clrnd.yml) and the default, relative manifest. filepath.Rel cannot relate
+// the two, and the fallback recorded "manifest.yaml", which the config then looked for in its own
+// directory.
+func TestInitRecordsTheManifestPathForAnAbsoluteConfig(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	infra := filepath.Join(dir, "infra")
+	if err := os.Mkdir(infra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeRoot(t, "init", "my-svc", "--config", filepath.Join(infra, "clrnd.yml"),
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(infra, "clrnd.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got config.Config
+	if err := yaml.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Manifest != filepath.Join("..", "manifest.yaml") {
+		t.Errorf("manifest = %q, want it relative to the config directory", got.Manifest)
+	}
+}
+
+// TestInitForceKeepsTheTfstateOfTheConfigItReplaces checks that init --force, rewriting the config
+// it read, keeps the states a templated manifest needs. init does not scaffold them, and dropping
+// them broke the next render.
+func TestInitForceKeepsTheTfstateOfTheConfigItReplaces(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	const existing = "project: test-project\nregion: asia-northeast1\nservice: my-svc\n" +
+		"tfstate:\n- location: state/terraform.tfstate\n- name: net_\n  location: s3://bucket/net.tfstate\n"
+	if err := os.WriteFile("clrnd.yml", []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeRoot(t, "init", "--force"); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+	got, err := config.Load(filepath.Join(dir, "clrnd.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tfstate) != 2 || got.Tfstate[0].Location != "state/terraform.tfstate" ||
+		got.Tfstate[1].Name != "net_" || got.Service != "my-svc" {
+		t.Errorf("config after init --force = %+v, want the tfstate list kept", got)
+	}
+}
+
+// TestInitWritesToTheConfigItFound checks that, with no --config, init writes to the config found
+// in the current directory. Writing clrnd.yml next to an existing clrnd.yaml created a second
+// config that silently took precedence over the first.
+func TestInitWritesToTheConfigItFound(t *testing.T) {
+	startInitAPI(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	const existing = "project: test-project\nregion: asia-northeast1\nservice: my-svc\n"
+	if err := os.WriteFile("clrnd.yaml", []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeRoot(t, "init"); err == nil || !strings.Contains(err.Error(), "clrnd.yaml already exists") {
+		t.Errorf("init error = %v, want it to refuse to overwrite clrnd.yaml", err)
+	}
+	if fileExists(filepath.Join(dir, "clrnd.yml")) {
+		t.Error("init created clrnd.yml next to clrnd.yaml")
+	}
+	if _, _, err := executeRoot(t, "init", "--force"); err != nil {
+		t.Fatalf("init --force error = %v", err)
+	}
+	if fileExists(filepath.Join(dir, "clrnd.yml")) {
+		t.Error("init --force created clrnd.yml next to clrnd.yaml")
+	}
+	if got, err := config.Load(filepath.Join(dir, "clrnd.yaml")); err != nil || got.Manifest != "manifest.yaml" {
+		t.Errorf("clrnd.yaml after init --force = %+v, %v; want it rewritten", got, err)
+	}
+}

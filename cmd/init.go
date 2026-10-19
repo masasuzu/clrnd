@@ -65,10 +65,15 @@ func runInit(cmd *cobra.Command, args []string, t target, o *initOptions) error 
 	}
 
 	// When --config is given, write there. If the read location and the write location disagreed,
-	// passing -c infra/clrnd.yml would still produce ./clrnd.yml.
+	// passing -c infra/clrnd.yml would still produce ./clrnd.yml. Without it, write to the config
+	// that was found in the current directory, if any: a clrnd.yml written next to an existing
+	// clrnd.yaml would be the one found next time, silently shadowing it.
 	configFile := initConfigFile
-	if configPath != "" {
+	switch {
+	case configPath != "":
 		configFile = configPath
+	case loadedConfig != "":
+		configFile = loadedConfig
 	}
 
 	// To prevent accidental overwrites, check all the existing files up front, before writing any.
@@ -97,7 +102,7 @@ func runInit(cmd *cobra.Command, args []string, t target, o *initOptions) error 
 	// resolveConfigPath resolves it against the config's directory, so recording it relative to
 	// the cwd would break the path when -c points at another directory.
 	configYAML, err := scaffoldConfig(t, client.Project(), client.Region(), name,
-		manifestPathFor(configFile, o.manifest))
+		manifestPathFor(configFile, o.manifest), keptTfstate(configFile))
 	if err != nil {
 		return err
 	}
@@ -137,11 +142,41 @@ func writeScaffold(path string, data []byte, force bool) error {
 // manifestPathFor returns the manifest's path relative to the config file.
 // When it cannot be made relative (a different volume, etc.), the given path is used as-is.
 func manifestPathFor(configFile, manifest string) string {
-	rel, err := filepath.Rel(filepath.Dir(configFile), manifest)
+	// Both are made absolute first: filepath.Rel cannot relate an absolute path to a relative one
+	// (init -c ~/infra/clrnd.yml, which the shell expands, with the default manifest.yaml), and
+	// falling back to the cwd-relative path recorded a manifest the config would look for in its
+	// own directory, where it is not.
+	dir, err := filepath.Abs(filepath.Dir(configFile))
 	if err != nil {
 		return manifest
 	}
+	abs, err := filepath.Abs(manifest)
+	if err != nil {
+		return manifest
+	}
+	rel, err := filepath.Rel(dir, abs)
+	if err != nil {
+		// Different volumes on Windows: only an absolute path is right from anywhere.
+		return abs
+	}
 	return rel
+}
+
+// keptTfstate returns the tfstate list of the config being overwritten, when init --force writes
+// over the config it read. init scaffolds everything else a config holds, but not the states a
+// templated manifest needs, so rebuilding the file from scratch dropped them, and the next render
+// failed with "function tfstate not defined". The list is written back as it was read: its
+// relative locations are relative to the same directory.
+func keptTfstate(configFile string) []config.Tfstate {
+	if loadedConfig == "" || len(cfg.Tfstate) == 0 {
+		return nil
+	}
+	loaded, err1 := filepath.Abs(loadedConfig)
+	target, err2 := filepath.Abs(configFile)
+	if err1 != nil || err2 != nil || loaded != target {
+		return nil
+	}
+	return cfg.Tfstate
 }
 
 // restoreManifest puts the manifest init rewrote back into its original state.
@@ -166,8 +201,8 @@ func fileExists(path string) bool {
 // config.Config instead of writing it by hand leaves value escaping (when a path contains a colon,
 // etc.) to the YAML library and keeps the schema in step with the reader of clrnd.yml
 // (config.Load).
-func scaffoldConfig(t target, project, region, name, manifest string) ([]byte, error) {
-	c := config.Config{Project: project, Region: region, Manifest: manifest}
+func scaffoldConfig(t target, project, region, name, manifest string, tfstate []config.Tfstate) ([]byte, error) {
+	c := config.Config{Project: project, Region: region, Manifest: manifest, Tfstate: tfstate}
 	if t.isService() {
 		c.Service = name
 	} else {

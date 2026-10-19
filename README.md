@@ -344,6 +344,10 @@ Specific things to know:
   every command that changes something prints the target first. What it cannot do is choose the
   host: the region is checked against the shape of a region before it becomes part of the API's
   host name, so a `region:` written to redirect your access token is refused.
+- **A state URL's password is masked in errors.** A location such as
+  `https://user:token@host/state` is shown as `https://user:xxxxx@host/state` in every error about
+  it, including the ones the tfstate library returns, since errors go to stderr and so to a CI log.
+  Anything else in the URL, such as a token in the query string, is shown as written.
 - **A Terraform state can redirect where clrnd connects.** `tfstate-lookup`, the library behind
   `{{ tfstate }}`, follows the `backend` recorded **inside the state document**. Whoever can write
   that file can therefore make clrnd send your `$TFE_TOKEN` to a host of their choosing, or make an
@@ -693,7 +697,9 @@ the manifest (Knative-style YAML, with server-managed read-only fields such as `
 positional arguments. Existing files are not overwritten unless `--force` is given.
 
 The config is written to `--config` when you pass it (it does not have to exist yet — `init` is what
-creates it), otherwise to `clrnd.yml` in the current directory. The `manifest:` it records is
+creates it), otherwise to the config file found in the current directory (`clrnd.yml` or
+`clrnd.yaml`), or to a new `clrnd.yml` when there is none. `init --force` over an existing config
+keeps its `tfstate:` list, which `init` has no way to scaffold. The `manifest:` it records is
 relative to the config file, so `clrnd init my-service -c infra/clrnd.yml` keeps working from any
 directory (the directory has to exist — `clrnd` writes files, it never creates directories). The files are written with mode `0600`, since a live service definition can contain
 plaintext environment variables. `--force` replaces them through a temporary file, so an

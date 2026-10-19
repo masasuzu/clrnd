@@ -138,9 +138,9 @@ func executeRoot(t *testing.T, args ...string) (stdout, stderr string, err error
 	t.Helper()
 	clearTargetEnv(t)
 
-	savedCfg, savedDir := cfg, configDir
-	t.Cleanup(func() { cfg, configDir = savedCfg, savedDir })
-	cfg, configDir = &config.Config{}, ""
+	savedCfg, savedDir, savedLoaded := cfg, configDir, loadedConfig
+	t.Cleanup(func() { cfg, configDir, loadedConfig = savedCfg, savedDir, savedLoaded })
+	cfg, configDir, loadedConfig = &config.Config{}, "", ""
 
 	resetFlags(rootCmd)
 	t.Cleanup(func() { resetFlags(rootCmd) })
