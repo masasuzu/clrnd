@@ -72,6 +72,8 @@ func runRevisions(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if revisionsPrune {
+		// Pruning deletes, so say where, as delete does.
+		printTarget(cmd, "Target:", client.Project(), client.Region(), "service", service, nil)
 		return pruneRevisions(cmd, client, revisions)
 	}
 	return writeFormatted(cmd, revisionsFormat, revisions, revisions.Text())

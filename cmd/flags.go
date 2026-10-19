@@ -18,25 +18,21 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Environment variables consulted when the project/region flags are not given (gcloud-compatible).
-// Earlier ones take precedence.
-const (
-	envProjectPrimary   = "CLOUDSDK_CORE_PROJECT" // gcloud config core/project
-	envProjectSecondary = "GOOGLE_CLOUD_PROJECT"  // Google client library standard
-	envRegionPrimary    = "CLOUDSDK_RUN_REGION"   // gcloud config run/region
-	envRegionSecondary  = "GOOGLE_CLOUD_REGION"
+// The environment variables gcloud and the Google client libraries read the target from. clrnd
+// does not read them (see resolveProject); they are only named when nothing resolves, so that
+// someone who relied on them learns why the command stopped working.
+var (
+	projectEnvVars = []string{"CLOUDSDK_CORE_PROJECT", "GOOGLE_CLOUD_PROJECT"}
+	regionEnvVars  = []string{"CLOUDSDK_RUN_REGION", "GOOGLE_CLOUD_REGION"}
 )
 
 // addTargetFlags registers the --project / --region flags. They are required, but when not given
-// they fall back to environment variables and the config file, so MarkFlagRequired is not used and
-// resolve* validates them instead. The usage text names those fallbacks too (so --help explains why
-// a command works, or does not, without the flag being passed).
+// they fall back to the config file, so MarkFlagRequired is not used and resolve* validates them
+// instead. The usage text names that fallback too (so --help explains why a command works, or does
+// not, without the flag being passed).
 func addTargetFlags(cmd *cobra.Command, project, region *string) {
-	cmd.Flags().StringVar(project, "project", "",
-		fmt.Sprintf("GCP project ID (env: %s, %s; config: project)", envProjectPrimary, envProjectSecondary))
-	cmd.Flags().StringVar(region, "region", "",
-		fmt.Sprintf("Cloud Run region, e.g. asia-northeast1 (env: %s, %s; config: region)",
-			envRegionPrimary, envRegionSecondary))
+	cmd.Flags().StringVar(project, "project", "", "GCP project ID (config: project)")
+	cmd.Flags().StringVar(region, "region", "", "Cloud Run region, e.g. asia-northeast1 (config: region)")
 }
 
 // Output formats for subcommands that have machine-readable output.
@@ -120,31 +116,50 @@ func resolveConfigPath(p string) string {
 	return filepath.Join(configDir, p)
 }
 
-// resolveProject resolves in the order flag > environment variable > config (the same precedence
-// as gcloud). It is an error when none of them is set.
+// resolveProject resolves the project from the flag, then the config file. It is an error when
+// neither is set.
+//
+// It deliberately does not read $CLOUDSDK_CORE_PROJECT or $GOOGLE_CLOUD_PROJECT, as gcloud does.
+// Those are set by things other than the person deploying: google-github-actions/auth exports the
+// credentials' project, and Cloud Shell sets its own. Read ahead of the config file, they sent a
+// deploy to a project the repository's clrnd.yml did not name, with nothing on screen to say so;
+// read after it, they still would whenever the config leaves the project out. The target of a
+// deploy is named on purpose, on the command line or in the config, or not at all.
 func resolveProject(flag string) (string, error) {
-	if v := firstNonEmpty(flag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project); v != "" {
+	if v := firstNonEmpty(flag, cfg.Project); v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("project is required: set --project, $%s / $%s, or project in the config file", envProjectPrimary, envProjectSecondary)
+	return "", fmt.Errorf("project is required: set --project or project in the config file%s",
+		ignoredEnvHint(projectEnvVars))
 }
 
-// resolveRegion resolves in the order flag > environment variable > config. It is an error when
-// none of them is set.
+// resolveRegion resolves the region from the flag, then the config file, for the same reason as
+// resolveProject. It is an error when neither is set.
 func resolveRegion(flag string) (string, error) {
-	if v := firstNonEmpty(flag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region); v != "" {
+	if v := firstNonEmpty(flag, cfg.Region); v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("region is required: set --region, $%s / $%s, or region in the config file", envRegionPrimary, envRegionSecondary)
+	return "", fmt.Errorf("region is required: set --region or region in the config file%s",
+		ignoredEnvHint(regionEnvVars))
 }
 
-// resolveTargetOptional resolves project/region with the same precedence as
-// resolveProject/resolveRegion, but when either is missing it returns ok=false instead of an
-// error. It is used to run verify's API existence checks "only when a target resolves" (so
-// offline verification is not broken).
+// ignoredEnvHint explains, when one of vars is set, that clrnd no longer reads it. Empty
+// otherwise.
+func ignoredEnvHint(vars []string) string {
+	for _, name := range vars {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return fmt.Sprintf(" ($%s is set, but clrnd does not take the target from the environment)", name)
+		}
+	}
+	return ""
+}
+
+// resolveTargetOptional resolves project/region the same way as resolveProject/resolveRegion, but
+// when either is missing it returns ok=false instead of an error. It is used to run verify's API
+// existence checks "only when a target resolves" (so offline verification is not broken).
 func resolveTargetOptional(projectFlag, regionFlag string) (project, region string, ok bool) {
-	project = firstNonEmpty(projectFlag, os.Getenv(envProjectPrimary), os.Getenv(envProjectSecondary), cfg.Project)
-	region = firstNonEmpty(regionFlag, os.Getenv(envRegionPrimary), os.Getenv(envRegionSecondary), cfg.Region)
+	project = firstNonEmpty(projectFlag, cfg.Project)
+	region = firstNonEmpty(regionFlag, cfg.Region)
 	if project == "" || region == "" {
 		return "", "", false
 	}

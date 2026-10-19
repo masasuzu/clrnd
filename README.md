@@ -186,16 +186,33 @@ clrnd deploy -c clrnd.yml              # uses service + manifest from the config
 clrnd deploy other-svc -c clrnd.yml    # override just the service (positional args fill service, then manifest)
 ```
 
-Resolution order (highest first), matching gcloud:
+Resolution order (highest first):
 
 | Setting  | Order |
 | -------- | ----- |
-| project  | `--project` → `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` → config `project` |
-| region   | `--region` → `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` → config `region` |
+| project  | `--project` → config `project` |
+| region   | `--region` → config `region` |
 | service  | positional `[service]` → config `service` |
 | job      | positional `[job]` → config `job` (the `clrnd jobs` commands) |
 | manifest | positional `[manifest]` → config `manifest` |
 | tfstate  | `--tfstate` (if any given, replaces config) → config `tfstate` |
+
+**clrnd does not take the project or region from the environment.** gcloud reads
+`$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` and `$CLOUDSDK_RUN_REGION` /
+`$GOOGLE_CLOUD_REGION`, and clrnd used to as well, ahead of the config file. Those variables are
+set by things other than the person deploying — `google-github-actions/auth` exports the
+credentials' project, and Cloud Shell sets its own — so they could send a deploy to a project the
+repository's `clrnd.yml` did not name. Name the target with `--project` / `--region` or in the
+config file. When neither is set and one of those variables is, the error says it was ignored.
+
+The project and region are checked locally before anything is sent: the region must look like a
+Cloud Run region (`asia-northeast1`) and the project like a project ID (or number). The region
+becomes part of the API's host name, so this also keeps a config file from sending your access
+token anywhere else (see [Trust boundary](#trust-boundary)).
+
+Every command that changes something prints its target — the service or job, the project and the
+region — on stderr before the diff or the prompt, `--auto-approve` or not, so a CI log records
+where each change went.
 
 The config is parsed strictly: **an unknown key is an error**, not a warning. A misspelled
 `regoin:` fails loudly instead of silently falling back to the environment. A `--config` you pass
@@ -323,6 +340,10 @@ Specific things to know:
 - **A manifest can read any environment variable.** It is a Go template, so
   `{{ env "GITHUB_TOKEN" }}` works anywhere in the file. In CI that means the job's secrets can end
   up in the rendered output (the job log) or in the deployed container's environment.
+- **A config file chooses which project and region clrnd acts on.** That is its job, and it is why
+  every command that changes something prints the target first. What it cannot do is choose the
+  host: the region is checked against the shape of a region before it becomes part of the API's
+  host name, so a `region:` written to redirect your access token is refused.
 - **A Terraform state can redirect where clrnd connects.** `tfstate-lookup`, the library behind
   `{{ tfstate }}`, follows the `backend` recorded **inside the state document**. Whoever can write
   that file can therefore make clrnd send your `$TFE_TOKEN` to a host of their choosing, or make an
@@ -407,10 +428,6 @@ You may still pin a name yourself. If you do, it shows up in `diff` like any oth
 `verify` warns you: Cloud Run cannot recreate an existing revision, so the next deploy that changes
 the template will be rejected. Pinning is only safe for a one-shot deploy.
 
-`--project` and `--region` may be omitted when the corresponding environment variable is set
-(gcloud-compatible): project falls back to `$CLOUDSDK_CORE_PROJECT` then `$GOOGLE_CLOUD_PROJECT`,
-region to `$CLOUDSDK_RUN_REGION` then `$GOOGLE_CLOUD_REGION`. An explicit flag always wins.
-
 ### verify
 
 Validate that a manifest is a well-formed Cloud Run service definition and contains the fields
@@ -444,8 +461,9 @@ set it is skipped and `verify` stays a fully offline lint.
 
 The remote check only **fails** verify when a resource is confirmed missing (the API returns
 not-found). When it cannot reach the API to decide — no credentials, the API is disabled, or the
-caller lacks read permission — it prints a `warning:` to stderr and does **not** fail, so an
-ambient project/region in CI never turns a passing offline lint red.
+caller lacks read permission — it prints a `warning:` to stderr and does **not** fail, so a
+project/region in the config file never turns a passing offline lint red in a CI job without
+credentials.
 
 ```sh
 clrnd verify <service> <manifest> [--project <PROJECT>] [--region <REGION>] [--local-only] [--tfstate <location>]
@@ -512,8 +530,8 @@ clrnd diff <service> <manifest> --project <PROJECT> --region <REGION>
 
 | Flag        | Description                                          |
 | ----------- | ---------------------------------------------------- |
-| `--project` | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project` | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`  | Cloud Run region, e.g. `asia-northeast1`. Required unless `region:` is set in the config file. |
 | `--tfstate` | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--image`   | Override a container image, the same way `deploy` does, so the diff matches what would be applied. |
 | `--no-server-defaults` | Compare against the manifest as written, without resolving Cloud Run's defaults (read-only credentials are enough). |
@@ -559,8 +577,8 @@ clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-
 
 | Flag             | Description                                                    |
 | ---------------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `region:` is set in the config file. |
 | `--tfstate`      | Terraform state for `{{ tfstate }}` placeholders: `<location>` or `<name>=<location>` (repeatable). See [Templating](#templating-with-terraform-state). |
 | `--image`        | Override a container image: `<image>`, or `<container>=<image>` when the manifest has more than one container (repeatable). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
@@ -657,8 +675,8 @@ as the request is accepted, or `--timeout` to change how long it waits (default 
 
 | Flag             | Description                                                    |
 | ---------------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--auto-approve` | Delete without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without deleting anything (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the service to disappear. |
@@ -694,8 +712,8 @@ Flags:
 
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region, e.g. `asia-northeast1`. Required unless `region:` is set in the config file. |
 | `-o`, `--output` | Manifest file to write (default `manifest.yaml`).    |
 | `--force`        | Overwrite existing files.                            |
 | `-c`, `--config` | Config file to write (default `clrnd.yml`). Need not exist yet. |
@@ -758,8 +776,8 @@ clrnd status --format json | jq -r '.conditions[] | select(.type == "Ready") | .
 
 | Flag        | Description                                                    |
 | ----------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--format`  | Output format: `text` (default) or `json`.                     |
 
 ### revisions
@@ -791,8 +809,8 @@ clrnd revisions --format json | jq -r '.[] | select(.percent > 0) | .name'
 
 | Flag        | Description                                                    |
 | ----------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--format`  | Output format: `text` (default) or `json`.                     |
 | `--prune`   | Delete the revisions older than the newest `--keep`.           |
 | `--keep`    | How many of the newest revisions to keep when pruning (default `10`). |
@@ -857,8 +875,8 @@ leaves behind, where a new revision would be created but would serve nothing.
 
 | Flag                | Description                                                    |
 | ------------------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--revision-suffix` | Name the new revision `<service>-<suffix>` instead of `<service>-r<UTC timestamp>`. |
 | `--auto-approve`    | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`         | Validate the request server-side without applying any changes (no prompt). |
@@ -892,8 +910,8 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 
 | Flag             | Description                                                    |
 | ---------------- | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--revision`     | Revision to send traffic to (default: the one before the revision currently serving). |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
@@ -932,8 +950,8 @@ something would move it.
 
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--to`           | Revision to send traffic to.                         |
 | `--to-latest`    | Send traffic to the latest revision, and keep following it. |
 | `--percent`      | Share of the traffic to send (1-100, default `100`). |
@@ -956,8 +974,8 @@ clrnd wait --timeout 5m --interval 5s
 
 | Flag         | Description                                                    |
 | ------------ | ------------------------------------------------------------- |
-| `--project`      | GCP project ID. Required unless `$CLOUDSDK_CORE_PROJECT` / `$GOOGLE_CLOUD_PROJECT` or `project:` in the config file is set. |
-| `--region`       | Cloud Run region. Required unless `$CLOUDSDK_RUN_REGION` / `$GOOGLE_CLOUD_REGION` or `region:` in the config file is set. |
+| `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
+| `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
 | `--timeout`  | How long to wait before giving up (default `10m`).             |
 | `--interval` | How long to wait between polls (default `2s`). The interval backs off up to `15s`; a value you set is never shrunk below that cap. |
 

@@ -20,6 +20,8 @@ import (
 type Kind interface {
 	// Name is the manifest's kind field: "Service" or "Job".
 	Name() string
+	// Noun is what messages call one: "service" or "job".
+	Noun() string
 
 	validateManifest(manifest []byte, name string) error
 	checkSyntax(manifest []byte) error
@@ -85,6 +87,9 @@ type kindOf[T resource] struct {
 
 // Name implements Kind.
 func (k *kindOf[T]) Name() string { return k.name }
+
+// Noun implements Kind.
+func (k *kindOf[T]) Noun() string { return k.noun }
 
 // parse parses a manifest strictly; UnmarshalStrict also catches unknown fields (a misspelled
 // field name and the like).
@@ -416,6 +421,15 @@ type DeployPlan struct {
 	kind    Kind
 	desired any // the definition Apply sends, of kind's API type
 }
+
+// Project returns the project the plan applies to.
+func (p *DeployPlan) Project() string { return p.client.project }
+
+// Region returns the region the plan applies to.
+func (p *DeployPlan) Region() string { return p.client.region }
+
+// Noun returns what messages call the plan's resource: "service" or "job".
+func (p *DeployPlan) Noun() string { return p.kind.Noun() }
 
 // Apply applies the plan to Cloud Run and returns the metadata.generation it applied (0 when the
 // response does not carry one). When dryRun is true, the server only validates. When dryRun is

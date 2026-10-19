@@ -66,6 +66,9 @@ func TestJobsRunEndToEnd(t *testing.T) {
 	if !strings.Contains(stderr, "waiting for my-job-abcde: Completed=True") {
 		t.Errorf("stderr = %q, want the wait reported", stderr)
 	}
+	if !strings.Contains(stderr, "job:     my-job") || !strings.Contains(stderr, "project: test-project") {
+		t.Errorf("stderr = %q, want the job and project it runs in", stderr)
+	}
 	if got := calls(); len(got) < 2 || strings.Contains(got[0], "overrides") {
 		t.Errorf("requests = %q, want a plain run, then the wait", got)
 	}

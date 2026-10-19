@@ -37,6 +37,10 @@ type RemoteCheck struct {
 // opts, as with NewClient, is the extension point tests use to inject a fake API.
 func VerifyRemote(ctx context.Context, kind Kind, project, region string, manifest []byte,
 	opts ...option.ClientOption) (*RemoteCheck, error) {
+	// The project and region go into the resource names of every API checked here.
+	if err := validateTarget(project, region); err != nil {
+		return nil, err
+	}
 	w, err := kind.manifestWorkload(manifest)
 	if err != nil {
 		return nil, err

@@ -216,10 +216,27 @@ revision-name conflicts, asynchronous rollout failures).
 - The v1 namespaces API requires a **regional endpoint** (`https://<region>-run.googleapis.com`
   via `option.WithEndpoint`), so a region is mandatory.
 - `--project`/`--region` are registered via `addTargetFlags` in [cmd/flags.go](cmd/flags.go) and
-  resolved by `resolveProject`/`resolveRegion` with precedence **flag → env → config file**
-  (matching gcloud): env vars are `CLOUDSDK_CORE_PROJECT`→`GOOGLE_CLOUD_PROJECT` and
-  `CLOUDSDK_RUN_REGION`→`GOOGLE_CLOUD_REGION`; the config file (see below) is the lowest fallback.
-  Error if none is set. NOT `MarkFlagRequired` (that would reject the env/config-only case).
+  resolved by `resolveProject`/`resolveRegion` from **the flag, then the config file — never the
+  environment**. gcloud's `CLOUDSDK_CORE_PROJECT`/`GOOGLE_CLOUD_PROJECT`/`CLOUDSDK_RUN_REGION`/
+  `GOOGLE_CLOUD_REGION` used to come between the two; they are set by CI auth actions and Cloud
+  Shell to a project nobody chose as the deploy target, and so sent deploys to the wrong project
+  with nothing on screen to say so. Do not add them back, even as a lowest fallback: a config
+  without `project:` would still pick up the ambient one. They are only *named*
+  (`ignoredEnvHint`) in the "is required" error, for someone who relied on them.
+  Error if neither is set. NOT `MarkFlagRequired` (that would reject the config-only case).
+- The project and region are **validated** (`cloudrun.ValidateRegion` / `ValidateProject`, in
+  [internal/cloudrun/target.go](internal/cloudrun/target.go)) by `NewClient` and `VerifyRemote`,
+  i.e. wherever they are turned into requests. The region becomes the endpoint's **host name**
+  (`regionalEndpoint`), and the client sends the ADC access token there, so an unchecked
+  `region: "attacker.example/"` in a cloned repo's `clrnd.yml` would send the token away (shown
+  with a local server). A well-formed region Cloud Run does not have gets a 404 **web page** from
+  Google's front end rather than an API error; `isNotFound` only counts an API 404 (`isAPIError`),
+  so that is not read as "the service does not exist, create it", and `errorMessage` in
+  [cmd/root.go](cmd/root.go) replaces the page with a hint to check the region. That is why the
+  root has `SilenceErrors` and `Execute` prints errors itself.
+- Every command that writes through `applyPlan`, `revisions --prune` and `jobs run` prints its target
+  (`printTarget`: the name, project and region) on stderr first, as `delete` always has — the
+  realistic accident is the right name in the wrong project.
   `render` needs neither; `verify` accepts them optionally — `resolveTargetOptional` (in
   [cmd/flags.go](cmd/flags.go)) resolves with the same precedence but returns `ok=false` instead of
   erroring, so the API existence check runs only when a target is available.
@@ -319,9 +336,8 @@ revision-name conflicts, asynchronous rollout failures).
   project/region in CI from turning a passing offline lint red. Auth is the same ADC; the IAM/Secret
   Manager clients are subpackages of `google.golang.org/api` (no new module). `cmd/verify.go` runs it
   only when a target resolves and `--local-only` is off. When a target does not resolve it warns
-  **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a half-set
-  environment is skipped silently, so an ambient `CLOUDSDK_*` in CI does not produce noise on every
-  run. `cmd/verify.go` still requires *both* project and region to resolve before running the
+  **only if `--project` or `--region` was passed as a flag** (`cmd.Flags().Changed`); a config
+  file that sets only one of them is skipped silently. `cmd/verify.go` still requires *both* project and region to resolve before running the
   remote checks, even though the region only matters to one of them (resolving a short VPC
   connector name): a half-configured target is
   more likely a mistake than an intent, and quietly reaching for whatever project is ambient is the

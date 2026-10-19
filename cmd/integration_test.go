@@ -120,11 +120,13 @@ func resetFlags(c *cobra.Command) {
 	}
 }
 
-// clearTargetEnv empties the gcloud-compatible environment variables, so that test results do
-// not change when CLOUDSDK_CORE_PROJECT or the like is set in a developer's or CI environment.
+// clearTargetEnv empties the environment variables gcloud reads the target from. clrnd does not
+// read them, but it names one that is set when the target does not resolve, so without this an
+// error message would change when CLOUDSDK_CORE_PROJECT or the like is set in a developer's or CI
+// environment.
 func clearTargetEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{envProjectPrimary, envProjectSecondary, envRegionPrimary, envRegionSecondary} {
+	for _, key := range append(append([]string{}, projectEnvVars...), regionEnvVars...) {
 		t.Setenv(key, "")
 	}
 }
@@ -267,13 +269,22 @@ func TestDeployDryRunEndToEnd(t *testing.T) {
 	})
 
 	manifest := writeManifest(t, localManifest)
-	stdout, _, err := executeRoot(t, "deploy", "my-svc", manifest,
+	stdout, stderr, err := executeRoot(t, "deploy", "my-svc", manifest,
 		"--project", "test-project", "--region", "asia-northeast1", "--dry-run")
 	if err != nil {
 		t.Fatalf("deploy error = %v", err)
 	}
 	if !strings.Contains(stdout, "+      - image: gcr.io/project/image:new") {
 		t.Errorf("deploy stdout = %q, want the diff", stdout)
+	}
+	// Where the change goes is on stderr, ahead of the diff, so it is never mistaken for data.
+	for _, want := range []string{"Target:", "service: my-svc", "project: test-project", "region:  asia-northeast1"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("deploy stderr does not contain %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stdout, "Target:") {
+		t.Errorf("deploy stdout = %q, want the target on stderr only", stdout)
 	}
 	if !strings.Contains(putQuery, "dryRun=all") {
 		t.Errorf("ReplaceService query = %q, want dryRun=all", putQuery)

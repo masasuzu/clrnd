@@ -165,10 +165,8 @@ func keepTraffic(desired, current *run.Service, service string) (*run.Service, e
 // isNotFound reports whether err is a googleapi 404 error.
 func isNotFound(err error) bool {
 	var gerr *googleapi.Error
-	if errors.As(err, &gerr) {
-		return gerr.Code == 404
-	}
-	return false
+	// Only the API's own 404 says the resource does not exist; see EndpointNotFound.
+	return errors.As(err, &gerr) && gerr.Code == 404 && isAPIError(gerr)
 }
 
 // retryableForbiddenReasons are the reasons for which even a 403 can recover by waiting. Google

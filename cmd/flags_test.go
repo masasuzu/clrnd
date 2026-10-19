@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
+	"google.golang.org/api/googleapi"
 )
 
 func TestConfirm(t *testing.T) {
@@ -144,10 +147,9 @@ func TestResolveManifestUsesConfigDir(t *testing.T) {
 }
 
 func TestResolveUsesConfigFallback(t *testing.T) {
-	t.Run("config project used when flag and env empty", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "")
-		t.Setenv(envProjectSecondary, "")
-		withConfig(t, &config.Config{Project: "cfg-project", Region: "cfg-region"})
+	t.Run("config used when the flag is empty", func(t *testing.T) {
+		clearTargetEnv(t)
+		withConfig(t, &config.Config{Project: "cfg-project", Region: "asia-northeast1"})
 
 		got, err := resolveProject("")
 		if err != nil || got != "cfg-project" {
@@ -155,27 +157,16 @@ func TestResolveUsesConfigFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("env wins over config", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "env-project")
-		withConfig(t, &config.Config{Project: "cfg-project"})
+	t.Run("flag wins over config", func(t *testing.T) {
+		clearTargetEnv(t)
+		withConfig(t, &config.Config{Region: "asia-northeast1"})
 
-		got, err := resolveProject("")
-		if err != nil || got != "env-project" {
-			t.Fatalf("resolveProject() = %q, %v; want env-project, nil", got, err)
-		}
-	})
-
-	t.Run("flag wins over config and env", func(t *testing.T) {
-		t.Setenv(envRegionPrimary, "env-region")
-		withConfig(t, &config.Config{Region: "cfg-region"})
-
-		got, err := resolveRegion("flag-region")
-		if err != nil || got != "flag-region" {
-			t.Fatalf("resolveRegion() = %q, %v; want flag-region, nil", got, err)
+		got, err := resolveRegion("us-central1")
+		if err != nil || got != "us-central1" {
+			t.Fatalf("resolveRegion() = %q, %v; want us-central1, nil", got, err)
 		}
 	})
 }
-
 func TestResolveServiceAndManifest(t *testing.T) {
 	t.Run("args take precedence over config", func(t *testing.T) {
 		withConfig(t, &config.Config{Service: "cfg-svc", Manifest: "cfg.yaml"})
@@ -327,84 +318,64 @@ func TestParseTfstateSources(t *testing.T) {
 	})
 }
 
-func TestResolveProject(t *testing.T) {
-	t.Run("flag wins over env", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "env-primary")
-		t.Setenv(envProjectSecondary, "env-secondary")
-		got, err := resolveProject("flag-value")
-		if err != nil || got != "flag-value" {
-			t.Fatalf("resolveProject() = %q, %v; want flag-value, nil", got, err)
-		}
-	})
-
-	t.Run("primary env used when flag empty", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "env-primary")
-		t.Setenv(envProjectSecondary, "env-secondary")
+// TestResolveProjectIgnoresTheEnvironment checks that the target never comes from the
+// environment. CI auth actions and Cloud Shell set these variables to a project nobody chose as the
+// deploy target; when they were read, they overrode the config file's project without a word.
+func TestResolveProjectIgnoresTheEnvironment(t *testing.T) {
+	t.Run("the config wins over a set variable", func(t *testing.T) {
+		t.Setenv("CLOUDSDK_CORE_PROJECT", "env-project")
+		t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+		withConfig(t, &config.Config{Project: "cfg-project"})
 		got, err := resolveProject("")
-		if err != nil || got != "env-primary" {
-			t.Fatalf("resolveProject() = %q, %v; want env-primary, nil", got, err)
+		if err != nil || got != "cfg-project" {
+			t.Fatalf("resolveProject() = %q, %v; want cfg-project, nil", got, err)
 		}
 	})
 
-	t.Run("secondary env used when primary empty", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "")
-		t.Setenv(envProjectSecondary, "env-secondary")
-		got, err := resolveProject("")
-		if err != nil || got != "env-secondary" {
-			t.Fatalf("resolveProject() = %q, %v; want env-secondary, nil", got, err)
+	t.Run("a set variable alone resolves nothing, and the error says why", func(t *testing.T) {
+		clearTargetEnv(t)
+		t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+		withConfig(t, &config.Config{})
+		_, err := resolveProject("")
+		if err == nil || !strings.Contains(err.Error(), "project is required") ||
+			!strings.Contains(err.Error(), "$GOOGLE_CLOUD_PROJECT is set, but clrnd does not take the target from the environment") {
+			t.Fatalf("resolveProject() error = %v, want it to name the ignored variable", err)
 		}
 	})
 
-	t.Run("error when nothing set", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "")
-		t.Setenv(envProjectSecondary, "")
-		if _, err := resolveProject(""); err == nil {
-			t.Fatal("resolveProject() = nil error; want error")
-		}
-	})
-
-	t.Run("whitespace-only env falls through to secondary", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "   ")
-		t.Setenv(envProjectSecondary, "env-secondary")
-		got, err := resolveProject("")
-		if err != nil || got != "env-secondary" {
-			t.Fatalf("resolveProject() = %q, %v; want env-secondary, nil", got, err)
+	t.Run("nothing set", func(t *testing.T) {
+		clearTargetEnv(t)
+		withConfig(t, &config.Config{})
+		_, err := resolveProject("")
+		if err == nil || strings.Contains(err.Error(), "is set") {
+			t.Fatalf("resolveProject() error = %v, want a plain 'required' error", err)
 		}
 	})
 
 	t.Run("surrounding whitespace is trimmed", func(t *testing.T) {
-		t.Setenv(envProjectPrimary, "  my-project  ")
-		t.Setenv(envProjectSecondary, "")
-		got, err := resolveProject("")
+		got, err := resolveProject("  my-project  ")
 		if err != nil || got != "my-project" {
 			t.Fatalf("resolveProject() = %q, %v; want my-project, nil", got, err)
 		}
 	})
 }
-
-func TestResolveRegion(t *testing.T) {
-	t.Run("flag wins over env", func(t *testing.T) {
-		t.Setenv(envRegionPrimary, "env-primary")
-		got, err := resolveRegion("flag-value")
-		if err != nil || got != "flag-value" {
-			t.Fatalf("resolveRegion() = %q, %v; want flag-value, nil", got, err)
-		}
-	})
-
-	t.Run("primary env used when flag empty", func(t *testing.T) {
-		t.Setenv(envRegionPrimary, "asia-northeast1")
-		t.Setenv(envRegionSecondary, "")
+func TestResolveRegionIgnoresTheEnvironment(t *testing.T) {
+	t.Run("the config wins over a set variable", func(t *testing.T) {
+		t.Setenv("CLOUDSDK_RUN_REGION", "us-central1")
+		withConfig(t, &config.Config{Region: "asia-northeast1"})
 		got, err := resolveRegion("")
 		if err != nil || got != "asia-northeast1" {
 			t.Fatalf("resolveRegion() = %q, %v; want asia-northeast1, nil", got, err)
 		}
 	})
 
-	t.Run("error when nothing set", func(t *testing.T) {
-		t.Setenv(envRegionPrimary, "")
-		t.Setenv(envRegionSecondary, "")
-		if _, err := resolveRegion(""); err == nil {
-			t.Fatal("resolveRegion() = nil error; want error")
+	t.Run("a set variable alone resolves nothing, and the error says why", func(t *testing.T) {
+		clearTargetEnv(t)
+		t.Setenv("CLOUDSDK_RUN_REGION", "us-central1")
+		withConfig(t, &config.Config{})
+		_, err := resolveRegion("")
+		if err == nil || !strings.Contains(err.Error(), "$CLOUDSDK_RUN_REGION is set") {
+			t.Fatalf("resolveRegion() error = %v, want it to name the ignored variable", err)
 		}
 	})
 }
@@ -457,5 +428,40 @@ func TestConfirmActionRefusesWithDevNullAsStdin(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "Apply?") {
 		t.Errorf("stderr = %q, want no prompt", errOut.String())
+	}
+}
+
+// TestAMalformedRegionStopsBeforeAnyRequest checks that a region which would move the endpoint's
+// host — and with it, where the access token is sent — is refused before anything is sent.
+func TestAMalformedRegionStopsBeforeAnyRequest(t *testing.T) {
+	requests := 0
+	startFakeAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	for _, region := range []string{"attacker.example/", "asia-northeast1?x", "Asia-Northeast1"} {
+		_, _, err := executeRoot(t, "status", "my-svc", "--project", "test-project", "--region", region)
+		if err == nil || !strings.Contains(err.Error(), "invalid region") {
+			t.Errorf("status --region %q error = %v, want invalid region", region, err)
+		}
+	}
+	if requests != 0 {
+		t.Errorf("%d request(s) reached the API, want none", requests)
+	}
+}
+
+// TestErrorMessageReplacesAnEndpointPage checks the message printed for a 404 that came from a web
+// page rather than the API: what to check, instead of the page.
+func TestErrorMessageReplacesAnEndpointPage(t *testing.T) {
+	page := &googleapi.Error{Code: 404, Body: "<!DOCTYPE html><html>...not found on this server.</html>"}
+	got := errorMessage(fmt.Errorf("failed to get service %q: %w", "my-svc", page))
+	if strings.Contains(got, "<html>") || !strings.HasPrefix(got, `failed to get service "my-svc": `) ||
+		!strings.Contains(got, "check that the region") {
+		t.Errorf("errorMessage() = %q", got)
+	}
+	// Any other error is printed as it is.
+	apiErr := fmt.Errorf("failed to get service: %w", &googleapi.Error{Code: 404, Message: "Resource 'x' does not exist."})
+	if got := errorMessage(apiErr); got != apiErr.Error() {
+		t.Errorf("errorMessage(API 404) = %q, want %q", got, apiErr.Error())
 	}
 }

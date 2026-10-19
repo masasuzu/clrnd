@@ -506,15 +506,21 @@ func TestDiff(t *testing.T) {
 	})
 }
 
+// endpointPage is what Google's front end answers for a host it does not serve, such as the
+// endpoint of a region Cloud Run does not have: a 404 whose body is a web page, not an API error.
+var endpointPage = &googleapi.Error{Code: 404, Body: "<!DOCTYPE html>\n<html lang=en>...<p>The requested URL was not found on this server."}
+
 func TestIsNotFound(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{"404 googleapi", &googleapi.Error{Code: 404}, true},
-		{"wrapped 404", fmt.Errorf("check: %w", &googleapi.Error{Code: 404}), true},
-		{"403 googleapi", &googleapi.Error{Code: 403}, false},
+		{"404 from the API", &googleapi.Error{Code: 404, Message: "Resource 'x' does not exist."}, true},
+		{"wrapped 404", fmt.Errorf("check: %w", &googleapi.Error{Code: 404, Message: "not found"}), true},
+		// The request never reached the API, so this says nothing about the resource.
+		{"404 web page", endpointPage, false},
+		{"403 googleapi", &googleapi.Error{Code: 403, Message: "denied"}, false},
 		{"plain error", errors.New("boom"), false},
 		{"nil", nil, false},
 	}
@@ -524,6 +530,63 @@ func TestIsNotFound(t *testing.T) {
 				t.Errorf("isNotFound(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEndpointNotFound(t *testing.T) {
+	if !EndpointNotFound(fmt.Errorf("failed to get service: %w", endpointPage)) {
+		t.Error("EndpointNotFound(web page 404) = false, want true")
+	}
+	for _, err := range []error{
+		&googleapi.Error{Code: 404, Message: "Resource 'x' does not exist."},
+		&googleapi.Error{Code: 500, Body: "<html>"},
+		errors.New("boom"),
+	} {
+		if EndpointNotFound(err) {
+			t.Errorf("EndpointNotFound(%v) = true, want false", err)
+		}
+	}
+}
+
+func TestValidateRegion(t *testing.T) {
+	for _, ok := range []string{"asia-northeast1", "us-central1", "northamerica-northeast2", "me-central2"} {
+		if err := ValidateRegion(ok); err != nil {
+			t.Errorf("ValidateRegion(%q) = %v, want nil", ok, err)
+		}
+	}
+	// The ones that matter most move the endpoint's host: the access token would go there.
+	for _, bad := range []string{"", "attacker.example/", "127.0.0.1:8443/x#", "asia-northeast1?", "Asia-Northeast1",
+		"asia-northeast1.evil", "asia_northeast1", "asianortheast1", "asia-northeast"} {
+		if err := ValidateRegion(bad); err == nil {
+			t.Errorf("ValidateRegion(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+func TestValidateProject(t *testing.T) {
+	for _, ok := range []string{"my-project", "test-project", "a12345", "example.com:my-project", "123456789012"} {
+		if err := ValidateProject(ok); err != nil {
+			t.Errorf("ValidateProject(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "p", "My-Project", "my-project-", "1project", "my/project", "my-project?x",
+		"a-very-long-project-id-that-is-too-long"} {
+		if err := ValidateProject(bad); err == nil {
+			t.Errorf("ValidateProject(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// TestNewClientRefusesAMalformedTarget checks the place every Cloud Run client is built: a region
+// that would move the endpoint's host never gets as far as a request.
+func TestNewClientRefusesAMalformedTarget(t *testing.T) {
+	if _, err := NewClient(context.Background(), "my-project", "attacker.example/"); err == nil ||
+		!strings.Contains(err.Error(), "invalid region") {
+		t.Errorf("NewClient(bad region) error = %v, want invalid region", err)
+	}
+	if _, err := NewClient(context.Background(), "My Project", "asia-northeast1"); err == nil ||
+		!strings.Contains(err.Error(), "invalid project") {
+		t.Errorf("NewClient(bad project) error = %v, want invalid project", err)
 	}
 }
 

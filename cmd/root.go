@@ -2,14 +2,18 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/config"
 	"github.com/spf13/cobra"
+	"google.golang.org/api/googleapi"
 )
 
 // Config file names looked for when none is given (in the current directory).
@@ -42,7 +46,26 @@ func Execute() error {
 		<-ctx.Done()
 		stop()
 	}()
-	return rootCmd.ExecuteContext(ctx)
+	err := rootCmd.ExecuteContext(ctx)
+	if err != nil {
+		// Printed here rather than by cobra (SilenceErrors), so the message can be fixed up first.
+		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", errorMessage(err))
+	}
+	return err
+}
+
+// errorMessage is what Execute prints for err: its own text, except that a 404 which did not come
+// from the API (cloudrun.EndpointNotFound) has the web page it carries replaced with what it most
+// likely means. Left as is, a region Cloud Run does not have printed a page of HTML.
+func errorMessage(err error) string {
+	msg := err.Error()
+	var gerr *googleapi.Error
+	if !cloudrun.EndpointNotFound(err) || !errors.As(err, &gerr) {
+		return msg
+	}
+	return strings.Replace(msg, gerr.Error(), "the Cloud Run endpoint for this region answered 404 with a web "+
+		"page instead of an API error; check that the region (--region or region in the config file) "+
+		"is one Cloud Run has", 1)
 }
 
 func init() {
@@ -53,6 +76,7 @@ func init() {
 	// SilenceUsage also applies to flag and argument parse errors, so those get a one-line hint
 	// instead. A short pointer to where to look is more useful than the full usage.
 	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
 	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return fmt.Errorf("%w\nRun '%s --help' for usage", err, c.CommandPath())
 	})
