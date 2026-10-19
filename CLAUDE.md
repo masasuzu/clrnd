@@ -173,6 +173,17 @@ revision-name conflicts, asynchronous rollout failures).
   a job manifest parsed strictly as a service fails on the first job-only field, and that error
   points at a field instead of at `clrnd jobs`. Only kinds in `kindHints` get the redirect; an
   unknown kind falls through to `validate`'s "kind must be".
+- **An explicit zero is lost by the generated types**: they drop an int64 that is 0 when they
+  marshal, unless the field is named in `ForceSendFields`, and decoding never fills that in. For
+  almost every field that is harmless — confirmed against the real API, a job's `parallelism`,
+  `taskCount` and task `timeoutSeconds`, and a service's `containerConcurrency`, `timeoutSeconds`
+  and probe periods all take 0 as unset. **A job's `maxRetries` is the exception**: left out it
+  becomes 3, while 0 is kept and read back as 0. So `maxRetries: 0` used to deploy as 3, with an
+  empty diff. The job kind therefore forces the field in both directions: `kindOf.explicit` (a
+  parse hook that sees the raw manifest) forces it when the manifest writes the key, and `fromAPI`
+  forces it on every job `get`/`create`/`replace` returns, because the API always sends it. A
+  manifest that omits it still sends nothing, so the default keeps applying. Probe a new field the
+  same way before adding it here.
 - Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
   `kindOf.planObject` (`Get` the live object, compute the `Diff` of live vs desired; `Create` when
   404 via `isNotFound`/`googleapi.Error`). `Client.PlanService` is `planObject` for services, the
