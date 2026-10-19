@@ -712,9 +712,9 @@ func TestPlanServiceKeepsTheResourceVersionItWasGiven(t *testing.T) {
 		t.Fatalf("resourceVersion = %q, want the first read", live.Metadata.ResourceVersion)
 	}
 
-	plan, err := c.PlanService(context.Background(), "my-svc", live, PlanOptions{})
+	plan, err := c.PlanEdit(context.Background(), live, live)
 	if err != nil {
-		t.Fatalf("PlanService() error = %v", err)
+		t.Fatalf("PlanEdit() error = %v", err)
 	}
 	if got := plan.desired.(*run.Service).Metadata.ResourceVersion; got != "v1" {
 		t.Errorf("resourceVersion = %q, want the version the caller read (%q)", got, "v1")
@@ -736,9 +736,13 @@ func TestPlanServiceStampsTheResourceVersionWhenThereIsNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseManifest() error = %v", err)
 	}
-	plan, err := c.PlanService(context.Background(), "my-svc", desired, PlanOptions{})
+	live, err := c.GetService(context.Background(), "my-svc")
 	if err != nil {
-		t.Fatalf("PlanService() error = %v", err)
+		t.Fatalf("GetService() error = %v", err)
+	}
+	plan, err := c.PlanEdit(context.Background(), live, desired)
+	if err != nil {
+		t.Fatalf("PlanEdit() error = %v", err)
 	}
 	if got := plan.desired.(*run.Service).Metadata.ResourceVersion; got != "from-server" {
 		t.Errorf("resourceVersion = %q, want the one read from the API", got)

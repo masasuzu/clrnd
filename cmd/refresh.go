@@ -70,7 +70,7 @@ func runRefresh(cmd *cobra.Command, args []string) error {
 
 	// desired comes from the live service, so the defaults are already filled in. No resolution is
 	// needed.
-	plan, err := client.PlanService(ctx, service, desired, cloudrun.PlanOptions{})
+	plan, err := client.PlanEdit(ctx, live, desired)
 	if err != nil {
 		return err
 	}

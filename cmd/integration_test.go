@@ -1460,3 +1460,41 @@ func TestVersion(t *testing.T) {
 		t.Errorf("--version stdout = %q, want it to name the binary and version", stdout)
 	}
 }
+
+// TestLiveEditsReadTheServiceOnce checks that rollback, traffic and refresh read the service once
+// and plan against that read. They used to read it up to three times (inside the revision list,
+// for the edit, and again for the plan), so the diff could describe a newer state than the one
+// that was edited.
+func TestLiveEditsReadTheServiceOnce(t *testing.T) {
+	const servicePath = "/apis/serving.knative.dev/v1/namespaces/test-project/services/my-svc"
+	for _, args := range [][]string{
+		{"rollback", "my-svc"},
+		{"traffic", "my-svc", "--to", "my-svc-00006-def"},
+		{"refresh", "my-svc", "--revision-suffix", "r260822190506"},
+	} {
+		var mu sync.Mutex
+		gets := 0
+		startFakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/revisions") {
+				_, _ = w.Write([]byte(revisionsJSON))
+				return
+			}
+			if r.Method == http.MethodGet && r.URL.Path == servicePath {
+				mu.Lock()
+				gets++
+				mu.Unlock()
+			}
+			_, _ = w.Write([]byte(rollbackServiceJSON))
+		})
+		if _, _, err := executeRoot(t, append(args, "--auto-approve", "--no-wait",
+			"--project", "test-project", "--region", "asia-northeast1")...); err != nil {
+			t.Fatalf("%v error = %v", args, err)
+		}
+		mu.Lock()
+		if gets != 1 {
+			t.Errorf("%v read the service %d times, want once", args, gets)
+		}
+		mu.Unlock()
+	}
+}

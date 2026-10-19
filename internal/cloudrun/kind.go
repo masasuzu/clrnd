@@ -252,12 +252,20 @@ func (k *kindOf[T]) planObject(ctx context.Context, c *Client, name string, desi
 	if desired == zero {
 		return nil, fmt.Errorf("no desired %s to plan", k.noun)
 	}
-	c.setNamespace(k.meta(desired))
-
 	current, err := k.lookup(ctx, c, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
 	}
+	return k.planAgainst(ctx, c, name, current, desired, opts, desiredLabel)
+}
+
+// planAgainst is planObject once the live definition is known: current, or the zero value when
+// the resource does not exist yet.
+func (k *kindOf[T]) planAgainst(ctx context.Context, c *Client, name string, current, desired T,
+	opts PlanOptions, desiredLabel string) (*DeployPlan, error) {
+	var zero T
+	var err error
+	c.setNamespace(k.meta(desired))
 	create := current == zero
 
 	// Anything that rewrites desired (pinning the traffic for --no-traffic) happens before setting
@@ -508,12 +516,21 @@ func (c *Client) Plan(ctx context.Context, kind Kind, name string, manifest []by
 	return kind.plan(ctx, c, name, manifest, opts)
 }
 
-// PlanService computes the diff against live using the desired service definition as is.
-// It is the entry point for paths that edit live and apply it without going through a manifest,
-// such as rollback and refresh. The desired metadata.namespace is rewritten to match the target.
-func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service,
-	opts PlanOptions) (*DeployPlan, error) {
-	return serviceKind.planObject(ctx, c, service, desired, opts, service)
+// PlanEdit computes the plan for desired, a service definition edited from live — the service just
+// read. It is the entry point for the commands that change the live definition rather than apply a
+// manifest: rollback, traffic and refresh.
+//
+// The diff and the compare-and-swap are both against that one read; there is no second GET. A
+// second read (as this used to do) could only show a diff against a newer state than the one that
+// was edited — and the write would refuse that state anyway, since desired carries the version it
+// was read at (setResourceVersion keeps it). The desired metadata.namespace is rewritten to match
+// the target.
+func (c *Client) PlanEdit(ctx context.Context, live, desired *run.Service) (*DeployPlan, error) {
+	if live == nil || live.Metadata == nil || live.Metadata.Name == "" {
+		return nil, errors.New("no live service to plan the edit against")
+	}
+	name := live.Metadata.Name
+	return serviceKind.planAgainst(ctx, c, name, live, desired, PlanOptions{}, name)
 }
 
 // CompareManifest returns the diff between what is live and a local manifest. It is the entry
