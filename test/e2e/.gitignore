@@ -1,5 +1,7 @@
 # Local project ID. Never commit this: see CLAUDE.local.md.
 /project.env
+# Local path of the gcloud config directory this test runs with (see README, Credentials).
+/gcloud-config.env
 # run.sh builds outside the repository (see the WORK variable), but keep this in
 # case someone points WORK back here.
 /work/

@@ -15,6 +15,7 @@
 #   ONLY=old OLD_REF=<ref> ./run.sh
 #   PROJECT=<id> REGION=<region> ./run.sh
 #   WORK_ROOT=<dir> ./run.sh       # parent of the build/scratch dir (default: $TMPDIR)
+#   CLRND_E2E_GCLOUD_CONFIG=<dir> ./run.sh   # act from a dedicated gcloud config (README: Credentials)
 #
 # The project ID is deliberately not stored in this script. Provide it via
 # $PROJECT or a local (git-ignored) project.env file next to this script.
@@ -90,6 +91,128 @@ resolve_project() {
     PROJECT="$(head -n1 "$HERE/project.env" | tr -d '[:space:]')"
   fi
   [ -n "${PROJECT:-}" ] || die "no project configured. Set \$PROJECT, or write the project ID into $HERE/project.env (git-ignored)."
+}
+
+# ---------- credentials ----------
+# Which identity the run acts as. Two things act: clrnd (through Application Default Credentials)
+# and the gcloud CLI (cleanup and the checks). By default both use whatever is in ~/.config/gcloud,
+# which another terminal's `gcloud auth application-default login` silently changes — a run then
+# fails with 403 on every step, or worse, acts as an account that should not be touching this
+# project.
+#
+# CLRND_E2E_GCLOUD_CONFIG (or the directory written into gcloud-config.env next to this script)
+# names a gcloud config directory kept for this test alone. Both identities are taken from it:
+# CLOUDSDK_CONFIG covers gcloud, and GOOGLE_APPLICATION_CREDENTIALS covers clrnd — the Go client
+# libraries do not read CLOUDSDK_CONFIG; they look for ADC only at
+# ~/.config/gcloud/application_default_credentials.json unless told otherwise.
+resolve_credentials() {
+  # A relative path is taken from where it was written: the current directory for the variable,
+  # this directory for gcloud-config.env.
+  local dir="${CLRND_E2E_GCLOUD_CONFIG:-}" base="$PWD"
+  if [ -z "$dir" ] && [ -f "$HERE/gcloud-config.env" ]; then
+    dir="$(head -n1 "$HERE/gcloud-config.env" | tr -d '[:space:]')"
+    base="$HERE"
+  fi
+  if [ -z "$dir" ]; then
+    ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
+    DEDICATED_CREDENTIALS=0
+    return
+  fi
+  dir="${dir/#\~/$HOME}"
+  case "$dir" in /*) ;; *) dir="$base/$dir" ;; esac
+  [ -d "$dir" ] || die "gcloud config directory $dir does not exist (see test/e2e/README.md, Credentials)"
+  # Absolute from here on: the tests cd into their scratch directories, and both variables below
+  # are read from wherever clrnd and gcloud happen to run.
+  dir="$(cd "$dir" && pwd)" || die "cannot resolve gcloud config directory $dir"
+  ADC_FILE="$dir/application_default_credentials.json"
+  [ -f "$ADC_FILE" ] || die "$dir has no application default credentials: run" \
+    "CLOUDSDK_CONFIG=$dir gcloud auth application-default login --impersonate-service-account <service-account>"
+  export CLOUDSDK_CONFIG="$dir"
+  export GOOGLE_APPLICATION_CREDENTIALS="$ADC_FILE"
+  DEDICATED_CREDENTIALS=1
+}
+
+# adc_identity prints "<kind> <account>" for the ADC file clrnd will use: kind is
+# impersonated_service_account, service_account, authorized_user (a person) or missing; account is
+# the service account's email, empty for a person (whose address the log has no reason to carry).
+adc_identity() {
+  [ -f "$ADC_FILE" ] || { echo "missing"; return; }
+  python3 - "$ADC_FILE" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+kind = d.get("type", "unknown")
+account = ""
+if kind == "impersonated_service_account":
+    m = re.search(r"serviceAccounts/([^/:]+):generateAccessToken", d.get("service_account_impersonation_url", ""))
+    account = m.group(1) if m else ""
+elif kind == "service_account":
+    account = d.get("client_email", "")
+print(kind, account)
+PY
+}
+
+# check_identity reports who the run acts as, and refuses a dedicated config that would not act
+# as a service account: that is the point of keeping one, and logging into it without
+# --impersonate-service-account is an easy mistake to make.
+check_identity() {
+  local kind account gcloud_sa
+  read -r kind account <<< "$(adc_identity)"
+  case "$kind" in
+    impersonated_service_account) info "clrnd acts as $account (impersonated)" ;;
+    service_account) info "clrnd acts as $account (key file)" ;;
+    authorized_user) info "clrnd acts as a user account (ADC from gcloud auth application-default login)" ;;
+    missing) info "no ADC file at $ADC_FILE; clrnd will look for credentials elsewhere (metadata server)" ;;
+    *) info "clrnd uses ADC of type $kind" ;;
+  esac
+  [ "$DEDICATED_CREDENTIALS" = "1" ] || {
+    info "tip: set CLRND_E2E_GCLOUD_CONFIG to keep this run's credentials apart (README: Credentials)"
+    return 0
+  }
+  case "$kind" in
+    impersonated_service_account | service_account) ;;
+    *) die "the ADC in $CLOUDSDK_CONFIG is not a service account ($kind): log in again with" \
+      "--impersonate-service-account" ;;
+  esac
+  # gcloud acting as someone else is not fatal (it only cleans up and checks), but the run would
+  # no longer be one identity, so say so.
+  gcloud_sa="$(gcloud config get-value auth/impersonate_service_account 2>/dev/null)"
+  if [ "$gcloud_sa" != "$account" ]; then
+    info "warning: gcloud in $CLOUDSDK_CONFIG impersonates '${gcloud_sa:-nobody}', not $account;" \
+      "set it with: gcloud config set auth/impersonate_service_account $account"
+  fi
+}
+
+# preflight_clrnd asks the built binary for a service that does not exist. With working
+# credentials that is a 404; a 403 means the identity cannot read Cloud Run here, and every step
+# after this would fail with the same error, so stop with it once instead.
+preflight_clrnd() {
+  local out
+  out="$("$CLRND" status "${SERVICE_PREFIX}preflight-absent" --project "$PROJECT" --region "$REGION" 2>&1)"
+  case "$out" in
+    *"Error 404"* | *notFound* | *"does not exist"*) info "credentials work: a missing service reads as 404" ;;
+    *) die "clrnd cannot use these credentials against the project: $(printf '%s' "$out" | head -n1)" ;;
+  esac
+}
+
+# preflight_gcloud checks the other identity the run uses. gcloud cleans up and reads the state the
+# assertions check, under its own login rather than ADC, so it can act as someone else entirely:
+# clrnd then passes every step while each gcloud read fails, wait_ready mistakes the error for "not
+# ready yet" until it times out, and the cleanup cannot delete the service. Listing is enough to
+# tell: it needs the same read access, and it succeeds on a project with no services at all.
+preflight_gcloud() {
+  local out account impersonated
+  account="$(gcloud config get-value account 2>/dev/null)"
+  # With impersonation the account is only the source credential; the calls are made as the
+  # service account, so name that one.
+  impersonated="$(gcloud config get-value auth/impersonate_service_account 2>/dev/null)"
+  [ -z "$impersonated" ] || account="$impersonated (impersonated by ${account:-<no account>})"
+  if out="$(gcloud run services list --project "$PROJECT" --region "$REGION" --limit 1 \
+    --format='value(metadata.name)' 2>&1)"; then
+    info "gcloud works as ${account:-<no account>}"
+    return 0
+  fi
+  die "gcloud (as ${account:-<no account>}) cannot read Cloud Run in the project:" \
+    "$(printf '%s' "$out" | grep -m1 ERROR || printf '%s' "$out" | head -n1)"
 }
 
 # ---------- orphan cleanup ----------
@@ -417,9 +540,14 @@ PY
 
 # =====================================================================
 resolve_project
+resolve_credentials
+command -v gcloud >/dev/null || die "gcloud is not on PATH"
 
 if [ "${1:-}" = "--cleanup-orphans" ]; then
   trap - EXIT
+  step "Credentials"
+  check_identity
+  preflight_gcloud
   cleanup_orphans
   exit 0
 fi
@@ -427,7 +555,6 @@ fi
 trap cleanup EXIT
 
 step "Setup"
-command -v gcloud >/dev/null || die "gcloud is not on PATH"
 command -v go >/dev/null || die "go is not on PATH"
 # Never remove anything other than the dedicated directory this script creates.
 case "$WORK" in
@@ -439,11 +566,14 @@ mkdir -p "$BIN"
 info "region  = $REGION"
 info "repo    = $REPO"
 info "service = ${SERVICE_PREFIX}<timestamp>"
+check_identity
+preflight_gcloud
 
 info "work    = $WORK"
 info "building the current binary ($(git -C "$REPO" rev-parse --abbrev-ref HEAD))..."
 build_binary "$BIN/clrnd" "$REPO" || die "build failed"
 CLRND="$BIN/clrnd"
+preflight_clrnd
 
 if [ -n "$OLD_REF" ]; then
   info "building the comparison binary from $OLD_REF..."
