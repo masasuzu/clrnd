@@ -135,6 +135,58 @@ func TestHarnessCommand(t *testing.T) {
 		t.Fatal("child did not stop on cancellation")
 	}
 }
+
+// The cloud test must skip without the guard. PATH is emptied so that, if the guard were gone, the
+// child fails on its tool lookup instead of reaching any project.
+func TestHarnessGuard(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &suite{ctx: t.Context(), c: settings{project: "harness-guard", env: os.Environ()}}
+	r := s.command(t, t.Context(), t.TempDir(), map[string]string{cloudGuard: "", "PATH": "", "PROJECT": "harness-guard"},
+		exe, "-test.run=^TestE2E$", "-test.v")
+	if r.code != 0 || !strings.Contains(r.stdout, "--- SKIP: TestE2E") || !strings.Contains(r.stdout, cloudGuard) {
+		t.Fatalf("TestE2E ran without %s: %+v", cloudGuard, r)
+	}
+}
+func TestHarnessParallelTranscript(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "commands.log")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &suite{ctx: t.Context(), c: settings{project: "test-project", env: os.Environ()}, transcript: f}
+	const runs = 4
+	t.Run("group", func(t *testing.T) {
+		for i := range runs {
+			t.Run(fmt.Sprint(i), func(t *testing.T) {
+				t.Parallel()
+				s.command(t, t.Context(), t.TempDir(), map[string]string{"CLRND_E2E_HELPER": "output"}, exe, "-test.run=^TestHarnessChild$")
+			})
+		}
+	})
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range runs {
+		entry := fmt.Sprintf("[%s/group/%d]\n$ ", t.Name(), i)
+		if !strings.Contains(string(b), entry) {
+			t.Fatalf("transcript lacks an intact entry for %d:\n%s", i, b)
+		}
+	}
+	if n := strings.Count(string(b), "stdout:\nstdout-data\nstderr:\nstderr-progress\n"); n != runs {
+		t.Fatalf("transcript has %d intact outputs, want %d:\n%s", n, runs, b)
+	}
+}
 func TestHarnessChild(t *testing.T) {
 	switch os.Getenv("CLRND_E2E_HELPER") {
 	case "output":

@@ -5,8 +5,10 @@ service and a job, deploy and run them, inspect their state independently throug
 remove them. These are external CLI tests: they do not call clrnd's internal implementation.
 
 **This creates real, billable resources.** Use a project intended for disposable test resources.
-The `e2e` build tag excludes the suite from ordinary `go test ./...`. Running it also requires an
-explicit project, from `PROJECT` or the git-ignored `project.env` next to this file. CI runs only
+The `e2e` build tag excludes the suite from ordinary `go test ./...`. The cloud test also skips
+unless `CLRND_E2E_CLOUD=1` is set, which `run.sh` does, so `go test -tags=e2e ./...` or an IDE's
+test runner cannot create resources by accident. Running it also requires an explicit project, from
+`PROJECT` or the git-ignored `project.env` next to this file. CI runs only
 the offline harness tests, not the cloud scenarios.
 
 ## Setup
@@ -16,7 +18,7 @@ the offline harness tests, not the cloud scenarios.
 - The Cloud Run API enabled and permission to deploy, run and delete resources in the target project
 - `PROJECT=<project-id>`, or a project ID on the first line of `test/e2e/project.env`
 
-No Python is needed. The scenarios run sequentially.
+No Python is needed.
 
 ## Credentials
 
@@ -74,8 +76,10 @@ CLRND_E2E_GCLOUD_CONFIG=<directory> ./test/e2e/run.sh
 The equivalent direct command, also usable without bash, is:
 
 ```sh
-PROJECT=<project-id> go test -tags=e2e -count=1 -timeout=0 -v ./test/e2e -run '^TestE2E$'
+CLRND_E2E_CLOUD=1 PROJECT=<project-id> go test -tags=e2e -count=1 -timeout=0 -v ./test/e2e -run '^TestE2E$'
 ```
+
+Without `CLRND_E2E_CLOUD=1` the test reports `SKIP` and touches nothing.
 
 Use `ONLY` to select cloud scenarios. Go's `-run` filter can also select a subtest, but setup still
 builds and checks credentials. The default Go test timeout is disabled by the launcher: individual
@@ -121,11 +125,14 @@ forces failure.
 - `harness_test.go`: build, preflight, scenario selection and cleanup; `settings_test.go`: target
   and credential setup; `command_test.go`: process execution, assertions and redaction;
   `cloud_helpers_test.go`: live-state checks; `manifest_test.go`: YAML editing and archive extraction.
-  Child processes receive explicit `Dir`/`Env` and
-  empty stdin; output streams are checked separately. A failed exit code or live-state check stops
-  its scenario, while the other independent scenario can still run; a wording check on output is
-  recorded and the scenario continues, so one run reports every message that changed. No
-  `t.Parallel` is used.
+  Child processes receive explicit `Dir`/`Env` and empty stdin; output streams are checked
+  separately. A failed exit code or live-state check stops its scenario, while the other scenarios
+  still run; a wording check on output is recorded and the scenario continues, so one run reports
+  every message that changed.
+- The service scenario (`TestE2E/service/current`, then `TestE2E/service/comparison`) and the job
+  scenario (`TestE2E/jobs`) run in parallel: they own separate resources and work directories.
+  Console lines carry the subtest name, and every `commands.log` entry starts with it. Cleanup runs
+  after every scenario has finished.
 - `helpers_test.go`: offline regression checks for the harness. Run them without any credentials:
 
 ```sh
@@ -133,5 +140,6 @@ go test -tags=e2e ./test/e2e -run '^TestHarness' -count=1
 ```
 
 When adding a scenario, preserve the external CLI boundary and check live state through gcloud
-where output alone cannot prove an effect. Add it to the coverage list above. Parallelization can
-be considered after the sequential Go suite has been validated against the real API.
+where output alone cannot prove an effect. Add it to the coverage list above. A scenario that
+shares a resource with another must run inside that scenario's subtest, as the comparison does;
+give it its own resource and directory to run it in parallel.

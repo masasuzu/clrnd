@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,6 +31,8 @@ type suite struct {
 	ctx                                   context.Context
 	work, binary, oldBinary, service, job string
 	transcript                            *os.File
+	// Scenarios run in parallel; mu keeps each command's transcript entry in one piece.
+	mu sync.Mutex
 }
 
 var (
@@ -107,9 +110,12 @@ func (s *suite) command(t *testing.T, ctx context.Context, dir string, extra map
 			r.stderr += "\n" + err.Error()
 		}
 	}
-	line := fmt.Sprintf("$ %s %s\nexit=%d\nstdout:\n%sstderr:\n%s", filepath.Base(bin), strings.Join(args, " "), r.code, r.stdout, r.stderr)
+	line := fmt.Sprintf("[%s]\n$ %s %s\nexit=%d\nstdout:\n%sstderr:\n%s", t.Name(), filepath.Base(bin), strings.Join(args, " "), r.code, r.stdout, r.stderr)
 	if s.transcript != nil {
-		if _, e := fmt.Fprintln(s.transcript, line); e != nil {
+		s.mu.Lock()
+		_, e := fmt.Fprintln(s.transcript, line)
+		s.mu.Unlock()
+		if e != nil {
 			s.fatal(t, "write transcript: %v", e)
 		}
 	}

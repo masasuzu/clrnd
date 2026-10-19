@@ -125,7 +125,14 @@ func (s *suite) cleanupOrphans(t *testing.T) {
 	}
 }
 
+// cloudGuard must be set to run TestE2E. The build tag alone does not make a run deliberate: an IDE
+// or `go test -tags=e2e ./...` would otherwise create billable resources whenever project.env exists.
+const cloudGuard = "CLRND_E2E_CLOUD"
+
 func TestE2E(t *testing.T) {
+	if os.Getenv(cloudGuard) != "1" {
+		t.Skip("creates billable Cloud Run resources: run test/e2e/run.sh, or set " + cloudGuard + "=1 to run it directly")
+	}
 	c, err := readSettings()
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +143,8 @@ func TestE2E(t *testing.T) {
 		}
 	}
 	ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// Not defer: parallel subtests start only after this function returns, and stop cancels ctx.
+	t.Cleanup(stop)
 	go func() { <-ctx.Done(); stop() }() // A second interrupt restores the default kill.
 	work, err := os.MkdirTemp(c.workRoot, "clrnd-e2e-work.")
 	if err != nil {
@@ -206,19 +214,32 @@ func TestE2E(t *testing.T) {
 		s.build(t, src, s.oldBinary)
 	}
 	s.resourcesStarted = true
-	// Keep these scenarios sequential until their resource dependencies are split explicitly.
-	serviceOK := true
-	if c.only == "" || c.only == "current" {
-		serviceOK = t.Run("services", s.services)
+	// The service and the job are separate resources, so their scenarios run in parallel. The
+	// comparison reuses the service and stays behind the service scenario. Cleanup registered
+	// above runs only after every parallel subtest has finished.
+	current := c.only == "" || c.only == "current"
+	comparison := c.oldRef != "" && (c.only == "" || c.only == "old")
+	if current || comparison {
+		t.Run("service", func(t *testing.T) {
+			t.Parallel()
+			ok := true
+			if current {
+				ok = t.Run("current", s.services)
+			}
+			if !comparison {
+				return
+			}
+			if !ok {
+				t.Log("comparison skipped: the service scenario failed, so the live service is in an unknown state")
+				return
+			}
+			t.Run("comparison", s.comparison)
+		})
 	}
 	if c.only == "" || c.only == "jobs" {
-		t.Run("jobs", s.jobs)
-	}
-	if c.oldRef != "" && (c.only == "" || c.only == "old") {
-		if serviceOK {
-			t.Run("comparison", s.comparison)
-		} else {
-			t.Log("comparison skipped: the service scenario failed, so the live service is in an unknown state")
-		}
+		t.Run("jobs", func(t *testing.T) {
+			t.Parallel()
+			s.jobs(t)
+		})
 	}
 }

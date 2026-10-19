@@ -5,6 +5,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # Environment paths are relative to the caller, not the repository directory below.
 export CLRND_E2E_CALLER_DIR="$PWD"
+# TestE2E skips without this, so only a deliberate run creates cloud resources.
+export CLRND_E2E_CLOUD=1
 case "${1:-}" in
   "") ;;
   --cleanup-orphans) export CLRND_E2E_CLEANUP_ORPHANS=1; shift ;;
