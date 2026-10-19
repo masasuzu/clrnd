@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -406,4 +407,55 @@ func TestResolveRegion(t *testing.T) {
 			t.Fatal("resolveRegion() = nil error; want error")
 		}
 	})
+}
+
+// TestIsInteractiveIsFalseForNonTerminals checks the stdin a CI job typically has. /dev/null is a
+// character device, which is what the check used to look for, so it was taken for a terminal.
+func TestIsInteractiveIsFalseForNonTerminals(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devNull.Close() })
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+
+	for name, in := range map[string]io.Reader{
+		os.DevNull: devNull,
+		"a pipe":   r,
+		"a reader": strings.NewReader("y\n"),
+	} {
+		cmd := &cobra.Command{}
+		cmd.SetIn(in)
+		if isInteractive(cmd) {
+			t.Errorf("isInteractive() with %s as stdin = true, want false", name)
+		}
+	}
+}
+
+// TestConfirmActionRefusesWithDevNullAsStdin checks the consequence: with stdin on /dev/null and no
+// --auto-approve, the command fails and says why. It used to prompt, read EOF as "no", print
+// "Aborted." and succeed, so a CI step that had applied nothing went green.
+func TestConfirmActionRefusesWithDevNullAsStdin(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devNull.Close() })
+	cmd := &cobra.Command{}
+	cmd.SetIn(devNull)
+	var errOut bytes.Buffer
+	cmd.SetErr(&errOut)
+	cmd.SetContext(context.Background())
+
+	ok, err := confirmAction(cmd, false, "apply", "Apply?")
+	if ok || err == nil || !strings.Contains(err.Error(), "refusing to apply without confirmation") {
+		t.Errorf("confirmAction() = %v, %v; want a refusal", ok, err)
+	}
+	if strings.Contains(errOut.String(), "Apply?") {
+		t.Errorf("stderr = %q, want no prompt", errOut.String())
+	}
 }

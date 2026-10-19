@@ -205,7 +205,10 @@ revision-name conflicts, asynchronous rollout failures).
   in `applyPlan` ([cmd/apply.go](cmd/apply.go)), shared by every mutating command; `cmd/deploy.go`
   only builds the plan and hands it over. `applyPlan` prints `plan.Diff` (stdout), then `confirm`s
   on stderr unless `--auto-approve` or `--dry-run`; a non-interactive stdin
-  (`isInteractive` via `os.ModeCharDevice`) without `--auto-approve` refuses to apply. An empty diff
+  (`isInteractive`, via `term.IsTerminal`) without `--auto-approve` refuses to apply. It must ask
+  the terminal itself: the old `os.ModeCharDevice` check took `/dev/null` (a character device, and
+  CI's usual stdin) for a terminal, so the command prompted, read EOF as "no" and exited 0 having
+  applied nothing. An empty diff
   skips the apply but still waits (see the `cmd/apply.go` entry under Conventions).
   `--dry-run` passes `dryRun=all` for server-side validation with no mutation; when it
   is off the `DryRun` setter is **not** called at all (passing `""` would send an empty `dryRun=`
