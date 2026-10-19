@@ -518,8 +518,13 @@ revision-name conflicts, asynchronous rollout failures).
   fetches a service or job through `Client.LiveManifest` (the kind's `scaffold` hook: a service
   drops its revision name) and scaffolds `manifest.yaml` (the `--output` file) plus the config file, refusing to
   overwrite existing files without `--force`. The config goes to `--config` when given, otherwise
-  `clrnd.yml` (`initConfigFile`); the recorded `manifest:` is made relative to the config's directory
-  by `manifestPathFor`, because `resolveConfigPath` resolves it from there. Both files are written
+  to the config `loadConfig` found (`loadedConfig`: writing a new `clrnd.yml` next to a
+  `clrnd.yaml` would shadow it), otherwise `clrnd.yml` (`initConfigFile`). `--force` over the config
+  it read keeps that config's `tfstate:` (`keptTfstate`), the one thing in it init cannot scaffold.
+  The recorded `manifest:` is made relative to the config's directory by `manifestPathFor`, because
+  `resolveConfigPath` resolves it from there; both paths are made absolute first, since
+  `filepath.Rel` cannot relate an absolute config path (`-c ~/infra/clrnd.yml`) to the relative
+  default manifest. Both files are written
   `0600` (they can carry plaintext `env[].value`) through `writeScaffold`. If the config write fails
   after the manifest was
   overwritten, `restoreManifest` puts the manifest back (best-effort) so `--force` cannot leave the

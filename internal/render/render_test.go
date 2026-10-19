@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"net/http"
+	"net/http/httptest"
 	"sigs.k8s.io/yaml"
 )
 
@@ -342,5 +344,46 @@ a newline`
 	}
 	if payload.Text != raw {
 		t.Errorf("round-tripped value = %q, want %q", payload.Text, raw)
+	}
+}
+
+// TestTfstateErrorsDoNotPrintTheURLPassword checks that a state read over HTTP with basic auth does
+// not leave its password in an error, which goes to stderr and so, in CI, to the job log. Both the
+// location clrnd names and the URL the library repeats are masked.
+func TestTfstateErrorsDoNotPrintTheURLPassword(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"version": 4, "resources": []}`))
+	}))
+	t.Cleanup(srv.Close)
+	withAuth := strings.Replace(srv.URL, "http://", "http://ci:s3cret-token@", 1) + "/state"
+	manifest := []byte(`value: {{ tfstate "aws_s3_bucket.missing.id" }}`)
+
+	// The state is read, but the address is not in it.
+	_, err := Render(context.Background(), manifest, []Source{{Name: DefaultStateName, Location: withAuth}})
+	if err == nil {
+		t.Fatal("Render() = nil error, want the missing address reported")
+	}
+	if strings.Contains(err.Error(), "s3cret-token") || !strings.Contains(err.Error(), "ci:xxxxx@") {
+		t.Errorf("Render() error = %v, want the password masked", err)
+	}
+
+	// The state cannot be read at all.
+	srv.Close()
+	_, err = Render(context.Background(), manifest, []Source{{Name: DefaultStateName, Location: withAuth}})
+	if err == nil || strings.Contains(err.Error(), "s3cret-token") {
+		t.Errorf("Render() error = %v, want a failure without the password", err)
+	}
+}
+
+func TestRedactedLocation(t *testing.T) {
+	for loc, want := range map[string]string{
+		"https://user:tok@example.com/state": "https://user:xxxxx@example.com/state",
+		"https://example.com/state":          "https://example.com/state",
+		"s3://bucket/key":                    "s3://bucket/key",
+		"terraform.tfstate":                  "terraform.tfstate",
+	} {
+		if got := redactedLocation(loc); got != want {
+			t.Errorf("redactedLocation(%q) = %q, want %q", loc, got, want)
+		}
 	}
 }

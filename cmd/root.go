@@ -26,6 +26,9 @@ var (
 	// configDir is the directory of the loaded config file, the base for relative paths from the
 	// config.
 	configDir string
+	// loadedConfig is the path of the config file that was read, whether given with --config or
+	// found in the current directory. Empty when none was.
+	loadedConfig string
 )
 
 var rootCmd = &cobra.Command{
@@ -127,6 +130,7 @@ func loadConfig(cmd *cobra.Command, args []string) error {
 	}
 	cfg = c
 	configDir = filepath.Dir(path)
+	loadedConfig = path
 	return nil
 }
 
