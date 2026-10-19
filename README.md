@@ -1174,7 +1174,9 @@ CI uses ShellCheck v0.11.0 (installed from a pinned, checksummed release); any r
 close enough locally.
 
 Those tool versions are pinned by hand: Dependabot updates the action SHAs and `go.mod`, but not a
-version passed to an action, a `go run tool@version`, or the ShellCheck release CI downloads. When
+version passed to an action, a `go run tool@version`, the ShellCheck release CI downloads, or the
+runner image every job names in `runs-on` (a release such as `ubuntu-24.04`, never
+`ubuntu-latest`, which GitHub moves on its own schedule). When
 you bump one, bump it everywhere it is written — `.github/scripts/check-tool-pins.sh` (run in CI)
 fails when the copies disagree, which is what kept CI on `latest` while this file said `v2.6.2`.
 

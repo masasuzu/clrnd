@@ -59,4 +59,22 @@ pin shellcheck \
   "$(version_in .github/workflows/verify.yml 'SHELLCHECK_VERSION: v[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in README.md 'ShellCheck v[0-9]+\.[0-9]+\.[0-9]+')"
 
+# The runner image. GitHub moves ubuntu-latest to a new release over several weeks, so during
+# that window a PR, its merge and the release could each build on a different image. Every job
+# names one release, and no job may fall back to a -latest label.
+runners=()
+while IFS= read -r runner; do
+  runners+=("$runner")
+done < <(grep -hoE '^[[:space:]]*runs-on:[[:space:]]*[^[:space:]#]+' .github/workflows/*.yml |
+  sed -E 's/.*runs-on:[[:space:]]*//')
+if [ "${#runners[@]}" -eq 0 ]; then
+  printf '::error::runner: no runs-on could be read from .github/workflows\n'
+  status=1
+elif [[ " ${runners[*]} " == *-latest\ * ]]; then
+  printf '::error::runner: a job uses a -latest label; name a release: %s\n' "${runners[*]}"
+  status=1
+else
+  pin runner "${runners[@]}"
+fi
+
 exit "$status"

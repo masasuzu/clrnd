@@ -157,7 +157,8 @@ Worker pools (#142) are the next kind. The shape to follow:
 - Every checkout sets `persist-credentials: false`.
 - Pinned tool versions are bumped by hand in every place they are written;
   [.github/scripts/check-tool-pins.sh](.github/scripts/check-tool-pins.sh) fails when the copies
-  disagree (it reads the golangci-lint line in this file too).
+  disagree (it reads the golangci-lint line in this file too). That includes the runner image:
+  every job names the same Ubuntu release, never `ubuntu-latest`.
 - Releases are cut from `main` only: `v*` tags, a guard that the commit is on `main`, the same
   checks as CI, then GoReleaser, signing, provenance and packslip. The workflow comments explain
   each choice.

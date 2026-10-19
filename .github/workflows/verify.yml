@@ -8,7 +8,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # A named release, not ubuntu-latest: GitHub moves that label over several weeks, so a PR, the
+    # merge and the release built from it could each run on a different image. Every job names
+    # the same release; check-tool-pins.sh enforces it.
+    runs-on: ubuntu-24.04
     # Without a limit, a single hung job holds the runner for the default 6 hours.
     timeout-minutes: 15
     steps:
@@ -78,7 +81,7 @@ jobs:
   # GoReleaser itself builds with the same config. With --snapshot there is no release, no
   # signing and no provenance.
   release-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -108,7 +111,7 @@ jobs:
         run: goreleaser build --snapshot --clean
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
