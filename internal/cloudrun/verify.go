@@ -244,12 +244,8 @@ func checkSecrets(ctx context.Context, res *RemoteCheck, w workload, secrets []s
 // versionsBySecret collects, per secret, the referenced versions without duplicates.
 func versionsBySecret(w workload) map[string][]string {
 	out := make(map[string][]string)
-	seen := make(map[secretVersionRef]bool)
+	// secretVersionRefs has already removed duplicates.
 	for _, ref := range secretVersionRefs(w) {
-		if seen[ref] {
-			continue
-		}
-		seen[ref] = true
 		out[ref.Secret] = append(out[ref.Secret], ref.Version)
 	}
 	return out
@@ -383,28 +379,14 @@ func checkImages(ctx context.Context, res *RemoteCheck, images []string, opts ..
 // secretNames collects, without duplicates, the Secret Manager secret names the manifest
 // references. It looks at env secretKeyRef as well as secret volumes.
 func secretNames(w workload) []string {
+	// The same walk as the version check, so the two cannot disagree on which secrets a manifest
+	// references.
 	seen := make(map[string]bool)
 	var out []string
-	add := func(n string) {
-		if n != "" && !seen[n] {
-			seen[n] = true
-			out = append(out, n)
-		}
-	}
-
-	for _, c := range w.Containers {
-		if c == nil {
-			continue
-		}
-		for _, e := range c.Env {
-			if e != nil && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
-				add(e.ValueFrom.SecretKeyRef.Name)
-			}
-		}
-	}
-	for _, v := range w.Volumes {
-		if v != nil && v.Secret != nil {
-			add(v.Secret.SecretName)
+	for _, ref := range secretVersionRefs(w) {
+		if !seen[ref.Secret] {
+			seen[ref.Secret] = true
+			out = append(out, ref.Secret)
 		}
 	}
 	return out
