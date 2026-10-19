@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -599,5 +600,38 @@ func TestVerifyRemoteHandlesADomainScopedCloudSQLProject(t *testing.T) {
 	got := pathsMatching(recorded(), "/instances/")
 	if len(got) != 1 || !strings.Contains(got[0], "example.com:other-project") {
 		t.Errorf("Cloud SQL lookups = %v, want the domain-scoped project kept whole", got)
+	}
+}
+
+// TestSecretNamesAndVersionsComeFromOneWalk checks that the existence check and the version check
+// see the same secrets, in the same order, for references written every way a manifest can.
+func TestSecretNamesAndVersionsComeFromOneWalk(t *testing.T) {
+	w := workload{
+		Containers: []*run.Container{{Env: []*run.EnvVar{
+			{Name: "A", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "db", Key: "3"}}},
+			{Name: "B", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "db"}}},
+			{Name: "C", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "projects/p/secrets/api/versions/7"}}},
+			{Name: "D", ValueFrom: &run.EnvVarSource{SecretKeyRef: &run.SecretKeySelector{Name: "db", Key: "3"}}},
+		}}},
+		Volumes: []*run.Volume{
+			{Name: "v1", Secret: &run.SecretVolumeSource{SecretName: "tls"}},
+			{Name: "v2", Secret: &run.SecretVolumeSource{SecretName: "db", Items: []*run.KeyToPath{{Key: "4"}, {Key: "3"}}}},
+		},
+	}
+	names := secretNames(w)
+	if want := []string{"db", "projects/p/secrets/api/versions/7", "tls"}; !slices.Equal(names, want) {
+		t.Errorf("secretNames() = %v, want %v", names, want)
+	}
+	versions := versionsBySecret(w)
+	if got := versions["db"]; !slices.Equal(got, []string{"3", "latest", "4"}) {
+		t.Errorf(`versions["db"] = %v, want 3, latest, 4 without duplicates`, got)
+	}
+	if got := versions["projects/p/secrets/api/versions/7"]; !slices.Equal(got, []string{"7"}) {
+		t.Errorf("versions of the path form = %v, want [7]", got)
+	}
+	for _, name := range names {
+		if _, ok := versions[name]; !ok {
+			t.Errorf("secret %q has a name but no version to check", name)
+		}
 	}
 }
