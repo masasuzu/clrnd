@@ -460,7 +460,9 @@ revision-name conflicts, asynchronous rollout failures).
   is sorted here rather than trusted to the API across pages. `executionStatus` names the state from
   `Completed` plus the `run.googleapis.com/cancelTime` label: confirmed against the real API, a
   cancel leaves `Completed` Unknown with **no reason** for a while, so only the label tells
-  `Cancelling` from `Running`. `cancel` fetches the execution first and refuses a finished one with
+  `Cancelling` from `Running`. The label only stands in for a **missing** reason: a task that fails
+  while a cancel is pending ends False with its own reason and the label both, and that is a
+  `Failed`, not a `Cancelled`. `cancel` fetches the execution first and refuses a finished one with
   its state (the API's own answer is a bare 400 "not running"), prints the target with
   `printTarget` and confirms with `confirmAction` like `delete` — but has no `--dry-run`, because
   the API has none for a cancel. It then waits with `WaitExecutionStopped`, the same poll loop as

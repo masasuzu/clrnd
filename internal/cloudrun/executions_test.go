@@ -29,6 +29,9 @@ func TestExecutionStatus(t *testing.T) {
 		{"failed", "False", "NonZeroExitCode", false, "Failed"},
 		{"cancelled", "False", "Cancelled", true, "Cancelled"},
 		{"cancelled, reason not filled in", "False", "", true, "Cancelled"},
+		// A task that failed while the cancel was pending: the failure is what happened.
+		{"failed with a cancel pending", "False", "NonZeroExitCode", true, "Failed"},
+		{"ended with no reason and no cancel", "False", "", false, "Failed"},
 	} {
 		obj := executionObject(tc.completed, tc.reason, "", 0, 0, 0)
 		if tc.cancelRequested {

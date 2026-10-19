@@ -152,6 +152,10 @@ func newExecution(obj *run.Execution) *Execution {
 // against the real API: True is a success; False with reason Cancelled is a cancel and any other
 // reason (NonZeroExitCode, ...) a failure; Unknown is still going, and a cancel that was requested
 // but has not taken effect yet is also Unknown, with no reason, until it settles.
+//
+// The cancel label only fills in for a missing reason. A task can fail while a cancel is pending,
+// and the execution then ends False with that failure's reason (NonZeroExitCode, ...) and the
+// label both; calling it Cancelled would hide the failure.
 func executionStatus(e *Execution, cancelRequested bool) string {
 	completed := e.Completed()
 	switch {
@@ -159,7 +163,8 @@ func executionStatus(e *Execution, cancelRequested bool) string {
 		return "Pending"
 	case completed.Status == conditionTrue:
 		return "Succeeded"
-	case completed.Status == conditionFalse && (completed.Reason == "Cancelled" || cancelRequested):
+	case completed.Status == conditionFalse &&
+		(completed.Reason == "Cancelled" || (completed.Reason == "" && cancelRequested)):
 		return "Cancelled"
 	case completed.Status == conditionFalse:
 		return "Failed"
