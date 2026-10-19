@@ -66,7 +66,7 @@ clrnd --version
 
 ### With a Go toolchain
 
-Needs **Go 1.26.7 or newer**, matching `go.mod`:
+Needs the Go version named in [`go.mod`](go.mod) or newer:
 
 ```sh
 go install github.com/masasuzu/clrnd@latest
@@ -99,13 +99,14 @@ gcloud auth application-default login
 | Command | Permissions |
 | ------- | ----------- |
 | `render` | none — it never contacts the API |
-| `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get`, `secretmanager.secrets.get`, and `artifactregistry.tags.get` / `artifactregistry.dockerimages.get` |
+| `verify` | none for the local checks. The API existence checks additionally use `iam.serviceAccounts.get`, `secretmanager.secrets.get` and `secretmanager.versions.get`, `artifactregistry.tags.get` / `artifactregistry.dockerimages.get`, `vpcaccess.connectors.get`, and `cloudsql.instances.get` — each only when the manifest references that kind of resource. A check that is denied is a `warning:`, not a failure |
 | `status`, `wait`, `init` | `run.services.get` |
 | `revisions` | `run.services.get`, `run.revisions.list`, plus `run.revisions.delete` for `--prune` |
 | `diff` | `run.services.get` **and `run.services.update`** — plus `run.services.create` for a service that does not exist yet. See below |
 | `deploy` | `run.services.get`, `run.services.update`, and `run.services.create` for a service that does not exist yet |
 | `rollback` | `run.services.get`, `run.revisions.list`, `run.services.update` |
 | `refresh` | `run.services.get`, `run.services.update` |
+| `traffic` | `run.services.get`, `run.services.update`, plus `run.revisions.list` for `--to` |
 | `delete` | `run.services.get`, `run.services.delete` |
 | `jobs verify` | the same as `verify` |
 | `jobs diff` | `run.jobs.get` **and `run.jobs.update`** — plus `run.jobs.create` for a job that does not exist yet, for the same reason as `diff` |
@@ -229,7 +230,7 @@ the job's name.
 Manifests are rendered as [Go templates](https://pkg.go.dev/text/template) before they are parsed,
 so you can fill placeholders from Terraform state outputs (or any resource attribute) and from
 environment variables, using the same notation as [ecspresso](https://github.com/kayac/ecspresso).
-This applies to `verify`, `render`, `diff`, and `deploy`.
+This applies to `verify`, `render`, `diff`, and `deploy`, and to the `clrnd jobs` forms of them.
 
 > **The manifest is always rendered as a template**, even with no `--tfstate` configured. A manifest
 > that needs a literal `{{` — a container argument for another templating system, say — will fail to
@@ -573,7 +574,8 @@ specified but current version is '...'., aborted
 ```
 
 Re-run the command: the second attempt diffs against the new state, so you see what the other change
-did before deciding to apply on top of it. This applies to `deploy`, `rollback`, and `refresh` alike.
+did before deciding to apply on top of it. This applies to every command that shows a diff before
+applying it, for services and jobs alike.
 
 ```sh
 clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]

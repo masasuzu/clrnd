@@ -1,4 +1,4 @@
-# Local project ID. Never commit this: see CLAUDE.local.md.
+# Local project ID. Never commit it: a project ID does not belong in a public repository.
 /project.env
 # Local path of the gcloud config directory this test runs with (see README, Credentials).
 /gcloud-config.env

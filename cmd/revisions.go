@@ -26,7 +26,8 @@ var revisionsCmd = &cobra.Command{
 		"one). Listing is read-only; nothing is modified.\n" +
 		"With --prune, the revisions older than the newest --keep are deleted. Cloud Run keeps\n" +
 		"every revision forever otherwise, and a service has a limit on how many it can hold.\n" +
-		"A revision serving traffic or carrying a tag is never deleted, however old it is.\n" +
+		"A revision serving traffic, carrying a tag, or named in the service's traffic\n" +
+		"configuration (so about to serve) is never deleted, however old it is.\n" +
 		"service may be omitted when set in the config file.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runRevisions,
@@ -36,7 +37,7 @@ func init() {
 	addTargetFlags(revisionsCmd, &revisionsProject, &revisionsRegion)
 	addFormatFlag(revisionsCmd, &revisionsFormat)
 	revisionsCmd.Flags().BoolVar(&revisionsPrune, "prune", false,
-		"delete the revisions older than the newest --keep (never one serving traffic or tagged)")
+		"delete the revisions older than the newest --keep (never one serving traffic, tagged, or named in spec.traffic)")
 	revisionsCmd.Flags().IntVar(&revisionsKeep, "keep", defaultRevisionsKeep,
 		"how many of the newest revisions to keep when pruning")
 	revisionsCmd.Flags().BoolVar(&revisionsAutoApprove, "auto-approve", false,
