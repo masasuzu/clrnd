@@ -610,8 +610,8 @@ That dry run is a write-shaped call, so it needs permission to update the servic
 `--no-server-defaults` to compare against the manifest as written instead.
 
 The diff is printed to stdout; the confirmation prompt is on stderr. Without `--auto-approve`, a
-non-interactive run (no TTY, e.g. a pipeline) refuses to apply and exits with an error — pass
-`--auto-approve` there.
+non-interactive run (stdin is not a terminal: a pipe, a file or `/dev/null`, as in CI) refuses to
+apply and exits with an error — pass `--auto-approve` there.
 
 ```sh
 # Interactive: shows the diff, asks "Apply these changes? [y/N]"

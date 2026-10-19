@@ -14,6 +14,7 @@ import (
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/render"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"google.golang.org/api/option"
 )
 
@@ -233,16 +234,17 @@ func confirm(ctx context.Context, cmd *cobra.Command, prompt string) (bool, erro
 
 // isInteractive reports whether the command's standard input is a terminal (interactive). It looks
 // at the same input source as confirm (cmd.InOrStdin), so the two cannot disagree.
+//
+// It asks the terminal itself (term.IsTerminal) rather than checking for a character device:
+// /dev/null is a character device too, and a CI job whose stdin is /dev/null was taken for a
+// person at a keyboard. A mutating command without --auto-approve then prompted, read EOF as "no",
+// printed "Aborted." and exited 0 — a green CI step that had applied nothing.
 func isInteractive(cmd *cobra.Command) bool {
 	f, ok := cmd.InOrStdin().(*os.File)
 	if !ok {
 		return false
 	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // addManifestFlags registers the --tfstate flag. It can be repeated.
