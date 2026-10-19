@@ -181,14 +181,15 @@ first when `SLEEP_MS` is set, and fails when `FAIL_RATE=1`.
 
 | # | Check |
 | --- | --- |
-| J-1 | `jobs verify` accepts the job manifest, `jobs deploy` creates the job, and `jobs status` reports it Ready with no executions |
+| J-1 | `jobs verify` accepts the job manifest, `jobs deploy` creates the job — with the manifest's `maxRetries: 0`, which the API turns into 3 unless clrnd sends it explicitly — and `jobs status` reports it Ready with no executions |
 | J-2 | `jobs diff` is empty once the server defaults are resolved, and `--no-server-defaults` shows them |
 | J-3 | `deploy` refuses a job manifest and `jobs deploy` a service manifest, each pointing at the other's commands |
-| J-4 | `jobs init` scaffolds a job manifest and a config that names the job with `job:`, the scaffold diffs clean in both modes, and `diff` refuses that config |
+| J-4 | `jobs init` scaffolds a job manifest that keeps `maxRetries: 0` and a config that names the job with `job:`, the scaffold diffs clean in both modes, and `diff` refuses that config |
 | J-5 | a template change shows up in `jobs diff`, deploys, and leaves the diff empty |
 | J-6 | `jobs run` prints the execution's name, waits for it to complete, and `jobs status` reports it as the last execution |
 | J-7 | `jobs execute` (the alias) exits non-zero when the execution fails |
-| J-8 | `jobs run --timeout` gives up while the execution keeps running, and `--no-wait` returns at once |
+| J-8 | `jobs run --timeout` gives up while the execution keeps running and names the command that cancels it, and `--no-wait` returns at once |
+| J-8b | `jobs executions list` shows each execution's status (text and JSON); `jobs executions cancel` refuses a finished execution and a run without confirmation, then stops the running one and waits until it is Cancelled; the list fails for a job that does not exist |
 | J-9 | `jobs delete --dry-run` leaves the job alone, then `jobs delete` removes it — with an execution still running — **and the job is already gone when it returns** |
 
 ## Phase 2: comparing against another revision

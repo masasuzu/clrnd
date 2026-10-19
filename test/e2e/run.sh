@@ -493,8 +493,9 @@ write_manifest() {
   } > "$path"
 }
 
-# write_job_manifest <path> [env value] : a minimal job manifest. maxRetries is 1 so that the run
-# that is meant to fail does not spend three retries doing so.
+# write_job_manifest <path> [env value] : a minimal job manifest. maxRetries is 0, so the run that
+# is meant to fail does not spend retries doing so — and so the test sees an explicit 0 survive:
+# the generated API types drop it unless clrnd forces it, and the API then defaults to 3.
 write_job_manifest() {
   local path="$1" extra="${2:-}"
   {
@@ -507,7 +508,7 @@ write_job_manifest() {
     echo "    spec:"
     echo "      template:"
     echo "        spec:"
-    echo "          maxRetries: 1"
+    echo "          maxRetries: 0"
     echo "          containers:"
     echo "          - image: $JOB_IMAGE"
     if [ -n "$extra" ]; then
@@ -516,6 +517,17 @@ write_job_manifest() {
       echo "              value: \"$extra\""
     fi
   } > "$path"
+}
+
+# execution_name : the first execution name in $OUT (jobs run prints it on a line of its own).
+execution_name() {
+  printf '%s\n' "$OUT" | grep -m1 -x -- "$JOB-[a-z0-9]*"
+}
+
+# live_max_retries : the live job's maxRetries, as gcloud reads it.
+live_max_retries() {
+  gcloud run jobs describe "$JOB" --project "$PROJECT" --region "$REGION" \
+    --format='value(spec.template.spec.template.spec.maxRetries)' 2>/dev/null
 }
 
 # set_env_value <manifest> <value> : make CLRND_E2E equal to <value> (adding it if absent). Works on
@@ -1207,6 +1219,11 @@ run_cmd "$CLRND" jobs status "$JOB"
 assert_rc_zero "jobs status succeeds"
 assert_contains "jobs status reports Ready=True" "Ready:           True"
 assert_contains "jobs status reports no executions yet" "Executions:      0"
+if [ "$(live_max_retries)" = "0" ]; then
+  ok "the explicit maxRetries: 0 reached the job"
+else
+  ng "the live job has maxRetries $(live_max_retries), want 0"
+fi
 
 info "--- J-2. diff against the live job ---"
 run_cmd "$CLRND" jobs diff "$JOB" "$DJ/job.yaml" --exit-code
@@ -1231,6 +1248,7 @@ assert_file_has "the scaffold is a job manifest" "$DJI/manifest.yaml" "kind: Job
 assert_file_has "the config names the job" "$DJI/clrnd.yml" "job: $JOB"
 assert_file_lacks "the config does not name a service" "$DJI/clrnd.yml" "service:"
 assert_file_lacks "the scaffold carries no server-managed label" "$DJI/manifest.yaml" "lastUpdatedTime"
+assert_file_has "the scaffold keeps maxRetries: 0" "$DJI/manifest.yaml" "maxRetries: 0"
 run_cmd "$CLRND" jobs diff --exit-code
 assert_rc_zero "jobs diff right after jobs init is empty"
 run_cmd "$CLRND" jobs diff --exit-code --no-server-defaults
@@ -1253,6 +1271,7 @@ run_cmd "$CLRND" jobs run
 assert_rc_zero "jobs run succeeds and waits for the execution"
 assert_contains "jobs run prints the execution's name" "^$JOB-"
 assert_contains "jobs run reports the execution completing" "Completed=True"
+SUCCEEDED_EXEC="$(execution_name)"
 run_cmd "$CLRND" jobs status
 assert_contains "jobs status reports the last execution" "Last execution:  $JOB-.*(Succeeded"
 
@@ -1260,21 +1279,56 @@ info "--- J-7. a failing execution fails the command ---"
 run_cmd "$CLRND" jobs execute --env FAIL_RATE=1
 if [ "$RC" -ne 0 ]; then ok "jobs execute exits non-zero when the execution fails"; else ng "jobs execute exited 0 for a failed execution"; fi
 assert_contains "the error says the execution did not succeed" "did not succeed"
+FAILED_EXEC="$(execution_name)"
 
 info "--- J-8. stopping the wait leaves the execution running ---"
 run_cmd "$CLRND" jobs run --env SLEEP_MS=600000 --timeout 10s
 if [ "$RC" -ne 0 ]; then ok "jobs run --timeout gives up"; else ng "jobs run --timeout exited 0"; fi
 assert_contains "the error says the execution keeps running" "keeps running"
-run_cmd "$CLRND" jobs run --no-wait
+assert_contains "the error says how to cancel it" "clrnd jobs executions cancel"
+RUNNING_EXEC="$(execution_name)"
+run_cmd "$CLRND" jobs run --no-wait --env SLEEP_MS=600000
 assert_rc_zero "jobs run --no-wait returns at once"
 assert_contains "jobs run --no-wait prints the execution's name" "^$JOB-"
+
+info "--- J-8b. list and cancel executions ---"
+run_cmd "$CLRND" jobs executions list
+assert_rc_zero "jobs executions list succeeds"
+assert_contains "the succeeded execution is listed as Succeeded" "^$SUCCEEDED_EXEC  *Succeeded"
+assert_contains "the failed execution is listed as Failed" "^$FAILED_EXEC  *Failed"
+assert_contains "the execution left running is listed as Running" "^$RUNNING_EXEC  *Running"
+run_cmd "$CLRND" jobs executions list --format json
+if printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(e["name"]==sys.argv[1] and e["status"]=="Running" for e in d) else 1)' "$RUNNING_EXEC"; then
+  ok "jobs executions list --format json lists the running execution"
+else
+  ng "jobs executions list --format json did not produce the expected JSON"
+fi
+run_cmd "$CLRND" jobs executions cancel "$SUCCEEDED_EXEC" --auto-approve
+if [ "$RC" -ne 0 ]; then ok "cancel refuses a finished execution"; else ng "cancel accepted a finished execution"; fi
+assert_contains "cancel says the execution has finished" "has already finished (Succeeded)"
+# Without --auto-approve and with no one to answer, nothing may be cancelled. stdin is /dev/null so
+# that the command cannot wait on the terminal this script was started from (run_cmd captures the
+# output, so the prompt would not even show). Whether clrnd then refuses outright or prompts and
+# reads EOF as "no" depends on how it judges /dev/null, so the check is on the outcome: the
+# execution is still running.
+run_cmd "$CLRND" jobs executions cancel "$RUNNING_EXEC" </dev/null
+run_cmd "$CLRND" jobs executions list
+assert_contains "cancel without --auto-approve cancels nothing" "^$RUNNING_EXEC  *Running"
+run_cmd "$CLRND" jobs executions cancel "$RUNNING_EXEC" --auto-approve --timeout 120s
+assert_rc_zero "cancel stops the running execution and waits for it"
+assert_contains "cancel shows what it is about to cancel" "About to cancel:"
+assert_contains "cancel waits until the execution is cancelled" "Completed=False (Cancelled)"
+run_cmd "$CLRND" jobs executions list
+assert_contains "the cancelled execution is listed as Cancelled" "^$RUNNING_EXEC  *Cancelled"
+run_cmd "$CLRND" jobs executions list "$JOB-missing"
+if [ "$RC" -ne 0 ]; then ok "jobs executions list fails for a job that does not exist"; else ng "jobs executions list succeeded for a missing job"; fi
 
 info "--- J-9. delete ---"
 run_cmd "$CLRND" jobs delete --dry-run
 assert_rc_zero "jobs delete --dry-run succeeds"
 assert_contains "jobs delete shows the executions going with it" "deleted with the job"
 if resource_exists jobs "$JOB"; then ok "jobs delete --dry-run left the job alone"; else ng "jobs delete --dry-run removed the job"; fi
-# The job still has a running execution (J-8); it is deleted with the job.
+# The job still has a running execution (the --no-wait one in J-8); it is deleted with the job.
 run_cmd "$CLRND" jobs delete --auto-approve --timeout 120s
 assert_rc_zero "jobs delete succeeds while an execution is running"
 if resource_exists jobs "$JOB"; then ng "the job still exists right after jobs delete returned"; else ok "the job is gone by the time jobs delete returns"; fi
