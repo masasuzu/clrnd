@@ -71,9 +71,6 @@ func (s *suite) cleanup(t *testing.T) {
 
 func (s *suite) preflight(t *testing.T) {
 	t.Helper()
-	for _, kind := range []string{"services", "jobs"} {
-		s.code(t, s.gcloud(t, "run", kind, "list", "--limit", "1", "--format=json"), 0)
-	}
 	// Report identities without ever printing ADC contents (which include refresh tokens).
 	adc := ""
 	for _, v := range s.c.env {
@@ -110,6 +107,10 @@ func (s *suite) preflight(t *testing.T) {
 		s.fatal(t, "read ADC: %v", err)
 	}
 	s.command(t, s.ctx, s.work, nil, "gcloud", "config", "get-value", "account")
+	// After the identities, so a permission failure here follows the account it was made as.
+	for _, kind := range []string{"services", "jobs"} {
+		s.code(t, s.gcloud(t, "run", kind, "list", "--limit", "1", "--format=json"), 0)
+	}
 }
 
 func (s *suite) cleanupOrphans(t *testing.T) {
@@ -213,7 +214,11 @@ func TestE2E(t *testing.T) {
 	if c.only == "" || c.only == "jobs" {
 		t.Run("jobs", s.jobs)
 	}
-	if c.oldRef != "" && (c.only == "" || c.only == "old") && serviceOK {
-		t.Run("comparison", s.comparison)
+	if c.oldRef != "" && (c.only == "" || c.only == "old") {
+		if serviceOK {
+			t.Run("comparison", s.comparison)
+		} else {
+			t.Log("comparison skipped: the service scenario failed, so the live service is in an unknown state")
+		}
 	}
 }

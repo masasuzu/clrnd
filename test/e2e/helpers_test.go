@@ -92,9 +92,9 @@ func TestHarnessSettings(t *testing.T) {
 	}
 }
 func TestHarnessRedaction(t *testing.T) {
-	text := "project-secret clrnd-e2e-20261019123456-abc-job-x7 https://svc-123456789012.run.app ci@example.com 123456789012"
+	text := "project-secret clrnd-e2e-20261019123456-abc-job-x7 https://svc-123456789012.run.app ci@example.com 123456789012 tester@project-secret.iam.gserviceaccount.com"
 	got := redact(text, "project-secret")
-	for _, secret := range []string{"project-secret", "clrnd-e2e-", "run.app", "ci@example.com", "123456789012"} {
+	for _, secret := range []string{"project-secret", "clrnd-e2e-", "run.app", "ci@example.com", "123456789012", "tester@", "gserviceaccount.com"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("identifier remains: %s", got)
 		}
@@ -163,6 +163,8 @@ func TestHarnessNotFound(t *testing.T) {
 		{result{code: 1, stderr: "ERROR: Cannot find credentials"}, false},
 		{result{code: 1, stderr: "PERMISSION_DENIED"}, false},
 		{result{code: 0, stdout: "not found"}, false},
+		{result{code: -1, stderr: `exec: "gcloud": executable file not found in $PATH`}, false},
+		{result{code: -1, stderr: "Error 404\nsignal: killed"}, false},
 	} {
 		if got := notFound(tc.r); got != tc.want {
 			t.Errorf("notFound(%+v)=%v", tc.r, got)

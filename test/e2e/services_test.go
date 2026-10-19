@@ -13,7 +13,6 @@ type revisionRow struct {
 	Name, Ready, Image string
 	Percent            int64
 	Tags               []string
-	Pinned             bool
 }
 
 func (s *suite) revisions(t *testing.T, dir string) []revisionRow {
@@ -248,9 +247,19 @@ func (s *suite) prune(t *testing.T, dir string) {
 	if s.revisionCount(t) != before {
 		s.fatal(t, "dry run deleted revisions")
 	}
+	// The JSON carries no spec.traffic marker, so read what prune protects from the live spec.
+	svc := s.serviceState(t)
+	protected := map[string]bool{}
+	for _, v := range svc.Spec.Traffic {
+		protected[v.RevisionName] = true
+		if v.LatestRevision {
+			protected[svc.Status.LatestCreatedRevisionName] = true
+			protected[svc.Status.LatestReadyRevisionName] = true
+		}
+	}
 	target := ""
 	for _, v := range s.revisions(t, dir)[1:] {
-		if v.Percent == 0 && len(v.Tags) == 0 && !v.Pinned {
+		if v.Percent == 0 && len(v.Tags) == 0 && !protected[v.Name] {
 			target = v.Name
 			break
 		}
@@ -282,11 +291,20 @@ func (s *suite) comparison(t *testing.T) {
 	dir := s.dir(t, "old-init")
 	// gcloud creates the precondition even when ONLY=old skipped the service scenario.
 	s.pinLive(t, "phase2")
-	r := s.command(t, s.ctx, dir, nil, s.oldBinary, "init", s.service, "--project", s.c.project, "--region", s.c.region)
+	pinned := s.serviceState(t).Spec.Template.Metadata.Name
+	// Releases before the explicit-target change take the target from these variables only, and
+	// a missing target would read below as the old binary refusing the change.
+	env := map[string]string{"CLOUDSDK_CORE_PROJECT": s.c.project, "CLOUDSDK_RUN_REGION": s.c.region}
+	r := s.run(t, s.oldBinary, dir, env, "init", s.service, "--project", s.c.project, "--region", s.c.region)
 	s.code(t, r, 0)
 	manifest := filepath.Join(dir, "manifest.yaml")
+	if pinned != "" && strings.Contains(string(s.read(t, manifest)), pinned) {
+		s.log(t, "comparison binary pins the live revision name in its scaffold")
+	} else {
+		s.log(t, "comparison binary does not pin the revision name")
+	}
 	s.edit(t, manifest, func(m map[string]any) { setEnv(m, "phase2") })
-	r = s.command(t, s.ctx, dir, nil, s.oldBinary, "deploy", "--auto-approve")
+	r = s.run(t, s.oldBinary, dir, env, "deploy", "--auto-approve")
 	// Historical binaries may return success before an asynchronous failure. This phase is
 	// observational: record that outcome, rather than assuming a particular old bug exists.
 	if r.code != 0 {

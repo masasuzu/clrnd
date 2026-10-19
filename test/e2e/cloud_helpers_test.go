@@ -50,12 +50,16 @@ func (s *suite) revisionCount(t *testing.T) int {
 	r := s.code(t, s.gcloud(t, "run", "revisions", "list", "--service", s.service, "--format=json"), 0)
 	return len(decode[[]json.RawMessage](s, t, []byte(r.stdout)))
 }
+
+// notFound accepts only the API's and gcloud's own 404 wording. A process that never exited (-1:
+// not started, killed by a timeout) proves nothing, and a loose "not found" would also match
+// errors such as a missing executable, turning a failed deletion check into a pass.
 func notFound(r result) bool {
-	if r.code == 0 {
+	if r.code <= 0 {
 		return false
 	}
 	text := r.text()
-	if strings.Contains(text, "NOT_FOUND") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") || strings.Contains(text, "Error 404") {
+	if strings.Contains(text, "NOT_FOUND") || strings.Contains(text, "does not exist") || strings.Contains(text, "Error 404") {
 		return true
 	}
 	// gcloud uses resource-specific messages instead of an HTTP status for these calls.

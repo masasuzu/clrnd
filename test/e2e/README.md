@@ -16,8 +16,7 @@ the offline harness tests, not the cloud scenarios.
 - The Cloud Run API enabled and permission to deploy, run and delete resources in the target project
 - `PROJECT=<project-id>`, or a project ID on the first line of `test/e2e/project.env`
 
-Python is no longer required. The scenarios run sequentially; this migration does not enable
-parallel execution.
+No Python is needed. The scenarios run sequentially.
 
 ## Credentials
 
@@ -123,8 +122,10 @@ forces failure.
   and credential setup; `command_test.go`: process execution, assertions and redaction;
   `cloud_helpers_test.go`: live-state checks; `manifest_test.go`: YAML editing and archive extraction.
   Child processes receive explicit `Dir`/`Env` and
-  empty stdin; output streams are checked separately. A prerequisite failure stops its scenario,
-  while the other independent scenario can still run. No `t.Parallel` is used.
+  empty stdin; output streams are checked separately. A failed exit code or live-state check stops
+  its scenario, while the other independent scenario can still run; a wording check on output is
+  recorded and the scenario continues, so one run reports every message that changed. No
+  `t.Parallel` is used.
 - `helpers_test.go`: offline regression checks for the harness. Run them without any credentials:
 
 ```sh

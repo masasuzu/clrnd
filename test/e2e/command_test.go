@@ -42,8 +42,10 @@ var (
 func redact(text, project string) string {
 	text = urlPattern.ReplaceAllString(text, "<service-url>")
 	text = resourcePattern.ReplaceAllString(text, "<resource>")
-	text = strings.ReplaceAll(text, project, "<project>")
+	// Accounts before the project: a service account's address contains the project, and once
+	// that becomes "<project>" the address no longer matches emailPattern.
 	text = emailPattern.ReplaceAllString(text, "<account>")
+	text = strings.ReplaceAll(text, project, "<project>")
 	return numberPattern.ReplaceAllString(text, "<number>")
 }
 func (s *suite) log(t *testing.T, text string) {
@@ -71,6 +73,17 @@ func (s *suite) fatal(t *testing.T, format string, args ...any) {
 		text = redact(text, s.c.project)
 	}
 	t.Fatal(text)
+}
+
+// errorf records a failed check without stopping the scenario. Use it for output wording, whose
+// failure leaves the live state as the next step expects; state checks still stop with fatal.
+func (s *suite) errorf(t *testing.T, format string, args ...any) {
+	t.Helper()
+	text := fmt.Sprintf(format, args...)
+	if !s.c.raw {
+		text = redact(text, s.c.project)
+	}
+	t.Error(text)
 }
 
 func (s *suite) command(t *testing.T, ctx context.Context, dir string, extra map[string]string, bin string, args ...string) result {
@@ -109,9 +122,15 @@ func (s *suite) command(t *testing.T, ctx context.Context, dir string, extra map
 }
 func (s *suite) cli(t *testing.T, dir string, args ...string) result {
 	t.Helper()
+	return s.run(t, s.binary, dir, nil, args...)
+}
+
+// run bounds a clrnd binary like cli does, for the comparison binary and extra environments.
+func (s *suite) run(t *testing.T, bin, dir string, extra map[string]string, args ...string) result {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Minute)
 	defer cancel()
-	return s.command(t, ctx, dir, nil, s.binary, args...)
+	return s.command(t, ctx, dir, extra, bin, args...)
 }
 func (s *suite) gcloud(t *testing.T, args ...string) result {
 	t.Helper()
@@ -137,19 +156,19 @@ func (s *suite) fails(t *testing.T, r result) result {
 func (s *suite) contains(t *testing.T, text, want string) {
 	t.Helper()
 	if !strings.Contains(text, want) {
-		s.fatal(t, "missing %q in %s", want, text)
+		s.errorf(t, "missing %q in %s", want, text)
 	}
 }
 func (s *suite) lacks(t *testing.T, text, unwanted string) {
 	t.Helper()
 	if strings.Contains(text, unwanted) {
-		s.fatal(t, "unexpected %q in %s", unwanted, text)
+		s.errorf(t, "unexpected %q in %s", unwanted, text)
 	}
 }
 func (s *suite) empty(t *testing.T, text string) {
 	t.Helper()
 	if text != "" {
-		s.fatal(t, "expected empty stdout, got %s", text)
+		s.errorf(t, "expected empty stdout, got %s", text)
 	}
 }
 func (s *suite) dir(t *testing.T, name string) string {
