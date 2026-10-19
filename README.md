@@ -83,7 +83,8 @@ go build -o clrnd .
 ### Shell completion
 
 `clrnd completion bash|zsh|fish|powershell` prints a shell completion script (cobra's built-in);
-`clrnd completion <shell> --help` explains where your shell wants it installed.
+`clrnd completion <shell> --help` explains where your shell wants it installed. `--format`
+completes its values (`text`, `json`).
 
 ## Authentication
 
@@ -112,9 +113,10 @@ gcloud auth application-default login
 | `jobs diff` | `run.jobs.get` **and `run.jobs.update`** — plus `run.jobs.create` for a job that does not exist yet, for the same reason as `diff` |
 | `jobs deploy` | `run.jobs.get`, `run.jobs.update`, and `run.jobs.create` for a job that does not exist yet |
 | `jobs run` | `run.jobs.run` — `run.jobs.runWithOverrides` instead when `--args` / `--env` / `--task-count` / `--task-timeout` is given — plus `run.executions.get` for the wait |
-| `jobs status`, `jobs init` | `run.jobs.get` |
+| `jobs status`, `jobs wait`, `jobs init` | `run.jobs.get` |
 | `jobs delete` | `run.jobs.get`, `run.jobs.delete` |
 | `jobs executions list` | `run.jobs.get`, `run.executions.list` |
+| `jobs executions wait` | `run.executions.get` |
 | `jobs executions cancel` | `run.executions.get`, `run.executions.cancel` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
@@ -411,7 +413,7 @@ clrnd [command]
 | `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
-| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions cancel`. |
+| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs wait`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions wait`, `jobs executions cancel`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -923,7 +925,7 @@ The diff is shown and confirmed the same way `deploy` does, and the rollout is w
 | ---------------- | ------------------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `project:` is set in the config file. |
 | `--region`       | Cloud Run region. Required unless `region:` is set in the config file. |
-| `--revision`     | Revision to send traffic to (default: the one before the revision currently serving). |
+| `--revision`, `--to` | Revision to send traffic to (default: the one before the revision currently serving). `--to` is the same flag, spelled as in `traffic`. |
 | `--auto-approve` | Apply without the interactive confirmation prompt. Use this in CI/CD. |
 | `--dry-run`      | Validate the request server-side without applying any changes (no prompt). |
 | `--no-wait`      | Return as soon as the request is accepted, without waiting for the rollout. |
@@ -1067,7 +1069,7 @@ clrnd jobs run my-job --args migrate --args --up --env DRY_RUN=1 --task-count 1
 
 | Flag | Description |
 | ---- | ----------- |
-| `--args` | An argument for the container, replacing the job's arguments. Repeatable, one argument each. |
+| `--args` | An argument for the container, replacing the job's arguments. Repeatable, one argument each: unlike gcloud's `--args`, a value is not split at commas. |
 | `--env` | `NAME=VALUE` set for this execution only. Repeatable. |
 | `--container` | The container `--args` / `--env` apply to; needed only when the job has more than one. |
 | `--task-count` | Number of tasks for this execution (default: the job's own). |
@@ -1099,6 +1101,14 @@ my-job-9qd4m  Failed     0/1 succeeded, 1 failed   2026-01-01T03:04:05.123456Z  
 ```
 
 The status is one of `Pending`, `Running`, `Cancelling`, `Succeeded`, `Failed` and `Cancelled`.
+
+`clrnd jobs executions wait <execution>` waits for an execution to finish, as `jobs run` does after
+starting one, and fails when it fails or is cancelled — for a CI step that started a job with
+`jobs run --no-wait` and does something else first. Like `jobs run`, it has no time limit unless
+`--timeout` sets one, and stopping the wait never cancels the execution.
+
+`clrnd jobs wait [job]` is `wait` for a job: it waits until the job is ready after a
+`jobs deploy --no-wait`.
 
 `clrnd jobs executions cancel <execution>` stops a running execution; the job itself is unchanged.
 It fetches the execution first, so one that does not exist or has already finished fails before

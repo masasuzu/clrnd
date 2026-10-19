@@ -1238,6 +1238,9 @@ run_cmd "$CLRND" jobs status "$JOB"
 assert_rc_zero "jobs status succeeds"
 assert_contains "jobs status reports Ready=True" "Ready:           True"
 assert_contains "jobs status reports no executions yet" "Executions:      0"
+run_cmd "$CLRND" jobs wait "$JOB" --timeout 60s
+assert_rc_zero "jobs wait returns once the job is ready"
+assert_contains "jobs wait reports Ready on stderr" "Ready=True"
 if [ "$(live_max_retries)" = "0" ]; then
   ok "the explicit maxRetries: 0 reached the job"
 else
@@ -1293,6 +1296,13 @@ assert_contains "jobs run reports the execution completing" "Completed=True"
 SUCCEEDED_EXEC="$(execution_name)"
 run_cmd "$CLRND" jobs status
 assert_contains "jobs status reports the last execution" "Last execution:  $JOB-.*(Succeeded"
+
+info "--- J-6b. wait for an execution started without waiting ---"
+run_cmd "$CLRND" jobs run --no-wait
+NO_WAIT_EXEC="$(execution_name)"
+run_cmd "$CLRND" jobs executions wait "$NO_WAIT_EXEC"
+assert_rc_zero "jobs executions wait waits for the execution to finish"
+assert_contains "jobs executions wait reports it completing" "Completed=True"
 
 info "--- J-7. a failing execution fails the command ---"
 run_cmd "$CLRND" jobs execute --env FAIL_RATE=1

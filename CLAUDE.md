@@ -52,9 +52,9 @@ revision-name conflicts, asynchronous rollout failures).
   stdin in a goroutine.
 - [cmd/root.go](cmd/root.go) defines the cobra root command and registers every top-level
   subcommand in its `init()`; the `jobs` commands are registered on `jobsCmd` in
-  [cmd/jobs.go](cmd/jobs.go), and `jobs executions list`/`cancel` on `jobsExecutionsCmd`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
+  [cmd/jobs.go](cmd/jobs.go), and `jobs executions list`/`wait`/`cancel` on `jobsExecutionsCmd`. Each subcommand lives in its own file (`cmd/<name>.go`) as a package-level
   `*cobra.Command` var, following the standard cobra layout. The exception is the commands a job
-  shares with a service — `deploy`, `diff`, `verify`, `delete`, `init`: they are built by
+  shares with a service — `deploy`, `diff`, `verify`, `delete`, `init`, `wait`: they are built by
   `newDeployCmd(target)` and friends, once for `serviceTarget` (top level) and once for `jobTarget` (registered on `jobsCmd` in
   [cmd/jobs.go](cmd/jobs.go)), with their flags in a per-command options struct instead of package
   vars. A `target` ([cmd/target.go](cmd/target.go)) carries the `cloudrun.Kind`, the noun used in
@@ -73,11 +73,11 @@ revision-name conflicts, asynchronous rollout failures).
   config); args fill service first, then manifest. Only the commands that take **both** a
   service and a manifest use `cobra.MaximumNArgs(2)`: `verify`, `diff`, `deploy` (and their `jobs` forms).
   The other commands that take a name use `MaximumNArgs(1)`: `init`, `status`,
-  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait` (service only), their `jobs`
-  forms and `jobs run` (job only), and `render` (**manifest
+  `revisions`, `rollback`, `traffic`, `delete`, `refresh`, `wait`, their `jobs`
+  forms, and `jobs run` (job only), and `render` (**manifest
   only** — `Use: "render [manifest]"`, so `clrnd render my-svc manifest.yaml` is an error).
-  `jobs executions cancel` takes exactly one execution (`ExactArgs(1)`: an execution never comes
-  from the config file), and the groups `jobs` and `jobs executions` take none (`NoArgs`, so a
+  `jobs executions wait` and `cancel` take exactly one execution (`ExactArgs(1)`: an execution never
+  comes from the config file), and the groups `jobs` and `jobs executions` take none (`NoArgs`, so a
   mistyped subcommand is an error rather than the help and exit 0).
   `render` does not match the service name, so it calls `resolveManifestAt(args, 0)` rather than
   `resolveManifest`.

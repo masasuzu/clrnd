@@ -47,7 +47,8 @@ func init() {
 	addTargetFlags(jobsRunCmd, &jobsRunProject, &jobsRunRegion)
 	f := jobsRunCmd.Flags()
 	f.StringArrayVar(&jobsRunArgs, "args", nil,
-		"an argument for the container, replacing the job's arguments (repeatable, one argument each)")
+		"an argument for the container, replacing the job's arguments (repeatable, one argument "+
+			"each; unlike gcloud's --args, a value is not split at commas)")
 	f.StringArrayVar(&jobsRunEnv, "env", nil,
 		"NAME=VALUE environment variable to set for this execution (repeatable)")
 	f.StringVar(&jobsRunContainer, "container", "",
@@ -114,15 +115,22 @@ func runJobsRun(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	return waitForExecution(cmd, client, execution.Name, jobsRunTimeout, jobsRunInterval)
+}
+
+// waitForExecution waits until the execution finishes, printing its progress to stderr. It fails
+// when the execution fails or is cancelled. Shared by jobs run and jobs executions wait.
+func waitForExecution(cmd *cobra.Command, client *cloudrun.Client, execution string,
+	timeout, interval time.Duration) error {
 	out := cmd.ErrOrStderr()
-	_, err = client.WaitExecution(ctx, execution.Name, cloudrun.WaitOptions{
-		Timeout:  jobsRunTimeout,
-		Interval: jobsRunInterval,
+	_, err := client.WaitExecution(cmd.Context(), execution, cloudrun.WaitOptions{
+		Timeout:  timeout,
+		Interval: interval,
 		OnUpdate: func(message string) {
-			fmt.Fprintf(out, "waiting for %s: %s\n", execution.Name, message)
+			fmt.Fprintf(out, "waiting for %s: %s\n", execution, message)
 		},
 		OnRetry: func(err error) {
-			fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", execution.Name, err)
+			fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", execution, err)
 		},
 	})
 	return err

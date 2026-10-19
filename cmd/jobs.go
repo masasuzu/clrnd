@@ -32,6 +32,7 @@ func init() {
 	jobsCmd.AddCommand(newDeployCmd(jobTarget))
 	jobsCmd.AddCommand(jobsRunCmd)
 	jobsCmd.AddCommand(jobsStatusCmd)
+	jobsCmd.AddCommand(newWaitCmd(jobTarget))
 	jobsCmd.AddCommand(newDeleteCmd(jobTarget))
 	jobsCmd.AddCommand(newInitCmd(jobTarget))
 	jobsCmd.AddCommand(jobsExecutionsCmd)

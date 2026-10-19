@@ -5,6 +5,7 @@ import (
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -31,7 +32,16 @@ func init() {
 	addTargetFlags(rollbackCmd, &rollbackProject, &rollbackRegion)
 	addApplyFlags(rollbackCmd, &rollbackApply, "the rollout")
 	rollbackCmd.Flags().StringVar(&rollbackRevision, "revision", "",
-		"revision to send traffic to (default: the one before the revision currently serving)")
+		"revision to send traffic to (default: the one before the revision currently serving); "+
+			"--to is the same flag")
+	// --to is the same flag: traffic calls the revision to send traffic to --to, and rollback is
+	// the same move, so --to is what someone who has used traffic will try.
+	rollbackCmd.Flags().SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+		if name == "to" {
+			name = "revision"
+		}
+		return pflag.NormalizedName(name)
+	})
 }
 
 func runRollback(cmd *cobra.Command, args []string) error {

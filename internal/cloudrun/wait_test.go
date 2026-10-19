@@ -124,7 +124,7 @@ func TestWaitReturnsWhenReady(t *testing.T) {
 	)
 	c, _ := newTestClient(t, handler)
 
-	got, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+	got, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(3))
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
@@ -142,7 +142,7 @@ func TestWaitFailsFastWhenReadyIsFalse(t *testing.T) {
 	)
 	c, _ := newTestClient(t, handler)
 
-	got, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+	got, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(3))
 	if err == nil {
 		t.Fatal("Wait() error = nil, want a rollout failure")
 	}
@@ -168,7 +168,7 @@ func TestWaitIgnoresThePreviousGeneration(t *testing.T) {
 	)
 	c, _ := newTestClient(t, handler)
 
-	if _, err := c.Wait(context.Background(), "my-svc", fastWait(3)); err != nil {
+	if _, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(3)); err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
 	if calls() != 3 {
@@ -180,7 +180,7 @@ func TestWaitTimesOut(t *testing.T) {
 	handler, _ := sequenceHandler(serviceWithReady("Unknown", "Deploying", "", 3))
 	c, _ := newTestClient(t, handler)
 
-	_, err := c.Wait(context.Background(), "my-svc", WaitOptions{
+	_, err := c.Wait(context.Background(), KindService, "my-svc", WaitOptions{
 		Timeout: 50 * time.Millisecond, Interval: time.Millisecond, Generation: 3,
 	})
 	if err == nil {
@@ -205,7 +205,7 @@ func TestWaitStopsWhenTheContextIsCancelled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Wait(ctx, "my-svc", WaitOptions{Timeout: time.Minute, Interval: time.Millisecond, Generation: 3})
+		_, err := c.Wait(ctx, KindService, "my-svc", WaitOptions{Timeout: time.Minute, Interval: time.Millisecond, Generation: 3})
 		done <- err
 	}()
 
@@ -233,7 +233,7 @@ func TestWaitReportsChangesOnce(t *testing.T) {
 	var updates []string
 	opts := fastWait(3)
 	opts.OnUpdate = func(message string) { updates = append(updates, message) }
-	if _, err := c.Wait(context.Background(), "my-svc", opts); err != nil {
+	if _, err := c.Wait(context.Background(), KindService, "my-svc", opts); err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
 
@@ -406,7 +406,7 @@ func TestWaitToleratesTransientErrors(t *testing.T) {
 	opts := fastWait(3)
 	opts.OnRetry = func(err error) { retries = append(retries, err) }
 
-	got, err := c.Wait(context.Background(), "my-svc", opts)
+	got, err := c.Wait(context.Background(), KindService, "my-svc", opts)
 	if err != nil {
 		t.Fatalf("Wait() error = %v, want the transient failures to be retried", err)
 	}
@@ -423,7 +423,7 @@ func TestWaitToleratesTransientErrors(t *testing.T) {
 func TestWaitFailsFastWhenTheServiceIsMissing(t *testing.T) {
 	c, api := newTestClient(t, nil) // the default handler returns 404
 
-	_, err := c.Wait(context.Background(), "missing", fastWait(0))
+	_, err := c.Wait(context.Background(), KindService, "missing", fastWait(0))
 	if err == nil {
 		t.Fatal("Wait() error = nil, want a not-found error")
 	}
@@ -442,7 +442,7 @@ func TestWaitTimeoutReportsTheLastError(t *testing.T) {
 		return http.StatusServiceUnavailable, googleAPIError(503, "backend error")
 	})
 
-	_, err := c.Wait(context.Background(), "my-svc", WaitOptions{
+	_, err := c.Wait(context.Background(), KindService, "my-svc", WaitOptions{
 		Timeout: 50 * time.Millisecond, Interval: time.Millisecond, Generation: 3,
 	})
 	if err == nil {
@@ -481,7 +481,7 @@ func TestWaitFailsFastOnPermanentErrors(t *testing.T) {
 				return code, googleAPIError(code, "permanent failure")
 			})
 
-			_, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+			_, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(3))
 			if err == nil {
 				t.Fatal("Wait() error = nil, want the permanent failure returned")
 			}
@@ -512,7 +512,7 @@ func TestWaitRetriesARateLimitedForbidden(t *testing.T) {
 		return http.StatusOK, serviceWithReady(conditionTrue, "", "", 3)
 	})
 
-	got, err := c.Wait(context.Background(), "my-svc", fastWait(3))
+	got, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(3))
 	if err != nil {
 		t.Fatalf("Wait() error = %v, want the rate limit to be retried", err)
 	}

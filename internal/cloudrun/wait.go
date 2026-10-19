@@ -44,16 +44,14 @@ type WaitOptions struct {
 	OnRetry func(err error)
 }
 
-// Wait polls until the service settles. It succeeds once Ready=True, and returns a failure as
-// soon as Ready=False (rather than waiting for nothing).
+// Wait polls until the service or job settles. It succeeds once Ready=True, and returns a failure
+// as soon as Ready=False (rather than waiting for nothing).
 // It returns immediately when ctx is cancelled, so Ctrl-C can interrupt it.
 //
 // The returned *Status is the last observed state, and it is returned on error as well (if one
 // was fetched).
-func (c *Client) Wait(ctx context.Context, service string, opts WaitOptions) (*Status, error) {
-	return waitReady(ctx, subject(serviceKind.noun, service), func(ctx context.Context) (*Status, error) {
-		return c.Status(ctx, service)
-	}, opts)
+func (c *Client) Wait(ctx context.Context, kind Kind, name string, opts WaitOptions) (*Status, error) {
+	return kind.wait(ctx, c, name, opts)
 }
 
 // subject is how wait messages name what they wait for, e.g. `service "my-svc"`.

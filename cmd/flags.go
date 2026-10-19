@@ -47,6 +47,10 @@ const (
 func addFormatFlag(cmd *cobra.Command, format *string) {
 	cmd.Flags().StringVar(format, "format", formatText,
 		fmt.Sprintf("output format: %s or %s", formatText, formatJSON))
+	// Complete the values rather than file names. Registration only fails for a flag that does
+	// not exist, and it was registered just above.
+	_ = cmd.RegisterFlagCompletionFunc("format", cobra.FixedCompletions(
+		[]string{formatText, formatJSON}, cobra.ShellCompDirectiveNoFileComp))
 }
 
 // validateFormat validates the value of --format. Call it before creating the client
