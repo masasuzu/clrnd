@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	run "google.golang.org/api/run/v1"
 )
 
 type result struct {
@@ -31,6 +33,7 @@ type suite struct {
 	ctx                                   context.Context
 	work, binary, oldBinary, service, job string
 	transcript                            *os.File
+	api                                   *run.APIService
 	// Scenarios run in parallel; mu keeps each command's transcript entry in one piece.
 	mu sync.Mutex
 }
@@ -99,7 +102,9 @@ func (s *suite) command(t *testing.T, ctx context.Context, dir string, extra map
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start).Round(100 * time.Millisecond)
 	r := result{stdout: stdout.String(), stderr: stderr.String()}
 	if err != nil {
 		var exit *exec.ExitError
@@ -110,22 +115,30 @@ func (s *suite) command(t *testing.T, ctx context.Context, dir string, extra map
 			r.stderr += "\n" + err.Error()
 		}
 	}
-	line := fmt.Sprintf("[%s]\n$ %s %s\nexit=%d\nstdout:\n%sstderr:\n%s", t.Name(), filepath.Base(bin), strings.Join(args, " "), r.code, r.stdout, r.stderr)
-	if s.transcript != nil {
-		s.mu.Lock()
-		_, e := fmt.Fprintln(s.transcript, line)
-		s.mu.Unlock()
-		if e != nil {
-			s.fatal(t, "write transcript: %v", e)
-		}
-	}
+	line := fmt.Sprintf("[%s]\n$ %s %s\nexit=%d (%s)\nstdout:\n%sstderr:\n%s", t.Name(), filepath.Base(bin), strings.Join(args, " "), r.code, elapsed, r.stdout, r.stderr)
+	s.record(t, line)
 	if filepath.Base(bin) == "gcloud" && r.code == 0 {
-		s.log(t, fmt.Sprintf("$ gcloud %s (exit=0; full output in commands.log)", strings.Join(args, " ")))
+		s.log(t, fmt.Sprintf("$ gcloud %s (exit=0, %s; full output in commands.log)", strings.Join(args, " "), elapsed))
 	} else {
 		s.log(t, line)
 	}
 	return r
 }
+
+// record appends one entry to commands.log, which keeps everything unredacted.
+func (s *suite) record(t *testing.T, entry string) {
+	t.Helper()
+	if s.transcript == nil {
+		return
+	}
+	s.mu.Lock()
+	_, err := fmt.Fprintln(s.transcript, entry)
+	s.mu.Unlock()
+	if err != nil {
+		s.fatal(t, "write transcript: %v", err)
+	}
+}
+
 func (s *suite) cli(t *testing.T, dir string, args ...string) result {
 	t.Helper()
 	return s.run(t, s.binary, dir, nil, args...)

@@ -212,7 +212,7 @@ func (s *suite) services(t *testing.T) {
 		s.contains(t, r.stderr, "About to delete:")
 		s.serviceState(t)
 		s.code(t, s.cli(t, dir, "delete", s.service, "--auto-approve", "--timeout", "120s"), 0)
-		s.absent(t, "services", s.service)
+		s.absent(t, "service")
 	}
 }
 
@@ -268,18 +268,11 @@ func (s *suite) prune(t *testing.T, dir string) {
 		s.fatal(t, "no prunable revision")
 	}
 	s.code(t, s.cli(t, dir, "revisions", s.service, "--prune", "--keep", "1", "--auto-approve"), 0)
-	s.eventually(t, time.Minute, func() bool {
-		r := s.gcloud(t, "run", "revisions", "describe", target, "--format=json")
-		if r.code == 0 {
-			return false
-		}
-		if !notFound(r) {
-			s.fatal(t, "could not read revision: %s", r.text())
-		}
-		return true
-	})
+	s.eventually(t, time.Minute, func() bool { return !s.revisionExists(t, target) })
 	s.code(t, s.cli(t, dir, "revisions", s.service, "--prune", "--keep", "0", "--auto-approve"), 0)
-	s.code(t, s.gcloud(t, "run", "revisions", "describe", serving, "--format=json"), 0)
+	if !s.revisionExists(t, serving) {
+		s.fatal(t, "prune deleted the serving revision")
+	}
 	if s.serving(t) != serving {
 		s.fatal(t, "prune changed traffic")
 	}

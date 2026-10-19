@@ -1,8 +1,10 @@
 # End-to-end test
 
 The Go tests build and execute the clrnd binary against a real Cloud Run project. They create a
-service and a job, deploy and run them, inspect their state independently through gcloud, and
-remove them. These are external CLI tests: they do not call clrnd's internal implementation.
+service and a job, deploy and run them, inspect their state independently, and remove them. These
+are external CLI tests: they do not call clrnd's internal implementation. The live state is read
+straight from the Cloud Run API with Google's generated Go client, never through clrnd's code;
+gcloud pins a revision as a writer other than clrnd and deletes orphans.
 
 **This creates real, billable resources.** Use a project intended for disposable test resources.
 The `e2e` build tag excludes the suite from ordinary `go test ./...`. The cloud test also skips
@@ -22,8 +24,8 @@ No Python is needed.
 
 ## Credentials
 
-By default, clrnd uses ADC and gcloud uses its own active login. Both identities are checked before
-creating resources. A dedicated config directory prevents another terminal's gcloud login or
+By default, clrnd and the test's own API reads use ADC, and gcloud uses its own active login. Each
+identity is checked before creating resources. A dedicated config directory prevents another terminal's gcloud login or
 configuration changes from changing the test's identity. A service account also bounds its roles.
 
 Create an impersonated account once (replace the placeholders):
@@ -53,7 +55,8 @@ accounts is reported. No service account key file is needed. Reauthenticate in t
 when the source login expires.
 
 The gcloud preflight checks that it can list services and jobs; clrnd must receive an API 404 for
-a deliberately absent service. Listing failures are errors, including during orphan cleanup.
+a deliberately absent service. Listing failures are errors, including during orphan cleanup. API
+reads retry a rate limit or a server error, and treat only a 404 as absent.
 
 ## Usage
 
@@ -94,7 +97,7 @@ using that project. `KEEP=1` does not affect this explicit orphan-cleanup comman
 
 Each run uses a private `clrnd-e2e-work.*` directory under `WORK_ROOT` (default: the OS temporary
 directory). It is removed on success and retained on failure or with `KEEP=1`; the log prints its
-location. It includes manifests and an unredacted `commands.log` with stdout, stderr and exit codes.
+location. It includes manifests and an unredacted `commands.log` with stdout, stderr, exit codes and durations of every command and API read.
 **Do not paste these files into issues: they contain real identifiers.** Console output masks
 project IDs, generated resource names, account addresses, service URLs and long numbers unless
 `RAW=1` is set. Build output remains outside the checkout to avoid cloud-sync clients reverting
@@ -124,7 +127,8 @@ forces failure.
   rather than requires a historical bug.
 - `harness_test.go`: build, preflight, scenario selection and cleanup; `settings_test.go`: target
   and credential setup; `command_test.go`: process execution, assertions and redaction;
-  `cloud_helpers_test.go`: live-state checks; `manifest_test.go`: YAML editing and archive extraction.
+  `api_test.go`: the Cloud Run API reads and cleanup deletes; `cloud_helpers_test.go`: live-state
+  checks built on them; `manifest_test.go`: YAML editing and archive extraction.
   Child processes receive explicit `Dir`/`Env` and empty stdin; output streams are checked
   separately. A failed exit code or live-state check stops its scenario, while the other scenarios
   still run; a wording check on output is recorded and the scenario continues, so one run reports
@@ -139,7 +143,8 @@ forces failure.
 go test -tags=e2e ./test/e2e -run '^TestHarness' -count=1
 ```
 
-When adding a scenario, preserve the external CLI boundary and check live state through gcloud
-where output alone cannot prove an effect. Add it to the coverage list above. A scenario that
+When adding a scenario, preserve the external CLI boundary and check live state through the API
+reads in `api_test.go` where output alone cannot prove an effect; each gcloud call costs more than a
+second of start-up. Add it to the coverage list above. A scenario that
 shares a resource with another must run inside that scenario's subtest, as the comparison does;
 give it its own resource and directory to run it in parallel.

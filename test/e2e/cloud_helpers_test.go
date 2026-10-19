@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +13,19 @@ import (
 
 func (s *suite) serviceState(t *testing.T) *run.Service {
 	t.Helper()
-	r := s.code(t, s.gcloud(t, "run", "services", "describe", s.service, "--format=json"), 0)
-	return decode[*run.Service](s, t, []byte(r.stdout))
+	svc, err := s.getService(t, s.ctx)
+	if err != nil {
+		s.fatal(t, "read service: %v", err)
+	}
+	return svc
+}
+func (s *suite) jobState(t *testing.T) *run.Job {
+	t.Helper()
+	job, err := s.getJob(t, s.ctx)
+	if err != nil {
+		s.fatal(t, "read job: %v", err)
+	}
+	return job
 }
 func (s *suite) serving(t *testing.T) string {
 	t.Helper()
@@ -47,35 +57,42 @@ func (s *suite) percent(t *testing.T, name string, want int64) {
 }
 func (s *suite) revisionCount(t *testing.T) int {
 	t.Helper()
-	r := s.code(t, s.gcloud(t, "run", "revisions", "list", "--service", s.service, "--format=json"), 0)
-	return len(decode[[]json.RawMessage](s, t, []byte(r.stdout)))
+	revisions, err := s.listRevisions(t)
+	if err != nil {
+		s.fatal(t, "list revisions: %v", err)
+	}
+	return len(revisions)
 }
 
-// notFound accepts only the API's and gcloud's own 404 wording. A process that never exited (-1:
-// not started, killed by a timeout) proves nothing, and a loose "not found" would also match
-// errors such as a missing executable, turning a failed deletion check into a pass.
-func notFound(r result) bool {
-	if r.code <= 0 {
+// revisionExists treats only a 404 as absent; any other error stops the scenario.
+func (s *suite) revisionExists(t *testing.T, name string) bool {
+	t.Helper()
+	_, err := s.getRevision(t, name)
+	if isNotFound(err) {
 		return false
 	}
-	text := r.text()
-	if strings.Contains(text, "NOT_FOUND") || strings.Contains(text, "does not exist") || strings.Contains(text, "Error 404") {
-		return true
+	if err != nil {
+		s.fatal(t, "read revision: %v", err)
 	}
-	// gcloud uses resource-specific messages instead of an HTTP status for these calls.
-	for _, kind := range []string{"service", "job", "revision"} {
-		if strings.Contains(text, "Cannot find "+kind+" [") {
-			return true
-		}
-	}
-	return strings.Contains(text, "could not be found.") &&
-		(strings.Contains(text, "Service [") || strings.Contains(text, "Job [") || strings.Contains(text, "Revision ["))
+	return true
 }
-func (s *suite) absent(t *testing.T, kind, name string) {
+
+// notFound reads clrnd's own report of the API's 404. A process that never exited (-1: not
+// started, killed by a timeout) proves nothing, and a loose "not found" would also match errors
+// such as a missing executable.
+func notFound(r result) bool {
+	return r.code > 0 && strings.Contains(r.stderr, "googleapi: Error 404")
+}
+func (s *suite) absent(t *testing.T, kind string) {
 	t.Helper()
-	r := s.gcloud(t, "run", kind, "describe", name, "--format=json")
-	if !notFound(r) {
-		s.fatal(t, "expected %s %s to be absent: %s", kind, name, r.text())
+	var err error
+	if kind == "job" {
+		_, err = s.getJob(t, s.ctx)
+	} else {
+		_, err = s.getService(t, s.ctx)
+	}
+	if !isNotFound(err) {
+		s.fatal(t, "expected the %s to be absent, got error %v", kind, err)
 	}
 }
 func (s *suite) eventually(t *testing.T, timeout time.Duration, check func() bool) {
@@ -89,7 +106,7 @@ func (s *suite) eventually(t *testing.T, timeout time.Duration, check func() boo
 		select {
 		case <-ctx.Done():
 			s.fatal(t, "state did not converge: %v", ctx.Err())
-		case <-time.After(3 * time.Second):
+		case <-time.After(2 * time.Second):
 		}
 	}
 }

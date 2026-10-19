@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -48,10 +49,9 @@ func (s *suite) cleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if s.resourcesStarted {
-		for _, v := range []struct{ kind, name string }{{"services", s.service}, {"jobs", s.job}} {
-			r := s.command(t, ctx, s.work, nil, "gcloud", "run", v.kind, "delete", v.name, "--project", s.c.project, "--region", s.c.region, "--quiet")
-			if r.code != 0 && !notFound(r) {
-				t.Error("resource cleanup failed; use --cleanup-orphans (see redacted log)")
+		for _, v := range []struct{ kind, name string }{{"service", s.service}, {"job", s.job}} {
+			if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
+				s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
 			}
 		}
 	}
@@ -69,15 +69,24 @@ func (s *suite) cleanup(t *testing.T) {
 	}
 }
 
+// preflight checks gcloud, which pins revisions and cleans up orphans under its own login. Its
+// calls are independent, so they run at once rather than paying gcloud's start-up for each.
 func (s *suite) preflight(t *testing.T) {
 	t.Helper()
-	// Report identities without ever printing ADC contents (which include refresh tokens).
-	adc := ""
-	for _, v := range s.c.env {
-		if x, ok := strings.CutPrefix(v, "GOOGLE_APPLICATION_CREDENTIALS="); ok {
-			adc = x
-		}
+	calls := [][]string{
+		{"config", "get-value", "auth/impersonate_service_account"},
+		{"config", "get-value", "account"},
+		{"run", "services", "list", "--limit", "1", "--format=json", "--project", s.c.project, "--region", s.c.region},
+		{"run", "jobs", "list", "--limit", "1", "--format=json", "--project", s.c.project, "--region", s.c.region},
 	}
+	results := make([]result, len(calls))
+	var wg sync.WaitGroup
+	for i, args := range calls {
+		wg.Go(func() { results[i] = s.command(t, s.ctx, s.work, nil, "gcloud", args...) })
+	}
+	wg.Wait()
+	// Report identities without ever printing ADC contents (which include refresh tokens).
+	adc := adcPath(s.c.env)
 	if adc == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -99,17 +108,15 @@ func (s *suite) preflight(t *testing.T) {
 			account = strings.TrimSuffix(filepath.Base(u.Path), ":generateAccessToken")
 		}
 		s.log(t, "clrnd ADC: "+id.Type+" "+account)
-		r := s.command(t, s.ctx, s.work, nil, "gcloud", "config", "get-value", "auth/impersonate_service_account")
-		if account != "" && strings.TrimSpace(r.stdout) != account {
+		if account != "" && strings.TrimSpace(results[0].stdout) != account {
 			s.log(t, "warning: gcloud and clrnd use different identities")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		s.fatal(t, "read ADC: %v", err)
 	}
-	s.command(t, s.ctx, s.work, nil, "gcloud", "config", "get-value", "account")
-	// After the identities, so a permission failure here follows the account it was made as.
-	for _, kind := range []string{"services", "jobs"} {
-		s.code(t, s.gcloud(t, "run", kind, "list", "--limit", "1", "--format=json"), 0)
+	// After the identities, so a permission failure follows the account it was made as.
+	for _, r := range results[2:] {
+		s.code(t, r, 0)
 	}
 }
 
@@ -165,6 +172,9 @@ func TestE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.transcript = transcript
+	if s.api, err = newAPI(c); err != nil {
+		t.Fatal(err)
+	}
 	// Orphan cleanup intentionally operates on a prefix; ordinary cleanup only owns this run's names.
 	if c.cleanupOnly {
 		defer func() {

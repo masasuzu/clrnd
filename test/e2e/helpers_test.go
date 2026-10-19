@@ -7,13 +7,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"google.golang.org/api/option"
+	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -207,22 +212,54 @@ func TestHarnessNotFound(t *testing.T) {
 		r    result
 		want bool
 	}{
-		{result{code: 1, stderr: "ERROR: NOT_FOUND"}, true},
-		{result{code: 1, stderr: "ERROR: (gcloud.run.jobs.describe) Cannot find job [missing]."}, true},
-		{result{code: 1, stderr: "ERROR: (gcloud.run.services.describe) Cannot find service [missing]."}, true},
-		{result{code: 1, stderr: "ERROR: (gcloud.run.revisions.describe) Cannot find revision [missing]"}, true},
-		{result{code: 1, stderr: "ERROR: (gcloud.run.jobs.delete) Job [missing] could not be found."}, true},
-		{result{code: 1, stderr: "ERROR: Cannot find credentials"}, false},
-		{result{code: 1, stderr: "PERMISSION_DENIED"}, false},
-		{result{code: 0, stdout: "not found"}, false},
-		{result{code: -1, stderr: `exec: "gcloud": executable file not found in $PATH`}, false},
-		{result{code: -1, stderr: "Error 404\nsignal: killed"}, false},
+		{result{code: 1, stderr: `Error: failed to get service "x": googleapi: Error 404: Resource 'x' of kind 'SERVICE' does not exist.`}, true},
+		{result{code: 1, stderr: "Error: googleapi: Error 403: Permission denied (or it may not exist)"}, false},
+		{result{code: 1, stderr: "Error: not found"}, false},
+		{result{code: 0, stderr: "googleapi: Error 404"}, false},
+		{result{code: -1, stderr: "googleapi: Error 404\nsignal: killed"}, false},
 	} {
 		if got := notFound(tc.r); got != tc.want {
 			t.Errorf("notFound(%+v)=%v", tc.r, got)
 		}
 	}
 }
+
+// The oracle retries what clears on its own and hands a 404 straight back as "absent".
+func TestHarnessAPI(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/services/flaky") && n == 1:
+			http.Error(w, `{"error":{"code":503,"message":"backend"}}`, http.StatusServiceUnavailable)
+		case strings.HasSuffix(r.URL.Path, "/services/flaky"):
+			_, _ = w.Write([]byte(`{"metadata":{"name":"flaky","generation":2}}`))
+		default:
+			http.Error(w, `{"error":{"code":404,"message":"missing"}}`, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	api, err := run.NewService(t.Context(), option.WithEndpoint(srv.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &suite{ctx: t.Context(), api: api, c: settings{project: "test-project"}, service: "flaky", job: "gone"}
+	svc, err := s.getService(t, t.Context())
+	if err != nil || svc.Metadata.Generation != 2 || calls.Load() != 2 {
+		t.Fatalf("service = %+v, err = %v, calls = %d; want a retried 503", svc, err, calls.Load())
+	}
+	calls.Store(10)
+	if _, err = s.getJob(t, t.Context()); !isNotFound(err) || calls.Load() != 11 {
+		t.Fatalf("err = %v, calls = %d; want one 404 and no retry", err, calls.Load())
+	}
+	if err = s.deleteResource(t, t.Context(), "job", "gone"); err != nil {
+		t.Fatalf("deleting an absent job = %v, want nil", err)
+	}
+	if got := adcPath([]string{"A=1", "GOOGLE_APPLICATION_CREDENTIALS=/x/adc.json"}); got != "/x/adc.json" {
+		t.Fatalf("adcPath = %q", got)
+	}
+}
+
 func TestHarnessYAMLRetainsValues(t *testing.T) {
 	m := map[string]any{"kind": "Service", "metadata": map[string]any{"name": "svc"}}
 	pinRevision(m, "svc-pinned")

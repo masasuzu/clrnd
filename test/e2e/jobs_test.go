@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	run "google.golang.org/api/run/v1"
 )
 
 type executionRow struct{ Name, Status string }
@@ -47,9 +45,7 @@ func (s *suite) jobs(t *testing.T) {
 	r = s.code(t, s.cli(t, dir, "jobs", "wait", s.job, "--timeout", "60s"), 0)
 	s.empty(t, r.stdout)
 	s.contains(t, r.stderr, "Ready=True")
-	live := s.code(t, s.gcloud(t, "run", "jobs", "describe", s.job, "--format=json"), 0)
-	job := decode[*run.Job](s, t, []byte(live.stdout))
-	if job.Spec.Template.Spec.Template.Spec.MaxRetries != 0 {
+	if job := s.jobState(t); job.Spec.Template.Spec.Template.Spec.MaxRetries != 0 {
 		s.fatal(t, "explicit maxRetries: 0 was not kept")
 	}
 	r = s.code(t, s.cli(t, dir, "jobs", "diff", s.job, manifest, "--exit-code"), 0)
@@ -129,9 +125,9 @@ func (s *suite) jobs(t *testing.T) {
 	s.fails(t, s.cli(t, initDir, "jobs", "executions", "list", s.job+"-missing"))
 	r = s.code(t, s.cli(t, initDir, "jobs", "delete", "--dry-run"), 0)
 	s.contains(t, r.stderr, "deleted with the job")
-	s.code(t, s.gcloud(t, "run", "jobs", "describe", s.job, "--format=json"), 0)
+	s.jobState(t)
 	// Check the precondition explicitly: deletion must also stop this execution.
 	s.executionStatus(t, initDir, leftRunning, "Running")
 	s.code(t, s.cli(t, initDir, "jobs", "delete", "--auto-approve", "--timeout", "120s"), 0)
-	s.absent(t, "jobs", s.job)
+	s.absent(t, "job")
 }
