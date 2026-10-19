@@ -26,8 +26,14 @@ type ExecutionSummary struct {
 	Name string `json:"name"`
 	// Status is how it ended, or that it has not: Succeeded, Failed, Cancelled, Running or
 	// Pending. Empty when the API does not say.
-	Status    string `json:"status,omitempty"`
-	Created   string `json:"created,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Created string `json:"created,omitempty"`
+	// CompletionTime is when it finished; empty while it has not. It has the same name as an
+	// Execution's (jobs executions list), so a jq filter written against one works on the other.
+	CompletionTime string `json:"completionTime,omitempty"`
+	// Completed holds the same value as CompletionTime. It was this field's first name and is kept
+	// for JSON backward compatibility (so users who wrote jq '.latestExecution.completed' are not
+	// silently broken). New code should read CompletionTime.
 	Completed string `json:"completed,omitempty"`
 }
 
@@ -73,10 +79,11 @@ func newJobStatusReport(obj *run.Job) *JobStatus {
 			status = e.CompletionStatus
 		}
 		s.LatestExecution = &ExecutionSummary{
-			Name:      e.Name,
-			Status:    status,
-			Created:   e.CreationTimestamp,
-			Completed: e.CompletionTimestamp,
+			Name:           e.Name,
+			Status:         status,
+			Created:        e.CreationTimestamp,
+			CompletionTime: e.CompletionTimestamp,
+			Completed:      e.CompletionTimestamp,
 		}
 	}
 	return s
@@ -114,8 +121,8 @@ func (s *JobStatus) Text() string {
 		if e.Status != "" {
 			parts = append(parts, e.Status)
 		}
-		if e.Completed != "" {
-			parts = append(parts, "completed "+e.Completed)
+		if e.CompletionTime != "" {
+			parts = append(parts, "completed "+e.CompletionTime)
 		} else if e.Created != "" {
 			parts = append(parts, "created "+e.Created)
 		}

@@ -21,7 +21,8 @@ const liveJobWithExecutionsJSON = `{
     "observedGeneration": 4,
     "conditions": [{"type": "Ready", "status": "True"}],
     "executionCount": 3,
-    "latestCreatedExecution": {"name": "my-job-abcde", "completionStatus": "EXECUTION_SUCCEEDED"}
+    "latestCreatedExecution": {"name": "my-job-abcde", "completionStatus": "EXECUTION_SUCCEEDED",
+      "completionTimestamp": "2026-01-02T03:05:00Z"}
   }
 }`
 
@@ -40,7 +41,7 @@ func TestJobsStatusEndToEnd(t *testing.T) {
 		t.Fatalf("jobs status error = %v", err)
 	}
 	for _, want := range []string{"Job:             my-job", "Ready:           True", "Executions:      3",
-		"Last execution:  my-job-abcde (Succeeded)"} {
+		"Last execution:  my-job-abcde (Succeeded, completed 2026-01-02T03:05:00Z)"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("jobs status stdout does not contain %q:\n%s", want, stdout)
 		}
@@ -55,8 +56,10 @@ func TestJobsStatusEndToEnd(t *testing.T) {
 		Job             string `json:"job"`
 		ExecutionCount  int    `json:"executionCount"`
 		LatestExecution struct {
-			Name   string `json:"name"`
-			Status string `json:"status"`
+			Name           string `json:"name"`
+			Status         string `json:"status"`
+			CompletionTime string `json:"completionTime"`
+			Completed      string `json:"completed"`
 		} `json:"latestExecution"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
@@ -64,6 +67,11 @@ func TestJobsStatusEndToEnd(t *testing.T) {
 	}
 	if got.Job != "my-job" || got.ExecutionCount != 3 || got.LatestExecution.Status != "Succeeded" {
 		t.Errorf("jobs status JSON = %+v", got)
+	}
+	// The same key as jobs executions list, plus the old one with the same value.
+	if e := got.LatestExecution; e.CompletionTime != "2026-01-02T03:05:00Z" || e.Completed != e.CompletionTime {
+		t.Errorf("latestExecution completion = %q / completed %q, want both 2026-01-02T03:05:00Z",
+			e.CompletionTime, e.Completed)
 	}
 }
 

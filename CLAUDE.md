@@ -483,6 +483,10 @@ revision-name conflicts, asynchronous rollout failures).
   `WaitExecution` (`pollExecution`) with a different end: False is the goal, and True means it
   succeeded before the cancel took effect, which fails the command. Its interrupted message says
   the cancel goes on rather than suggesting to cancel again.
+  An execution's finish time is `completionTime` in every JSON output: `jobs executions list` and
+  `jobs status`'s `latestExecution`. The latter first shipped it as `completed`, which is kept
+  with the same value for the same reason as `revisions`' `image` (a published `jq` filter must
+  not silently start returning `null`); new code reads `CompletionTime`.
 - `status` (in [internal/cloudrun/status.go](internal/cloudrun/status.go)) is read-only. `newStatus`
   is a pure `*run.Service` → `Status` conversion and `Status.Text()` is pure formatting, so the whole
   presentation is testable without the API; `Client.Status` is the thin API wrapper. `Status.Ready()`
