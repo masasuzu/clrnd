@@ -18,6 +18,13 @@ import (
 // "The revision currently receiving traffic" means the *newest* one, not the one with the largest
 // share. Mid-canary (new 10% / stable 90%), choosing by share mistakes the stable version for the
 // current one and rolls back to the one before it, skipping past the known-good version.
+//
+// Without requested, it refuses when the newest revision serves nothing and is not Ready: the
+// state a failed deploy leaves (or one still rolling out). Traffic that follows the latest
+// revision then stays on the last one that became ready, so the revision serving now is the good
+// one, and stepping back from it would take production further back than the deploy that failed.
+// Pinning the serving revision instead would not help either: the template still describes the
+// failed revision, so the service stays not Ready and the rollback's wait would fail anyway.
 func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, error) {
 	if requested != "" {
 		return FindRevision(revisions, requested)
@@ -34,6 +41,9 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 	}
 	if current < 0 {
 		return nil, errors.New("no revision is currently receiving traffic; pass --revision to choose one")
+	}
+	if newest := revisions[0]; current > 0 && !newest.IsReady() {
+		return nil, unfinishedRolloutError(newest, revisions[current])
 	}
 
 	for i := current + 1; i < len(revisions); i++ {
@@ -87,4 +97,22 @@ func RollbackTarget(live *run.Service, revision string) (*run.Service, error) {
 	out := *live
 	out.Spec = &spec
 	return &out, nil
+}
+
+// unfinishedRolloutError explains why rollback will not pick a revision while the newest one is
+// not Ready (see SelectRollbackRevision).
+func unfinishedRolloutError(newest, serving Revision) error {
+	if newest.Ready == conditionFalse {
+		state := "failed"
+		if newest.Reason != "" {
+			state = fmt.Sprintf("failed (%s)", newest.Reason)
+		}
+		return fmt.Errorf("the newest revision %q %s and serves no traffic; traffic is still on %q, "+
+			"the last revision that became ready, so there is nothing to roll back: fix the manifest "+
+			"and deploy again, or pass --revision to send traffic to a specific revision",
+			newest.Name, state, serving.Name)
+	}
+	return fmt.Errorf("the newest revision %q is not ready yet and serves no traffic; traffic is still "+
+		"on %q: wait for the rollout to finish (clrnd wait), or pass --revision to send traffic to a "+
+		"specific revision", newest.Name, serving.Name)
 }

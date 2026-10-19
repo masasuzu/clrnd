@@ -872,6 +872,13 @@ Send all traffic back to an earlier revision. Without `--revision`, the revision
 newest one currently serving traffic is chosen — so during a canary (new revision at 10%, stable at
 90%) a rollback lands on the stable revision, not two generations back.
 
+Without `--revision`, it refuses while the newest revision serves nothing and is not Ready — what
+a failed deploy leaves behind. Traffic that follows the latest revision then stays on the last one
+that became ready, so the revision serving now *is* the good one, and stepping back from it would
+take production further back than the deploy that failed. The error names both revisions: fix the
+manifest and deploy again, or pass `--revision` to choose one yourself. This is why a CI step like
+"roll back when the deploy fails" does not downgrade a service the failed deploy never touched.
+
 Only the traffic split changes: `spec.template` is untouched, so **no new revision is created**.
 Traffic tags are kept (pinned at 0%) so a rollback does not remove tag URLs.
 

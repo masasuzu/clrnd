@@ -366,6 +366,12 @@ revision-name conflicts, asynchronous rollout failures).
   version. This relies on a Cloud Run behaviour worth knowing: a revision that has lost all
   its traffic stays `Ready=True` (with `Reason: Retired`) and only its `Active` condition flips to
   `False`, so "the previous working version" is still findable.
+  Without `--revision` it **refuses while the newest revision serves nothing and is not Ready**
+  (`unfinishedRolloutError`): after a failed deploy, `latestRevision` keeps traffic on the last
+  ready revision, so stepping back from the serving one would downgrade past the version that was
+  fine. Pinning the serving revision instead is no better — the template still describes the
+  failed revision, so the service stays not Ready and the wait fails. A newer revision that *is*
+  Ready with 0% (`deploy --no-traffic`) does not trigger this.
 - `traffic` (in [internal/cloudrun/traffic.go](internal/cloudrun/traffic.go)) is the general form of
   what `rollback` does: it rewrites **only** `spec.traffic`, so no revision is created.
   `ShiftTrafficTarget` shallow-copies the Spec rather than mutating its argument, and
