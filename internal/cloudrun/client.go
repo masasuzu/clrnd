@@ -31,6 +31,11 @@ func NewClient(ctx context.Context, project, region string, opts ...option.Clien
 	if region == "" {
 		return nil, errors.New("region is required")
 	}
+	// The region becomes the endpoint's host name, so it is checked here, where every Cloud Run
+	// client is built, whatever the caller already checked.
+	if err := validateTarget(project, region); err != nil {
+		return nil, err
+	}
 
 	all := append([]option.ClientOption{option.WithEndpoint(regionalEndpoint(region))}, opts...)
 	api, err := run.NewService(ctx, all...)

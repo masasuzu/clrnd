@@ -70,6 +70,11 @@ func confirmAction(cmd *cobra.Command, autoApprove bool, action, prompt string) 
 func applyPlan(cmd *cobra.Command, plan *cloudrun.DeployPlan, o applyOptions) error {
 	ctx := cmd.Context()
 
+	// Name the target before anything else, as delete does: the diff alone does not say which
+	// project it is about, and "the right service in the wrong project" is the realistic accident.
+	// It goes to stderr even with --auto-approve, so a CI log records where the change went.
+	printTarget(cmd, "Target:", plan.Project(), plan.Region(), plan.Noun(), plan.Name, nil)
+
 	// With no diff there is nothing to apply. --dry-run still goes ahead, for server-side
 	// validation.
 	if plan.Diff == "" {

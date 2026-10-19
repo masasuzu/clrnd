@@ -101,6 +101,9 @@ func runJobsRun(cmd *cobra.Command, args []string) error {
 	}
 	ctx := cmd.Context()
 
+	// Running a job is how a migration runs, so say where, as the commands that change a
+	// definition do. stderr, so stdout keeps only the execution's name.
+	printTarget(cmd, "Target:", client.Project(), client.Region(), "job", job, nil)
 	execution, err := client.RunJob(ctx, job, opts)
 	if err != nil {
 		return err

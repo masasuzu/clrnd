@@ -44,10 +44,13 @@ func startPruneAPI(t *testing.T) func() []string {
 func TestRevisionsPruneDeletesTheOldOnes(t *testing.T) {
 	deleted := startPruneAPI(t)
 
-	stdout, _, err := executeRoot(t, "revisions", "my-svc", "--prune", "--keep", "1",
+	stdout, stderr, err := executeRoot(t, "revisions", "my-svc", "--prune", "--keep", "1",
 		"--auto-approve", "--project", "test-project", "--region", "asia-northeast1")
 	if err != nil {
 		t.Fatalf("revisions --prune error = %v", err)
+	}
+	if !strings.Contains(stderr, "project: test-project") {
+		t.Errorf("stderr = %q, want the project the revisions are deleted from", stderr)
 	}
 	if got := deleted(); len(got) != 1 || got[0] != "my-svc-00006-def" {
 		t.Errorf("deleted = %v, want only the older revision", got)

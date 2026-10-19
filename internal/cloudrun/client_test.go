@@ -465,3 +465,23 @@ func TestPlanCreateSendsNoResourceVersion(t *testing.T) {
 		t.Errorf("Create body should not carry a resourceVersion:\n%s", post.Body)
 	}
 }
+
+// TestPlanDoesNotCreateWhenTheEndpointIsMissing checks that a 404 web page — what a region Cloud
+// Run does not have answers — is an error, not "the service does not exist, create it".
+func TestPlanDoesNotCreateWhenTheEndpointIsMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><p>The requested URL was not found on this server.</p></html>"))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(context.Background(), testProject, testRegion,
+		option.WithEndpoint(srv.URL+"/"), option.WithHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest), PlanOptions{})
+	if err == nil || !EndpointNotFound(err) {
+		t.Errorf("Plan() = %+v, %v; want the endpoint's 404 as an error", plan, err)
+	}
+}

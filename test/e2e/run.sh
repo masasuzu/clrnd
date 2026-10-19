@@ -493,6 +493,12 @@ write_manifest() {
   } > "$path"
 }
 
+# write_target_config <dir> : a clrnd.yml that names only the project and region, for a work
+# directory whose commands pass the service or job as an argument.
+write_target_config() {
+  printf 'project: %s\nregion: %s\n' "$PROJECT" "$REGION" > "$1/clrnd.yml"
+}
+
 # write_job_manifest <path> [env value] : a minimal job manifest. maxRetries is 0, so the run that
 # is meant to fail does not spend retries doing so — and so the test sees an explicit 0 survive:
 # the generated API types drop it unless clrnd forces it, and the API then defaults to 3.
@@ -646,6 +652,9 @@ if [ -n "$OLD_REF" ]; then
   OLD="$BIN/clrnd-old"
 fi
 
+# For gcloud, and for an OLD_REF binary from before clrnd stopped reading these. The current
+# binary does not take its target from the environment; it gets it from a clrnd.yml in each work
+# directory (write_target_config), or from --project/--region where init writes its own config.
 export CLOUDSDK_CORE_PROJECT="$PROJECT"
 export CLOUDSDK_RUN_REGION="$REGION"
 
@@ -655,10 +664,19 @@ step "Phase 1: current working tree"
 
 D1="$WORK/current"; mkdir -p "$D1"; cd "$D1" || die "cannot enter $D1"
 
+info "--- 1-0. the target never comes from the environment ---"
+# CLOUDSDK_CORE_PROJECT / CLOUDSDK_RUN_REGION are exported above, and there is no clrnd.yml yet.
+run_cmd "$CLRND" status "$SERVICE"
+if [ "$RC" -ne 0 ]; then ok "an exported CLOUDSDK_CORE_PROJECT alone resolves no target"; else ng "the target was taken from the environment"; fi
+assert_contains "the error names the variable clrnd ignored" "does not take the target from the environment"
+write_target_config "$D1"
+
 info "--- 1-1. create a new service ---"
 write_manifest "$D1/manifest.yaml"
 run_cmd "$CLRND" deploy "$SERVICE" "$D1/manifest.yaml" --auto-approve
 assert_rc_zero "deploy creates a new service"
+assert_contains "deploy names the project it deploys to" "project: $PROJECT"
+assert_contains "deploy names the region it deploys to" "region: *$REGION"
 wait_ready || ng "the first deploy never became ready"
 
 info "--- 1-1b. status ---"
@@ -726,7 +744,7 @@ fi
 
 info "--- 1-4. the manifest that init scaffolds ---"
 D2="$WORK/current-init"; mkdir -p "$D2"; cd "$D2" || die "cannot enter $D2"
-run_cmd "$CLRND" init "$SERVICE"
+run_cmd "$CLRND" init "$SERVICE" --project "$PROJECT" --region "$REGION"
 assert_rc_zero "init succeeds"
 assert_file_lacks "init drops the revision name the live service pins" "$D2/manifest.yaml" "$PINNED_REV"
 assert_file_lacks "init leaves no empty template metadata" "$D2/manifest.yaml" "metadata: {}"
@@ -1208,6 +1226,7 @@ if [ -z "${ONLY:-}" ] || [ "${ONLY:-}" = "jobs" ]; then
 step "Jobs"
 
 DJ="$WORK/jobs"; mkdir -p "$DJ"; cd "$DJ" || die "cannot enter $DJ"
+write_target_config "$DJ"
 
 info "--- J-1. create a job ---"
 write_job_manifest "$DJ/job.yaml"
@@ -1242,7 +1261,7 @@ assert_contains "jobs deploy points at the top-level commands" "use the top-leve
 
 info "--- J-4. init, then the scaffold diffs clean ---"
 DJI="$DJ/init"; mkdir -p "$DJI"; cd "$DJI" || die "cannot enter $DJI"
-run_cmd "$CLRND" jobs init "$JOB"
+run_cmd "$CLRND" jobs init "$JOB" --project "$PROJECT" --region "$REGION"
 assert_rc_zero "jobs init succeeds"
 assert_file_has "the scaffold is a job manifest" "$DJI/manifest.yaml" "kind: Job"
 assert_file_has "the config names the job" "$DJI/clrnd.yml" "job: $JOB"
