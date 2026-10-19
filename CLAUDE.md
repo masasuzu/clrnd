@@ -289,12 +289,15 @@ revision-name conflicts, asynchronous rollout failures).
 - `Diff` returns a unified diff (via `go-difflib`) of two manifests, empty when identical.
   **`kindOf.compareObjects` is the single comparison path**: it aligns the live definition with the
   desired one, normalizes both through `toManifest`, and diffs them (a zero `current` means the
-  resource does not exist yet, so everything is an addition). `Client.CompareManifest` (used by
-  `diff`) and `planObject` (used by `deploy`, `rollback`, `traffic`, `refresh` and the `jobs`
-  forms) both go through it, so
-  the commands can never drift apart. Both also run the same pre-processing before anything is sent
-  — `setNamespace` puts the target project on the body — because while server defaults are being
-  resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
+  resource does not exist yet, so everything is an addition). **`diff` is `deploy` without the
+  apply**: `Client.CompareManifest` (`kindOf.compare`) parses and validates, then calls the same
+  `planObject` as `deploy`, `rollback`, `traffic`, `refresh` and the `jobs` forms, and returns the
+  plan's diff — only the label of the desired side differs (the manifest's path). It used to be a
+  second copy of that sequence, and drifted twice (a 404 for a resource deploy would create;
+  validation only on the dry-run path); `TestDiffAndPlanAgree` holds them together now. The
+  pre-processing is therefore shared too — `setNamespace` puts the target project on the body,
+  and `setResourceVersion` the live version — which matters because while server defaults are
+  being resolved (the default; `--no-server-defaults` turns it off) the diff path performs a real
   (dry-run) write and gets the same validation as `deploy`.
   `CheckSyntax` is the strict-parse-only check `cmd/diff.go` runs *before* building the client, so
   a manifest problem is not hidden behind a credentials error.
@@ -308,11 +311,11 @@ revision-name conflicts, asynchronous rollout failures).
   `--no-server-defaults` is the way out for read-only credentials, and the flag is negative to match
   `--no-wait`; and the resolved copy is used **only for the diff** — `plan.desired` stays the original, so
   clrnd never writes back values the server computed (which would pin today's defaults forever).
-  `CompareManifest` runs the same `validate` as `deploy` **regardless of the option**, so the two
-  commands agree on what a valid input is; scoping it to the dry-run path let `diff` render a
-  "you can rename a service" diff that `deploy` would refuse. It also mirrors `PlanService`'s 404
-  handling (`current = nil`, everything is an addition), so `diff` works on a service that does not
-  exist yet — and passes `create` to `resolveDefaults`, since a *replace* dry run would 404 too.
+  Going through `planObject`, `diff` runs the same `validate` as `deploy` **regardless of the
+  option**, so the two commands agree on what a valid input is (scoping it to the dry-run path once
+  let `diff` render a "you can rename a service" diff that `deploy` would refuse), and handles a 404
+  the same way (`current = nil`, everything is an addition), so `diff` works on a service that does
+  not exist yet — passing `create` to `resolveDefaults`, since a *replace* dry run would 404 too.
   That path is checked against `run.services.create`, not `run.services.update`, so the failure
   message names whichever call was actually made: telling someone to grant `update` when the dry
   run was a `create` sends them to fix the wrong permission. `resolveDefaults` wraps failures without claiming a cause — permission is the likely

@@ -209,7 +209,7 @@ func (k *kindOf[T]) plan(ctx context.Context, c *Client, name string, manifest [
 	if err := k.validate(obj, name); err != nil {
 		return nil, err
 	}
-	return k.planObject(ctx, c, name, obj, opts)
+	return k.planObject(ctx, c, name, obj, opts, name)
 }
 
 // lookup fetches the live definition. A resource that does not exist is not an error: it comes
@@ -229,8 +229,11 @@ func (k *kindOf[T]) lookup(ctx context.Context, c *Client, name string) (T, erro
 // planObject computes the diff against live using the desired definition as is. It is the
 // entry point for paths that edit live and apply it without going through a manifest, such as
 // rollback and refresh. The desired metadata.namespace is rewritten to match the target.
+//
+// desiredLabel heads the desired side of the diff: the name for deploy, the manifest's path for
+// diff.
 func (k *kindOf[T]) planObject(ctx context.Context, c *Client, name string, desired T,
-	opts PlanOptions) (*DeployPlan, error) {
+	opts PlanOptions, desiredLabel string) (*DeployPlan, error) {
 	var zero T
 	if desired == zero {
 		return nil, fmt.Errorf("no desired %s to plan", k.noun)
@@ -239,7 +242,7 @@ func (k *kindOf[T]) planObject(ctx context.Context, c *Client, name string, desi
 
 	current, err := k.lookup(ctx, c, name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check %s %q: %w", k.noun, name, err)
+		return nil, fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
 	}
 	create := current == zero
 
@@ -274,7 +277,7 @@ func (k *kindOf[T]) planObject(ctx context.Context, c *Client, name string, desi
 		}
 	}
 
-	if plan.Diff, err = k.compareObjects(current, compared, "live/"+name, name); err != nil {
+	if plan.Diff, err = k.compareObjects(current, compared, "live/"+name, desiredLabel); err != nil {
 		return nil, err
 	}
 	return plan, nil
@@ -282,37 +285,23 @@ func (k *kindOf[T]) planObject(ctx context.Context, c *Client, name string, desi
 
 func (k *kindOf[T]) compare(ctx context.Context, c *Client, name string, manifest []byte,
 	desiredLabel string, opts PlanOptions) (string, error) {
-	desired, err := k.parse(manifest)
+	// diff is deploy without the apply: the same parse, validation, lookup (a resource that does
+	// not exist yet is all additions), pre-processing and server-default resolution, so the two
+	// cannot drift apart. They used to be two copies of that sequence, and drifted twice: diff
+	// returned a 404 for a resource deploy would create, and validated only on the dry-run path, so
+	// diff --no-server-defaults accepted input deploy rejected.
+	obj, err := k.parse(manifest)
 	if err != nil {
 		return "", err
 	}
-	// Run the same validation as deploy, whether or not server defaults are resolved. Doing it only
-	// on the dry-run path would let diff --no-server-defaults accept input deploy rejects
-	// (metadata.name differing from the name given, etc.) and render "a diff that looks as if the
-	// name could be changed".
-	if err := k.validate(desired, name); err != nil {
+	if err := k.validate(obj, name); err != nil {
 		return "", err
 	}
-	// Match the target. The dry run that resolves server defaults gets the same validation as a
-	// real write, so unless the same pre-processing as deploy is applied, diff alone gets rejected.
-	c.setNamespace(k.meta(desired))
-
-	// One not created yet is "everything is an addition", like planObject. A 404 used to be
-	// returned here, so the "write a manifest → diff → deploy" flow the README recommends before
-	// init failed on the first run only.
-	current, err := k.lookup(ctx, c, name)
+	plan, err := k.planObject(ctx, c, name, obj, opts, desiredLabel)
 	if err != nil {
-		return "", fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
+		return "", err
 	}
-
-	if opts.ResolveDefaults {
-		var zero T
-		// If it does not exist, the dry run is also a 404 unless it is a create.
-		if desired, err = k.resolveDefaults(ctx, c, name, desired, current == zero); err != nil {
-			return "", err
-		}
-	}
-	return k.compareObjects(current, desired, "live/"+name, desiredLabel)
+	return plan.Diff, nil
 }
 
 // compareObjects is the comparison every diff goes through. It does not modify its arguments. A
@@ -510,7 +499,7 @@ func (c *Client) Plan(ctx context.Context, kind Kind, name string, manifest []by
 // such as rollback and refresh. The desired metadata.namespace is rewritten to match the target.
 func (c *Client) PlanService(ctx context.Context, service string, desired *run.Service,
 	opts PlanOptions) (*DeployPlan, error) {
-	return serviceKind.planObject(ctx, c, service, desired, opts)
+	return serviceKind.planObject(ctx, c, service, desired, opts, service)
 }
 
 // CompareManifest returns the diff between what is live and a local manifest. It is the entry

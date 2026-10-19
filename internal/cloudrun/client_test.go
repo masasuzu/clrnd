@@ -508,3 +508,39 @@ func TestPlanIgnoresAResourceVersionInTheManifest(t *testing.T) {
 		t.Errorf("ReplaceService body = %s, want the live resourceVersion", put.Body)
 	}
 }
+
+// TestDiffAndPlanAgree checks the property diff exists for: it shows what deploy would apply. Both
+// go through planObject now; before, diff had its own copy of the sequence, and it drifted twice.
+func TestDiffAndPlanAgree(t *testing.T) {
+	cases := map[string]func(*http.Request) (int, interface{}){
+		"the service exists": func(r *http.Request) (int, interface{}) {
+			if r.Method == http.MethodPut { // the dry run: answer with what was sent plus a default
+				return http.StatusOK, liveService("gcr.io/project/image:tag")
+			}
+			return http.StatusOK, liveService("gcr.io/project/image:old")
+		},
+		"the service does not exist yet": func(r *http.Request) (int, interface{}) {
+			if r.Method == http.MethodGet {
+				return http.StatusNotFound, googleAPIError(404, "not found")
+			}
+			return http.StatusOK, liveService("gcr.io/project/image:tag")
+		},
+	}
+	for name, handler := range cases {
+		for _, resolve := range []bool{false, true} {
+			c, _ := newTestClient(t, handler)
+			opts := PlanOptions{ResolveDefaults: resolve}
+			plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(validManifest), opts)
+			if err != nil {
+				t.Fatalf("%s, resolve=%v: Plan() error = %v", name, resolve, err)
+			}
+			diff, err := c.CompareManifest(context.Background(), KindService, "my-svc", []byte(validManifest), "my-svc", opts)
+			if err != nil {
+				t.Fatalf("%s, resolve=%v: CompareManifest() error = %v", name, resolve, err)
+			}
+			if diff != plan.Diff {
+				t.Errorf("%s, resolve=%v: diff and deploy disagree\ndiff:\n%s\ndeploy:\n%s", name, resolve, diff, plan.Diff)
+			}
+		}
+	}
+}
