@@ -2,6 +2,7 @@ package cloudrun
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -30,6 +31,17 @@ func TestNewJobStatusReport(t *testing.T) {
 	if e := s.LatestExecution; e == nil || e.Name != "my-job-abcde" || e.Status != "Failed" {
 		t.Errorf("LatestExecution = %+v, want the failed execution", e)
 	}
+	// completionTime is the name jobs executions list uses; completed is the first name, kept with
+	// the same value so jq filters written against it keep working.
+	raw, err := json.Marshal(s.LatestExecution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"completionTime":"2026-01-02T03:05:00Z"`, `"completed":"2026-01-02T03:05:00Z"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("LatestExecution JSON = %s, want it to contain %s", raw, want)
+		}
+	}
 
 	// An unspecified status says nothing, so it is left out; one this code has not seen yet is
 	// shown as the API wrote it rather than dropped.
@@ -47,7 +59,7 @@ func TestJobStatusText(t *testing.T) {
 		Generation:         3,
 		ObservedGeneration: 3,
 		ExecutionCount:     5,
-		LatestExecution:    &ExecutionSummary{Name: "my-job-abcde", Status: "Succeeded", Completed: "2026-01-02T03:05:00Z"},
+		LatestExecution:    &ExecutionSummary{Name: "my-job-abcde", Status: "Succeeded", CompletionTime: "2026-01-02T03:05:00Z"},
 		Conditions:         []Condition{{Type: "Ready", Status: "True"}},
 	}
 	want := "" +

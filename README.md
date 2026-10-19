@@ -1009,7 +1009,8 @@ belongs (`kind is "Job", but this command takes a Service: ... use the 'clrnd jo
 
 `jobs status`, `jobs delete` and `jobs init` are the service commands of the same name for a job.
 `jobs status` shows the Ready condition, the generation, how many executions the job has had and
-how the last one went (`--format json` too). `jobs delete` shows the job with its project, region
+how the last one went (`--format json` too; the last execution's finish time is `completionTime`,
+the key `jobs executions list` uses, and the older `completed` key still carries the same value). `jobs delete` shows the job with its project, region
 and execution count, asks before deleting (`--auto-approve`, `--dry-run`), and waits until the job
 is gone; its executions are deleted with it. `jobs init` scaffolds `manifest.yaml` and a `clrnd.yml`
 that names the job with `job:`, so `clrnd jobs diff` right after it is empty.
