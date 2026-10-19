@@ -498,8 +498,8 @@ revision-name conflicts, asynchronous rollout failures).
   false-signal this feature exists to remove, inverted. The loop therefore keeps polling through
   errors until the timeout (reporting them via `OnRetry`) and surfaces the last one if it does time
   out. Which errors those are is `isRetryable` (in
-  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), shared by every wait loop
-  (`waitReady`, `waitDeleted`, `pollExecution`) so they cannot drift: 408/429/5xx and any error with no HTTP status (a dropped
+  [internal/cloudrun/cloudrun.go](internal/cloudrun/cloudrun.go)), applied by `poll`, the
+  one loop every wait goes through: 408/429/5xx and any error with no HTTP status (a dropped
   connection, DNS, EOF) are retried, every other 4xx returns at once. Waiting out a 400/401/403
   ends in the same failure ten minutes later, having held a CI job the whole time; 404 falls out of
   the same rule (a service that does not exist will not appear). The one 403 that *is* retried is a
@@ -512,8 +512,13 @@ revision-name conflicts, asynchronous rollout failures).
   `DeployPlan.Apply` returns the generation it applied so `deploy` can wait for exactly that
   generation. **`deploy` waits by default** and fails when the
   rollout fails — without that, a broken revision still exited 0 and CI treated it as success.
-  `--no-wait` restores the old behaviour. The polling loop itself is `waitReady`, which takes a
-  `fetch` function and a `subject` (`service "x"`, `job "x"`) for its messages; `Client.Wait` and
+  `--no-wait` restores the old behaviour. **There is one polling loop, `poll`**
+  (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)), behind every wait — a rollout
+  (`waitReady`), a deletion (`waitDeleted`), an execution and its cancel (`pollExecution`). Each
+  supplies a `poller`: how to read the state, its progress line, when it is done, an error that
+  ends it successfully (a deletion's 404), and how to explain an interrupted wait. They used to be
+  three copies of the loop, which had already started to differ. `waitReady` takes a `fetch`
+  function and a `subject` (`service "x"`, `job "x"`) for its messages; `Client.Wait` and
   `DeployPlan.Wait` are thin wrappers, and a job's state is read through `newJobStatus` (generations
   and conditions only). `waitForRollout` in [cmd/wait.go](cmd/wait.go) is the shared entry point
   that prints progress to stderr, given whichever wait function applies.

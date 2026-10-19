@@ -244,49 +244,14 @@ func (c *Client) pollExecution(ctx context.Context, execution string, opts WaitO
 	done func(*Execution, string) (bool, error),
 	interrupted func(parent, waitCtx context.Context, execution string, timeout time.Duration, lastErr error) error,
 ) (*Execution, error) {
-	interval := opts.Interval
-	if interval <= 0 {
-		interval = defaultWaitInterval
-	}
-	waitCtx, cancel := withWaitTimeout(ctx, opts.Timeout)
-	defer cancel()
-
-	var last *Execution
-	var previous string
-	var lastErr error
-	for {
-		e, err := c.GetExecution(waitCtx, execution)
-		switch {
-		case err == nil:
-			lastErr = nil
-			last = e
-			if progress := executionProgress(e); progress != previous {
-				previous = progress
-				if opts.OnUpdate != nil {
-					opts.OnUpdate(progress)
-				}
-			}
-			if ok, doneErr := done(e, execution); ok {
-				return e, doneErr
-			}
-		case waitCtx.Err() != nil:
-			return last, interrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
-		case !isRetryable(err):
-			return last, err
-		default:
-			lastErr = err
-			if opts.OnRetry != nil {
-				opts.OnRetry(err)
-			}
-		}
-
-		select {
-		case <-waitCtx.Done():
-			return last, interrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
-		case <-time.After(interval):
-		}
-		interval = nextWaitInterval(interval)
-	}
+	return poll(ctx, opts, poller[*Execution]{
+		fetch:    func(ctx context.Context) (*Execution, error) { return c.GetExecution(ctx, execution) },
+		progress: executionProgress,
+		done:     func(e *Execution) (bool, error) { return done(e, execution) },
+		interrupted: func(parent, waitCtx context.Context, _ *Execution, timeout time.Duration, lastErr error) error {
+			return interrupted(parent, waitCtx, execution, timeout, lastErr)
+		},
+	})
 }
 
 // executionDone reports whether the wait may end. done true with a nil error is success; with an
