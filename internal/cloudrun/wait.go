@@ -66,47 +66,73 @@ func subject(noun, name string) string {
 // waited for in the messages.
 func waitReady(ctx context.Context, subject string, fetch func(context.Context) (*Status, error),
 	opts WaitOptions) (*Status, error) {
+	return poll(ctx, opts, poller[*Status]{
+		fetch:    fetch,
+		progress: func(s *Status) string { return waitProgress(s, opts.Generation) },
+		done:     func(s *Status) (bool, error) { return waitDone(s, subject, opts.Generation) },
+		interrupted: func(parent, waitCtx context.Context, last *Status, timeout time.Duration, lastErr error) error {
+			return waitInterrupted(parent, waitCtx, subject, last, timeout, opts.Generation, lastErr)
+		},
+	})
+}
+
+// poller is what one wait supplies to poll: how to read the state and what to make of it.
+type poller[T any] struct {
+	// fetch reads the current state.
+	fetch func(context.Context) (T, error)
+	// progress is the one-line state shown through OnUpdate; it is reported only when it changes.
+	progress func(T) string
+	// done decides from a state read: whether the wait is over, and the error it ends with (nil
+	// is success).
+	done func(T) (bool, error)
+	// endsOn, when set, ends the wait successfully on an error that is the outcome being waited
+	// for (a 404 while waiting for a deletion).
+	endsOn func(error) bool
+	// interrupted explains a wait that ended before done said so: Ctrl-C, or the timeout. last is
+	// the last state read (the zero value if none was).
+	interrupted func(parent, waitCtx context.Context, last T, timeout time.Duration, lastErr error) error
+}
+
+// poll is the one polling loop behind every wait (a rollout, a deletion, an execution and its
+// cancel), so they read the timeout, retry and back off the same way.
+//
+// A failed read is not a failed wait: the generated client does not retry, so a single transient
+// 503 would otherwise make an already-applied deploy exit non-zero — the very CI false signal the
+// wait exists to remove, inverted. Errors isRetryable accepts are retried until the timeout (and
+// reported through OnRetry); the last one is surfaced if the wait times out. Any other error ends
+// the wait at once: waiting does not fix a 403.
+func poll[T any](ctx context.Context, opts WaitOptions, p poller[T]) (T, error) {
 	timeout, interval := waitDefaults(opts)
 	waitCtx, cancel := withWaitTimeout(ctx, timeout)
 	defer cancel()
 
-	var last *Status
+	var last T
 	var previous string
-	// lastErr is an error where "observing failed, but a retry might recover".
-	// Giving up the wait on it would make deploy report a failure even though the apply itself
-	// succeeded. That would create, inverted, exactly the CI misjudgement this wait exists to
-	// prevent.
 	var lastErr error
 	for {
-		status, err := fetch(waitCtx)
+		state, err := p.fetch(waitCtx)
 		switch {
+		case err != nil && p.endsOn != nil && p.endsOn(err):
+			return last, nil
 		case err == nil:
 			lastErr = nil
-			last = status
-
-			if progress := waitProgress(status, opts.Generation); progress != previous {
+			last = state
+			if progress := p.progress(state); progress != previous {
 				previous = progress
 				if opts.OnUpdate != nil {
 					opts.OnUpdate(progress)
 				}
 			}
-			if done, doneErr := waitDone(status, subject, opts.Generation); done {
-				return status, doneErr
+			if done, doneErr := p.done(state); done {
+				return state, doneErr
 			}
-
 		case waitCtx.Err() != nil:
 			// A cancel/deadline during the wait is returned as the outcome of the wait, not as an
 			// API error.
-			return last, waitInterrupted(ctx, waitCtx, subject, last, timeout, opts.Generation, lastErr)
-
+			return last, p.interrupted(ctx, waitCtx, last, timeout, lastErr)
 		case !isRetryable(err):
-			// A failure that waiting will not fix. A resource that does not exist (404) will not
-			// appear, and a bad request (400) or missing authentication/permission (401/403) does
-			// not change with time either.
 			return last, err
-
 		default:
-			// A transient failure (503/429/dropped connection, etc.). Retry until the timeout.
 			lastErr = err
 			if opts.OnRetry != nil {
 				opts.OnRetry(err)
@@ -115,10 +141,9 @@ func waitReady(ctx context.Context, subject string, fetch func(context.Context) 
 
 		select {
 		case <-waitCtx.Done():
-			return last, waitInterrupted(ctx, waitCtx, subject, last, timeout, opts.Generation, lastErr)
+			return last, p.interrupted(ctx, waitCtx, last, timeout, lastErr)
 		case <-time.After(interval):
 		}
-
 		interval = nextWaitInterval(interval)
 	}
 }
@@ -126,47 +151,17 @@ func waitReady(ctx context.Context, subject string, fetch func(context.Context) 
 // waitDeleted is the polling loop behind Client.WaitDeleted: it ends at the first 404.
 func (k *kindOf[T]) waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error {
 	what := subject(k.noun, name)
-	timeout, interval := waitDefaults(opts)
-	waitCtx, cancel := withWaitTimeout(ctx, timeout)
-	defer cancel()
-
-	var lastErr error
-	notified := false
-	for {
-		_, err := k.get(waitCtx, c, name)
-		switch {
-		case isNotFound(err):
-			// Gone. This is the outcome being waited for.
-			return nil
-		case err == nil:
-			lastErr = nil
-			if !notified {
-				notified = true
-				if opts.OnUpdate != nil {
-					opts.OnUpdate("still present")
-				}
-			}
-		case waitCtx.Err() != nil:
-			return waitDeleteInterrupted(ctx, waitCtx, what, timeout, lastErr)
-		case !isRetryable(err):
-			// The same classification as Wait. A failure that waiting will not fix is returned
-			// right away.
-			return err
-		default:
-			// Possibly a transient failure. Like Wait, retry until the timeout.
-			lastErr = err
-			if opts.OnRetry != nil {
-				opts.OnRetry(err)
-			}
-		}
-
-		select {
-		case <-waitCtx.Done():
-			return waitDeleteInterrupted(ctx, waitCtx, what, timeout, lastErr)
-		case <-time.After(interval):
-		}
-		interval = nextWaitInterval(interval)
-	}
+	_, err := poll(ctx, opts, poller[T]{
+		fetch: func(ctx context.Context) (T, error) { return k.get(ctx, c, name) },
+		// Gone: the outcome being waited for.
+		endsOn:   isNotFound,
+		progress: func(T) string { return "still present" },
+		done:     func(T) (bool, error) { return false, nil },
+		interrupted: func(parent, waitCtx context.Context, _ T, timeout time.Duration, lastErr error) error {
+			return waitDeleteInterrupted(parent, waitCtx, what, timeout, lastErr)
+		},
+	})
+	return err
 }
 
 // waitDeleteInterrupted builds the reason the wait for deletion was cut short.
