@@ -30,8 +30,44 @@ func TestSelectRollbackRevision(t *testing.T) {
 	}{
 		{
 			name:      "defaults to the one before the serving revision",
-			revisions: revisions,
+			revisions: revisions[1:],
 			want:      "my-svc-00006-def",
+		},
+		{
+			// A deploy whose revision failed leaves traffic on the last good revision. Stepping
+			// back from there would take production past the version that was working.
+			name:      "refuses after a failed rollout",
+			revisions: revisions,
+			wantErr:   `the newest revision "my-svc-00008-ghi" failed and serves no traffic; traffic is still on "my-svc-00007-abc"`,
+		},
+		{
+			name: "says why the newest revision failed",
+			revisions: Revisions{
+				{Name: "my-svc-00008-ghi", Ready: conditionFalse, Reason: "ContainerMissing"},
+				rev("my-svc-00007-abc", conditionTrue, 100),
+				rev("my-svc-00006-def", conditionTrue, 0),
+			},
+			wantErr: `failed (ContainerMissing)`,
+		},
+		{
+			name: "refuses while a rollout is under way",
+			revisions: Revisions{
+				rev("my-svc-00008-ghi", "Unknown", 0),
+				rev("my-svc-00007-abc", conditionTrue, 100),
+				rev("my-svc-00006-def", conditionTrue, 0),
+			},
+			wantErr: `is not ready yet and serves no traffic`,
+		},
+		{
+			// deploy --no-traffic leaves a newer revision that is Ready but serves nothing; the
+			// serving one is still what rollback steps back from.
+			name: "a newer ready revision without traffic does not stop it",
+			revisions: Revisions{
+				rev("my-svc-00008-ghi", conditionTrue, 0),
+				rev("my-svc-00007-abc", conditionTrue, 100),
+				rev("my-svc-00006-def", conditionTrue, 0),
+			},
+			want: "my-svc-00006-def",
 		},
 		{
 			name:      "explicit revision is used as is",
