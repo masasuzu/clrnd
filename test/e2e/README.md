@@ -1,257 +1,136 @@
 # End-to-end test
 
-Runs the `clrnd` binary against a real Cloud Run project: it creates a service
-and a job, deploys to them, runs the job, inspects the results, and deletes them
-again.
+The Go tests build and execute the clrnd binary against a real Cloud Run project. They create a
+service and a job, deploy and run them, inspect their state independently through gcloud, and
+remove them. These are external CLI tests: they do not call clrnd's internal implementation.
 
-This is **not** part of `go test ./...`. The directory holds no Go files, so
-`go build ./...`, `go vet ./...`, and `go test ./...` ignore it entirely. It
-cannot run in CI either, because CI has no Google Cloud credentials. Run it by
-hand when you change anything that talks to the Cloud Run API.
-
-> **It creates real, billable resources.** The service and the job are tiny and
-> are deleted on exit, but they are real. Only point this at a project you are
-> happy to create and destroy Cloud Run services and jobs in.
+**This creates real, billable resources.** Use a project intended for disposable test resources.
+The `e2e` build tag excludes the suite from ordinary `go test ./...`. Running it also requires an
+explicit project, from `PROJECT` or the git-ignored `project.env` next to this file. CI runs only
+the offline harness tests, not the cloud scenarios.
 
 ## Setup
 
-- `go` and `python3` on `PATH`: the script builds the binary under test, and uses Python to read
-  JSON and edit manifests
-- `gcloud` on `PATH`, authenticated with Application Default Credentials
-  (`gcloud auth application-default login`, or better a dedicated config; see
-  [Credentials](#credentials))
-- The Cloud Run API enabled on the target project
-- A project to run against, provided either way:
-  - `PROJECT=<project-id> ./run.sh`, or
-  - write the project ID into `project.env` next to this README (one line).
-    That file is git-ignored — **do not commit a project ID.**
+- Go (the version in the repository's go.mod) and git on PATH
+- gcloud on PATH, authenticated both for its CLI and for Application Default Credentials
+- The Cloud Run API enabled and permission to deploy, run and delete resources in the target project
+- `PROJECT=<project-id>`, or a project ID on the first line of `test/e2e/project.env`
 
-Without one of those the script refuses to run, which also means a fresh clone
-cannot create anything by accident.
+Python is no longer required. The scenarios run sequentially; this migration does not enable
+parallel execution.
 
 ## Credentials
 
-By default the run acts as whatever `~/.config/gcloud` holds: clrnd through
-Application Default Credentials, and `gcloud` (cleanup and checks) through its own
-login. Running `gcloud auth application-default login` in another terminal — for
-another project, as another account — changes that under the test, which then fails
-with a 403 on every step.
+By default, clrnd uses ADC and gcloud uses its own active login. Both identities are checked before
+creating resources. A dedicated config directory prevents another terminal's gcloud login or
+configuration changes from changing the test's identity. A service account also bounds its roles.
 
-**Recommended:** give the test a gcloud config directory of its own that
-impersonates a service account. Nothing outside it changes what the test acts as,
-the service account's roles bound what it can touch, and its actions are logged
-under its own name.
+Create an impersonated account once (replace the placeholders):
 
-1. Create the service account once (replace `<project>`, and use your own account
-   for `<you>`):
+```sh
+gcloud iam service-accounts create clrnd-e2e --project <project>
+SA=clrnd-e2e@<project>.iam.gserviceaccount.com
+gcloud projects add-iam-policy-binding <project> --member "serviceAccount:$SA" --role roles/run.developer
+# Let the tester deploy as the runtime account (normally the default compute account).
+gcloud iam service-accounts add-iam-policy-binding <runtime-service-account> \
+  --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser
+gcloud iam service-accounts add-iam-policy-binding "$SA" \
+  --member "user:<you>" --role roles/iam.serviceAccountTokenCreator
 
-   ```sh
-   gcloud iam service-accounts create clrnd-e2e --project <project>
-   SA=clrnd-e2e@<project>.iam.gserviceaccount.com
-   gcloud projects add-iam-policy-binding <project> --member "serviceAccount:$SA" --role roles/run.developer
-   # deploy as the services' runtime service account (by default the compute one)
-   gcloud iam service-accounts add-iam-policy-binding <runtime-service-account> \
-     --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser
-   # let yourself act as it
-   gcloud iam service-accounts add-iam-policy-binding "$SA" \
-     --member "user:<you>" --role roles/iam.serviceAccountTokenCreator
-   ```
+export CLOUDSDK_CONFIG=~/.config/gcloud-clrnd-e2e
+gcloud auth login
+gcloud config set auth/impersonate_service_account "$SA"
+gcloud auth application-default login --impersonate-service-account "$SA"
+```
 
-2. Log in once into a dedicated config directory:
+Set `CLRND_E2E_GCLOUD_CONFIG` to that directory, or write the path into the git-ignored
+`test/e2e/gcloud-config.env`. A relative environment path is relative to the caller's directory;
+a relative path in the file is relative to that file. The harness passes absolute
+`CLOUDSDK_CONFIG` and `GOOGLE_APPLICATION_CREDENTIALS` values to each child process. Dedicated ADC
+must be a service account, including an impersonated one. A mismatch between the gcloud and ADC
+accounts is reported. No service account key file is needed. Reauthenticate in the same directory
+when the source login expires.
 
-   ```sh
-   export CLOUDSDK_CONFIG=~/.config/gcloud-clrnd-e2e
-   gcloud auth login                                      # your own account, the source credential
-   gcloud config set auth/impersonate_service_account "$SA"
-   gcloud auth application-default login --impersonate-service-account "$SA"
-   ```
-
-3. Point the test at it, either with `CLRND_E2E_GCLOUD_CONFIG=~/.config/gcloud-clrnd-e2e`
-   or by writing that path into `gcloud-config.env` next to this README (one line,
-   git-ignored). A relative path is resolved from the current directory for the
-   variable and from this directory for the file.
-
-The script then sets `CLOUDSDK_CONFIG` for gcloud **and**
-`GOOGLE_APPLICATION_CREDENTIALS` for clrnd: the Go client libraries do not read
-`CLOUDSDK_CONFIG`, and without the second one clrnd would still use
-`~/.config/gcloud`. It refuses a dedicated directory whose ADC is not a service
-account (an easy result of forgetting `--impersonate-service-account`), and warns
-when gcloud there impersonates a different account.
-
-Whatever the credentials, every run first checks both identities before it
-creates a thing, and stops with the API's error instead of a page of failures:
-
-- clrnd: it prints who clrnd acts as and asks the built binary for a service that
-  does not exist. Anything but a 404 stops the run.
-- gcloud: it lists services as gcloud's active account. gcloud reads the state
-  the assertions check and deletes the service at the end, so when it cannot,
-  every check waits out its timeout and the service is left behind — while clrnd
-  itself succeeds. `--cleanup-orphans` runs the same check, since a failed listing
-  would otherwise read as "nothing to delete".
-
-No service account key file is involved: the source credential is your own login,
-kept in that directory. It can still expire (Google sometimes asks to
-reauthenticate); log in again into the same directory when it does.
+The gcloud preflight checks that it can list services and jobs; clrnd must receive an API 404 for
+a deliberately absent service. Listing failures are errors, including during orphan cleanup.
 
 ## Usage
 
+The existing entry point remains a small launcher; all test logic is Go:
+
 ```sh
-./run.sh                        # run against the current working tree
-RAW=1 ./run.sh                  # do not redact identifiers from the output
-./run.sh --cleanup-orphans      # delete leftover clrnd-e2e-* services and jobs and exit
-KEEP=1 ./run.sh                 # keep the service and job for inspection
-ONLY=current ./run.sh           # only the current-binary service phase (phase 1)
-ONLY=jobs ./run.sh              # only the jobs phase
-OLD_REF=<git-ref> ./run.sh      # also build that ref and compare its behaviour
-ONLY=old OLD_REF=<git-ref> ./run.sh   # only the comparison (phase 2)
-REGION=<region> ./run.sh        # default: asia-northeast1
-WORK_ROOT=<dir> ./run.sh        # parent of the build/scratch dir (default: $TMPDIR)
-CLRND_E2E_GCLOUD_CONFIG=<dir> ./run.sh   # gcloud config dir to act from (see Credentials)
+PROJECT=<project-id> ./test/e2e/run.sh
+ONLY=current ./test/e2e/run.sh         # service scenario only
+ONLY=jobs ./test/e2e/run.sh            # job scenario only
+OLD_REF=<git-ref> ./test/e2e/run.sh     # also observe the old binary's revision-name behavior
+ONLY=old OLD_REF=<git-ref> ./test/e2e/run.sh
+KEEP=1 ./test/e2e/run.sh               # retain resources and scratch files
+RAW=1 ./test/e2e/run.sh                # show unredacted identifiers
+REGION=<region> ./test/e2e/run.sh      # default: asia-northeast1
+WORK_ROOT=<directory> ./test/e2e/run.sh
+CLRND_E2E_GCLOUD_CONFIG=<directory> ./test/e2e/run.sh
+./test/e2e/run.sh --cleanup-orphans
 ```
 
-Each run uses a unique service named `clrnd-e2e-<timestamp>` and a job named
-`clrnd-e2e-<timestamp>-job`, and deletes them on exit, including on failure and
-Ctrl-C. `kill -9` skips that cleanup; use
-`--cleanup-orphans` to remove anything left behind.
+The equivalent direct command, also usable without bash, is:
 
-Build output and scratch directories go to a directory of their own,
-`$TMPDIR/clrnd-e2e-work.XXXXXX` (made by `mktemp -d` for each run), **not** into
-the repository. That is deliberate: when the checkout lives in a cloud-synced
-folder (Dropbox, iCloud, OneDrive), the sync client can restore an older copy of
-a binary while it is being rebuilt, or move the new one aside as a "conflicted
-copy" — and the run then silently tests a stale binary. `build_binary` also fails
-the run if the output was not actually rewritten.
-
-`WORK_ROOT=<dir>` moves that directory elsewhere. It names the **parent**: the run
-always works inside a `<dir>/clrnd-e2e-work.XXXXXX` it created, and only ever
-deletes that, so pointing `WORK_ROOT` at a directory of your own does not wipe it.
-The directory is removed after a run that passes, and kept (the run says where)
-after one that fails or with `KEEP=1`. A fresh directory each time also means
-nobody else on a shared machine can have prepared it: the binary built there runs
-with your credentials.
-
-That directory **contains the real service name, service account, and URL** — do
-not paste it into an issue or a pull request.
-
-The script's own output is far safer to paste: every line the script itself
-prints goes through a redaction filter that replaces the project ID, the service
-name, `*.run.app` URLs, the default compute service account, and any other long
-number with placeholders. Assertions still match on the real names — only the
-display is redacted — so nothing is weakened by it. `RAW=1` turns the filter off
-when you need the real values while debugging locally.
-
-The filter covers what the script prints, **not** what external commands write
-straight to the terminal: `go build` inside `build_binary`, and the
-`git archive | tar` used to build the comparison binary. Those are not Cloud Run
-output — they leak local absolute paths, your user name, and whatever the tool
-chose to print — but they do bypass the filter, so give the log a read before
-pasting it rather than trusting the redaction blindly.
-
-## What phase 1 checks
-
-| # | Check |
-| --- | --- |
-| 1-1 | `deploy` creates a new service and it becomes ready |
-| 1-1b | `status` reports Ready, the URL and the traffic split, in text and JSON |
-| 1-1c | `wait` returns once the service is ready and reports progress on stderr |
-| 1-1d | `revisions` lists the revisions with their traffic share, in text and JSON |
-| 1-2 | `diff --no-server-defaults` on a hand-written minimal manifest still shows the server defaults (see issue #11) |
-| 1-2b | plain `diff` resolves them and converges on the same manifest |
-| 1-3 | the live service is made to pin a revision name, the way `--revision-suffix` does |
-| 1-4 | `init` drops that revision name and leaves no empty template metadata |
-| 1-5 | `diff` right after `init` is empty, and a following template change deploys cleanly |
-| 1-5b2 | `refresh` creates a new revision without changing the definition, and `diff` stays empty afterwards |
-| 1-5c | `rollback` moves traffic to the previous ready revision |
-| 1-5c2 | `refresh` refuses a suffix that creates no revision, and refuses while traffic is pinned |
-| 1-5d | a `deploy` after a rollback still works |
-| 1-5e | `traffic --to <rev> --percent 20` splits the assignment 20/80 **without creating a revision**, and `--to-latest` unpins it and returns all of it to the newest revision |
-| 1-5f | `deploy --no-traffic` creates a revision that receives 0% while the previous one keeps serving, and `traffic --to-latest` then moves traffic onto it |
-| 1-6 | `verify` succeeds and prints no warning |
-| 1-6b | `verify --format json` produces one object with `ok: true` and no `missing` |
-| 1-7 | `verify` warns about a pinned revision name but still succeeds |
-| 1-8 | `deploy` warns about a pinned revision name and **exits non-zero** — whether Cloud Run rejects it synchronously (409) or the rollout fails afterwards |
-| 1-8b | re-deploying the same manifest while the service is unhealthy still fails (the no-changes path checks health) |
-| 1-8b2 | `verify` confirms a real Artifact Registry image, **fails** on a tag that does not exist, and stays quiet about a `gcr.io` image it cannot check |
-| 1-8d | `--image` overrides an image the manifest cannot pull: `verify` and `deploy` both look at the overridden one, the live service ends up running it, and an unknown container name is rejected |
-| 1-8c | `render` expands `{{ tfstate }}` / `{{ must_env }}` / `{{ env }}`, applies `json_escape` to a value containing quotes, `-o` writes the result and refuses to overwrite its own input, and `verify` accepts what it produced |
-| 1-8e | `revisions --prune --dry-run` deletes nothing, then `--prune --keep 1` removes an old revision, and `--prune --keep 0` still keeps the one serving traffic (the protection rule, not just the `--keep` window) and leaves the split untouched |
-| 1-9 | `delete --dry-run` leaves the service alone, then `delete` removes it **and the service is already gone when it returns** (skipped when `OLD_REF` is set, since phase 2 still needs the service) |
-
-Step 1-3 matters: **Cloud Run does not report a revision name it generated itself.**
-A service deployed without one comes back with no `spec.template.metadata.name`
-at all, so `init` has nothing to carry over and the rest of phase 1 would pass
-for the wrong reason. The precondition has to be created deliberately.
-
-## What the jobs phase checks
-
-The jobs phase uses Google's sample job image, which exits 0 after a moment, sleeps
-first when `SLEEP_MS` is set, and fails when `FAIL_RATE=1`.
-
-| # | Check |
-| --- | --- |
-| J-1 | `jobs verify` accepts the job manifest, `jobs deploy` creates the job — with the manifest's `maxRetries: 0`, which the API turns into 3 unless clrnd sends it explicitly — and `jobs status` reports it Ready with no executions; `jobs wait` returns once it is ready |
-| J-2 | `jobs diff` is empty once the server defaults are resolved, and `--no-server-defaults` shows them |
-| J-3 | `deploy` refuses a job manifest and `jobs deploy` a service manifest, each pointing at the other's commands |
-| J-4 | `jobs init` scaffolds a job manifest that keeps `maxRetries: 0` and a config that names the job with `job:`, the scaffold diffs clean in both modes, and `diff` refuses that config |
-| J-5 | a template change shows up in `jobs diff`, deploys, and leaves the diff empty |
-| J-6 | `jobs run` prints the execution's name, waits for it to complete, and `jobs status` reports it as the last execution |
-| J-6b | `jobs executions wait` waits for an execution `jobs run --no-wait` started, until it completes |
-| J-7 | `jobs execute` (the alias) exits non-zero when the execution fails |
-| J-8 | `jobs run --timeout` gives up while the execution keeps running and names the command that cancels it, and `--no-wait` returns at once |
-| J-8b | `jobs executions list` shows each execution's status (text and JSON); `jobs executions cancel` refuses a finished execution and a run without confirmation, then stops the running one and waits until it is Cancelled; the list fails for a job that does not exist |
-| J-9 | `jobs delete --dry-run` leaves the job alone, then `jobs delete` removes it — with an execution still running — **and the job is already gone when it returns** |
-
-## Phase 2: comparing against another revision
-
-Set `OLD_REF` to any git ref to build that revision as well and run the same
-service through it. Phase 2 is skipped when `OLD_REF` is unset.
-
-This is a bisect-style tool, not a fixed expectation: it reports what the older
-binary does rather than asserting a particular outcome. It was originally used
-to confirm that, before revision names were removed from what `init` writes,
-`init` → edit → `deploy` failed with:
-
-```
-googleapi: Error 409: Revision named '<revision>' with different configuration
-already exists., alreadyExists
+```sh
+PROJECT=<project-id> go test -tags=e2e -count=1 -timeout=0 -v ./test/e2e -run '^TestE2E$'
 ```
 
-## Behaviour worth knowing about
+Use `ONLY` to select cloud scenarios. Go's `-run` filter can also select a subtest, but setup still
+builds and checks credentials. The default Go test timeout is disabled by the launcher: individual
+CLI calls are bounded, including explicit timeouts on deliberately failing rollouts. Ctrl-C cancels
+test commands and attempts cleanup with a separate bounded context. A second interrupt restores
+the default kill. Forced termination, including `kill -9`, may leave resources; use orphan cleanup.
 
-Things this test pinned down that are not obvious from the code:
+Resources are named `clrnd-e2e-<timestamp>-<random-id>` and `<service-name>-job`. Ordinary cleanup
+only deletes this run's names. `--cleanup-orphans` deliberately deletes every service and job with
+the `clrnd-e2e-` prefix in the configured project and region; do not run it while another test is
+using that project. `KEEP=1` does not affect this explicit orphan-cleanup command.
 
-- **A revision name only comes back if a client set it.** Deploy without
-  `spec.template.metadata.name` and the field is absent from every later read —
-  `spec.template.metadata` holds just the server-managed labels. Deploy with
-  `gcloud run deploy --revision-suffix=<s>`, a Terraform `template.metadata.name`,
-  or a manifest that pins one, and the field is set and echoed back from then on.
-  That is the precondition under which carrying the name into a scaffolded
-  manifest breaks the next deploy.
+Each run uses a private `clrnd-e2e-work.*` directory under `WORK_ROOT` (default: the OS temporary
+directory). It is removed on success and retained on failure or with `KEEP=1`; the log prints its
+location. It includes manifests and an unredacted `commands.log` with stdout, stderr and exit codes.
+**Do not paste these files into issues: they contain real identifiers.** Console output masks
+project IDs, generated resource names, account addresses, service URLs and long numbers unless
+`RAW=1` is set. Build output remains outside the checkout to avoid cloud-sync clients reverting
+binaries during a build.
 
-- **Reusing a revision name can fail asynchronously.** The `ReplaceService` call
-  returns 200, and the rollout fails afterwards with
-  `Ready=False / ConflictingRevisionName`. Before `wait` existed, `clrnd deploy`
-  exited 0 right there and a CI job treated the broken rollout as success — this
-  is the concrete argument that produced the `wait` subcommand (issue #8).
-  `deploy` now waits for the rollout by default and exits non-zero either way:
-  whether Cloud Run rejects the name synchronously (409) or the rollout fails
-  afterwards. That is what check 1-8 asserts.
-- **Cloud Run fills in a lot of defaults on create** — `containerConcurrency`,
-  container `ports`, `resources.limits`, `startupProbe`, `serviceAccountName`,
-  `timeoutSeconds`, `spec.traffic`, and several annotations and labels. A
-  hand-written minimal manifest therefore never diffs clean (issue #11); a
-  manifest produced by `init` does.
-- **`metadata.resourceVersion` is what makes a write conditional** (issue #26).
-  Sending no `resourceVersion` is accepted as an unconditional overwrite, which is
-  how two concurrent deploys used to lose one of the changes with no error at all.
-  A stale but well-formed value gets `409 aborted`
-  (`Conflict for resource '<svc>': version 'X' was specified but current version is 'Y'`),
-  and a malformed one gets `400` (`Invalid resource version provided`) — so the
-  field may only ever be copied from a live read, never invented. This was found by
-  probing the API directly rather than by this script: the race is too narrow to
-  reproduce from a shell, since `clrnd` re-reads the service immediately before it
-  writes.
-- **`run.googleapis.com/client-name` / `client-version` are set by the writing
-  tool**, at both `metadata` and `spec.template.metadata` (issue #25). A service
-  created by `gcloud` carries `gcloud`; one created by `clrnd` carries neither,
-  which is why this script alone never saw them.
+`IMAGE` and `JOB_IMAGE` can override the sample images. Service image checks expect an Artifact
+Registry reference without an explicit tag or digest, so a nonexistent tag can be appended. The
+job image must support Google's sample job behavior: `SLEEP_MS` delays completion and `FAIL_RATE=1`
+forces failure.
+
+## Coverage and structure
+
+- `services_test.go`: explicit target resolution; deploy, status, wait and revisions; server-default
+  diffs; a gcloud-pinned revision followed by init and a template change; refresh and its refusal
+  cases; rollback; traffic splitting without creating a revision; deploy with no traffic followed
+  by promotion; verify text/JSON and pinned-name warnings; rejection of a conflicting revision and
+  its retry; Artifact Registry checks and image overrides; prune protection; dry-run and real delete.
+- `render_test.go`: Terraform state lookup, env/must_env, render output files, input-overwrite
+  refusal, and json_escape through YAML and embedded JSON.
+- `jobs_test.go`: verify/deploy/status/wait; explicit zero retries; diff with and without defaults;
+  cross-kind refusals; init and template changes; successful and failing executions; deferred waits,
+  timeout and no-wait behavior; execution lists in text/JSON; cancel refusals and completion; deletion
+  while an execution is still running.
+- `services_test.go`'s comparison scenario: builds `OLD_REF` from a git archive, pins a live revision,
+  scaffolds with the historical binary, then records its behavior after changing the template. Old
+  versions may fail synchronously or asynchronously, or succeed; this phase intentionally observes
+  rather than requires a historical bug.
+- `harness_test.go`: build, preflight, scenario selection and cleanup; `settings_test.go`: target
+  and credential setup; `command_test.go`: process execution, assertions and redaction;
+  `cloud_helpers_test.go`: live-state checks; `manifest_test.go`: YAML editing and archive extraction.
+  Child processes receive explicit `Dir`/`Env` and
+  empty stdin; output streams are checked separately. A prerequisite failure stops its scenario,
+  while the other independent scenario can still run. No `t.Parallel` is used.
+- `helpers_test.go`: offline regression checks for the harness. Run them without any credentials:
+
+```sh
+go test -tags=e2e ./test/e2e -run '^TestHarness' -count=1
+```
+
+When adding a scenario, preserve the external CLI boundary and check live state through gcloud
+where output alone cannot prove an effect. Add it to the coverage list above. Parallelization can
+be considered after the sequential Go suite has been validated against the real API.

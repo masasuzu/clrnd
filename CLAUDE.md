@@ -33,10 +33,11 @@ PROJECT=<project-id> ./test/e2e/run.sh
 ./test/e2e/run.sh --cleanup-orphans   # remove services and jobs a killed run left behind
 ```
 
-[test/e2e](test/e2e/) creates and deletes a real service and job. It is the only check of
-server-side behaviour (defaulting, revision-name conflicts, asynchronous rollout failures, what the
-API echoes back), so run it when you change anything that talks to the Cloud Run API, and extend
-it when you add a command that does.
+[test/e2e](test/e2e/) uses Go with the `e2e` build tag to create and delete a real service and job.
+Ordinary `go test ./...` excludes it; opt in through `run.sh` with an explicitly configured project.
+It is the only check of server-side behaviour (defaulting, revision-name conflicts, asynchronous
+rollout failures, what the API echoes back), so run it when you change anything that talks to the
+Cloud Run API, and extend it when you add a command that does.
 
 ## Where things live
 
