@@ -1,16 +1,17 @@
 # End-to-end test
 
-Runs the `clrnd` binary against a real Cloud Run project: it creates a service,
-deploys to it, inspects the results, and deletes it again.
+Runs the `clrnd` binary against a real Cloud Run project: it creates a service
+and a job, deploys to them, runs the job, inspects the results, and deletes them
+again.
 
 This is **not** part of `go test ./...`. The directory holds no Go files, so
 `go build ./...`, `go vet ./...`, and `go test ./...` ignore it entirely. It
 cannot run in CI either, because CI has no Google Cloud credentials. Run it by
 hand when you change anything that talks to the Cloud Run API.
 
-> **It creates real, billable resources.** The services are tiny and are deleted
-> on exit, but they are real. Only point this at a project you are happy to
-> create and destroy Cloud Run services in.
+> **It creates real, billable resources.** The service and the job are tiny and
+> are deleted on exit, but they are real. Only point this at a project you are
+> happy to create and destroy Cloud Run services and jobs in.
 
 ## Setup
 
@@ -95,17 +96,19 @@ reauthenticate); log in again into the same directory when it does.
 ```sh
 ./run.sh                        # run against the current working tree
 RAW=1 ./run.sh                  # do not redact identifiers from the output
-./run.sh --cleanup-orphans      # delete leftover clrnd-e2e-* services and exit
-KEEP=1 ./run.sh                 # keep the service for inspection
-ONLY=current ./run.sh           # only the current-binary phase
+./run.sh --cleanup-orphans      # delete leftover clrnd-e2e-* services and jobs and exit
+KEEP=1 ./run.sh                 # keep the service and job for inspection
+ONLY=current ./run.sh           # only the current-binary service phase (phase 1)
+ONLY=jobs ./run.sh              # only the jobs phase
 OLD_REF=<git-ref> ./run.sh      # also build that ref and compare its behaviour
 REGION=<region> ./run.sh        # default: asia-northeast1
 WORK_ROOT=<dir> ./run.sh        # parent of the build/scratch dir (default: $TMPDIR)
 CLRND_E2E_GCLOUD_CONFIG=<dir> ./run.sh   # gcloud config dir to act from (see Credentials)
 ```
 
-Each run uses a unique service named `clrnd-e2e-<timestamp>` and deletes it on
-exit, including on failure and Ctrl-C. `kill -9` skips that cleanup; use
+Each run uses a unique service named `clrnd-e2e-<timestamp>` and a job named
+`clrnd-e2e-<timestamp>-job`, and deletes them on exit, including on failure and
+Ctrl-C. `kill -9` skips that cleanup; use
 `--cleanup-orphans` to remove anything left behind.
 
 Build output and scratch directories go to `$TMPDIR/clrnd-e2e-work`, **not** into
@@ -170,6 +173,23 @@ Step 1-3 matters: **Cloud Run does not report a revision name it generated itsel
 A service deployed without one comes back with no `spec.template.metadata.name`
 at all, so `init` has nothing to carry over and the rest of phase 1 would pass
 for the wrong reason. The precondition has to be created deliberately.
+
+## What the jobs phase checks
+
+The jobs phase uses Google's sample job image, which exits 0 after a moment, sleeps
+first when `SLEEP_MS` is set, and fails when `FAIL_RATE=1`.
+
+| # | Check |
+| --- | --- |
+| J-1 | `jobs verify` accepts the job manifest, `jobs deploy` creates the job, and `jobs status` reports it Ready with no executions |
+| J-2 | `jobs diff` is empty once the server defaults are resolved, and `--no-server-defaults` shows them |
+| J-3 | `deploy` refuses a job manifest and `jobs deploy` a service manifest, each pointing at the other's commands |
+| J-4 | `jobs init` scaffolds a job manifest and a config that names the job with `job:`, the scaffold diffs clean in both modes, and `diff` refuses that config |
+| J-5 | a template change shows up in `jobs diff`, deploys, and leaves the diff empty |
+| J-6 | `jobs run` prints the execution's name, waits for it to complete, and `jobs status` reports it as the last execution |
+| J-7 | `jobs execute` (the alias) exits non-zero when the execution fails |
+| J-8 | `jobs run --timeout` gives up while the execution keeps running, and `--no-wait` returns at once |
+| J-9 | `jobs delete --dry-run` leaves the job alone, then `jobs delete` removes it — with an execution still running — **and the job is already gone when it returns** |
 
 ## Phase 2: comparing against another revision
 

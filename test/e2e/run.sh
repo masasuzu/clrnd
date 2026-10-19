@@ -2,16 +2,17 @@
 #
 # End-to-end test for clrnd against a real Cloud Run project.
 #
-# This is NOT part of `go test ./...`: it creates and deletes real Cloud Run
-# services, needs Application Default Credentials, and cannot run in CI.
+# This is NOT part of `go test ./...`: it creates and deletes a real Cloud Run
+# service and job, needs Application Default Credentials, and cannot run in CI.
 # Run it by hand when changing anything that talks to the Cloud Run API.
 #
 # Usage:
 #   ./run.sh                       # run against the current working tree
-#   ./run.sh --cleanup-orphans     # delete leftover clrnd-e2e-* services and exit
-#   KEEP=1 ./run.sh                # keep the service instead of deleting it
+#   ./run.sh --cleanup-orphans     # delete leftover clrnd-e2e-* services and jobs and exit
+#   KEEP=1 ./run.sh                # keep the service and job instead of deleting them
 #   OLD_REF=<git-ref> ./run.sh     # also build that ref and compare its behaviour
-#   ONLY=current ./run.sh          # only the current-binary phase
+#   ONLY=current ./run.sh          # only the current-binary service phase
+#   ONLY=jobs ./run.sh             # only the jobs phase
 #   ONLY=old OLD_REF=<ref> ./run.sh
 #   PROJECT=<id> REGION=<region> ./run.sh
 #   WORK_ROOT=<dir> ./run.sh       # parent of the build/scratch dir (default: $TMPDIR)
@@ -38,12 +39,16 @@ WORK_ROOT="${WORK_ROOT:-${TMPDIR:-/tmp}}"
 WORK="${WORK_ROOT%/}/$WORK_DIR_NAME"
 BIN="$WORK/bin"
 
-# Common prefix of the throwaway services. It is also what --cleanup-orphans targets.
+# Common prefix of the throwaway services and jobs. It is also what --cleanup-orphans targets.
 SERVICE_PREFIX="clrnd-e2e-"
 SERVICE="${SERVICE_PREFIX}$(date +%Y%m%d%H%M%S)"
+# The job is named after the service, so the redaction below and --cleanup-orphans cover it as is.
+JOB="${SERVICE}-job"
 
 REGION="${REGION:-asia-northeast1}"
 IMAGE="${IMAGE:-us-docker.pkg.dev/cloudrun/container/hello}"
+# Google's sample job: it exits 0 after a moment, sleeps SLEEP_MS first, and fails with FAIL_RATE=1.
+JOB_IMAGE="${JOB_IMAGE:-us-docker.pkg.dev/cloudrun/container/job:latest}"
 # Comparing against an older ref is optional. Without one, phase 2 is skipped entirely.
 OLD_REF="${OLD_REF:-}"
 
@@ -216,52 +221,62 @@ preflight_gcloud() {
 }
 
 # ---------- orphan cleanup ----------
-delete_service() { # <name>
-  gcloud run services delete "$1" --project "$PROJECT" --region "$REGION" --quiet >/dev/null 2>&1
+# delete_resource <services|jobs> <name> : delete a service or a job (a job's executions go with it).
+delete_resource() {
+  gcloud run "$1" delete "$2" --project "$PROJECT" --region "$REGION" --quiet >/dev/null 2>&1
+}
+
+# resource_exists <services|jobs> <name>
+resource_exists() {
+  gcloud run "$1" describe "$2" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1
 }
 
 cleanup_orphans() {
-  step "Deleting leftover $SERVICE_PREFIX* services in $REGION"
-  local names name found=0
-  names="$(gcloud run services list --project "$PROJECT" --region "$REGION" \
-    --format='value(metadata.name)' 2>/dev/null | grep "^$SERVICE_PREFIX" || true)"
-  if [ -z "$names" ]; then
-    info "nothing to delete"
-    return 0
-  fi
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    found=1
-    info "deleting $name"
-    if delete_service "$name"; then
-      info "  deleted"
-    else
-      c '31' "  failed to delete $name"
+  local kind names name
+  for kind in services jobs; do
+    step "Deleting leftover $SERVICE_PREFIX* $kind in $REGION"
+    names="$(gcloud run "$kind" list --project "$PROJECT" --region "$REGION" \
+      --format='value(metadata.name)' 2>/dev/null | grep "^$SERVICE_PREFIX" || true)"
+    if [ -z "$names" ]; then
+      info "nothing to delete"
+      continue
     fi
-  done <<< "$names"
-  [ "$found" -eq 1 ] || info "nothing to delete"
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      info "deleting $name"
+      if delete_resource "$kind" "$name"; then
+        info "  deleted"
+      else
+        c '31' "  failed to delete $name"
+      fi
+    done <<< "$names"
+  done
 }
 
-# Delete the service this run created on a normal exit, a failure or Ctrl-C alike.
+# Delete the service and job this run created on a normal exit, a failure or Ctrl-C alike.
 # The trap does not run on kill -9; use --cleanup-orphans in that case.
 cleanup() {
   local rc=$?
   if [ "${KEEP:-}" = "1" ]; then
     step "Skipping cleanup (KEEP=1)"
-    info "service left behind; remove it with: $0 --cleanup-orphans"
+    info "service and job left behind; remove them with: $0 --cleanup-orphans"
     return $rc
   fi
   step "Cleanup"
-  if gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
-    info "deleting the test service"
-    if delete_service "$SERVICE"; then
+  local kind name deleted=0
+  for kind in services jobs; do
+    name="$SERVICE"
+    [ "$kind" = jobs ] && name="$JOB"
+    resource_exists "$kind" "$name" || continue
+    deleted=1
+    info "deleting the test ${kind%s}"
+    if delete_resource "$kind" "$name"; then
       info "deleted"
     else
       c '31' "     failed to delete; run: $0 --cleanup-orphans"
     fi
-  else
-    info "nothing to delete"
-  fi
+  done
+  [ "$deleted" -eq 1 ] || info "nothing to delete"
   return $rc
 }
 
@@ -478,7 +493,33 @@ write_manifest() {
   } > "$path"
 }
 
-# set_env_value <manifest> <value> : make CLRND_E2E equal to <value> (adding it if absent).
+# write_job_manifest <path> [env value] : a minimal job manifest. maxRetries is 1 so that the run
+# that is meant to fail does not spend three retries doing so.
+write_job_manifest() {
+  local path="$1" extra="${2:-}"
+  {
+    echo "apiVersion: run.googleapis.com/v1"
+    echo "kind: Job"
+    echo "metadata:"
+    echo "  name: $JOB"
+    echo "spec:"
+    echo "  template:"
+    echo "    spec:"
+    echo "      template:"
+    echo "        spec:"
+    echo "          maxRetries: 1"
+    echo "          containers:"
+    echo "          - image: $JOB_IMAGE"
+    if [ -n "$extra" ]; then
+      echo "            env:"
+      echo "            - name: CLRND_E2E"
+      echo "              value: \"$extra\""
+    fi
+  } > "$path"
+}
+
+# set_env_value <manifest> <value> : make CLRND_E2E equal to <value> (adding it if absent). Works on
+# a service or a job manifest.
 set_env_value() {
   python3 - "$1" "$2" <<'PY'
 import re, sys
@@ -489,8 +530,14 @@ if "CLRND_E2E" in s:
     # so use a function to treat value as a literal.
     s = re.sub(r'(name: CLRND_E2E\n\s+value: )\S+', lambda m: m.group(1) + value, s)
 else:
-    s = s.replace("      containers:\n      - image:",
-                  "      containers:\n      - env:\n        - name: CLRND_E2E\n          value: %s\n        image:" % value)
+    # Insert env as the first key of the first container, at whatever depth the containers are
+    # (a service's spec.template.spec, or a job's task spec one template deeper).
+    m = re.search(r'^( *)containers:\n\1- ', s, re.M)
+    if not m:
+        raise SystemExit("set_env_value: no containers list found in %s" % path)
+    ind = m.group(1)
+    s = s.replace(m.group(0), "%scontainers:\n%s- env:\n%s  - name: CLRND_E2E\n%s    value: %s\n%s  "
+                  % (ind, ind, ind, ind, value, ind), 1)
 open(path, "w").write(s)
 PY
 }
@@ -539,6 +586,10 @@ PY
 }
 
 # =====================================================================
+case "${ONLY:-}" in
+  "" | current | jobs | old) ;;
+  *) die "unknown ONLY=${ONLY}: use current, jobs or old" ;;
+esac
 resolve_project
 resolve_credentials
 command -v gcloud >/dev/null || die "gcloud is not on PATH"
@@ -565,7 +616,7 @@ rm -rf "$WORK"
 mkdir -p "$BIN"
 info "region  = $REGION"
 info "repo    = $REPO"
-info "service = ${SERVICE_PREFIX}<timestamp>"
+info "service = ${SERVICE_PREFIX}<timestamp>, job = ${SERVICE_PREFIX}<timestamp>-job"
 check_identity
 preflight_gcloud
 
@@ -587,7 +638,7 @@ export CLOUDSDK_CORE_PROJECT="$PROJECT"
 export CLOUDSDK_RUN_REGION="$REGION"
 
 # =====================================================================
-if [ "${ONLY:-}" != "old" ]; then
+if [ -z "${ONLY:-}" ] || [ "${ONLY:-}" = "current" ]; then
 step "Phase 1: current working tree"
 
 D1="$WORK/current"; mkdir -p "$D1"; cd "$D1" || die "cannot enter $D1"
@@ -1141,7 +1192,96 @@ fi
 fi
 
 # =====================================================================
-if [ -n "$OLD_REF" ] && [ "${ONLY:-}" != "current" ]; then
+if [ -z "${ONLY:-}" ] || [ "${ONLY:-}" = "jobs" ]; then
+step "Jobs"
+
+DJ="$WORK/jobs"; mkdir -p "$DJ"; cd "$DJ" || die "cannot enter $DJ"
+
+info "--- J-1. create a job ---"
+write_job_manifest "$DJ/job.yaml"
+run_cmd "$CLRND" jobs verify "$JOB" "$DJ/job.yaml"
+assert_rc_zero "jobs verify accepts the job manifest"
+run_cmd "$CLRND" jobs deploy "$JOB" "$DJ/job.yaml" --auto-approve
+assert_rc_zero "jobs deploy creates a new job"
+run_cmd "$CLRND" jobs status "$JOB"
+assert_rc_zero "jobs status succeeds"
+assert_contains "jobs status reports Ready=True" "Ready:           True"
+assert_contains "jobs status reports no executions yet" "Executions:      0"
+
+info "--- J-2. diff against the live job ---"
+run_cmd "$CLRND" jobs diff "$JOB" "$DJ/job.yaml" --exit-code
+assert_rc_zero "jobs diff is empty once the server defaults are resolved"
+run_cmd "$CLRND" jobs diff "$JOB" "$DJ/job.yaml" --exit-code --no-server-defaults
+if [ "$RC" -eq 2 ]; then ok "jobs diff --no-server-defaults shows the server defaults"; else ng "jobs diff --no-server-defaults exited $RC, want 2"; fi
+
+info "--- J-3. each kind's commands refuse the other's manifest ---"
+run_cmd "$CLRND" deploy "$JOB" "$DJ/job.yaml" --auto-approve
+if [ "$RC" -ne 0 ]; then ok "deploy refuses a job manifest"; else ng "deploy accepted a job manifest"; fi
+assert_contains "deploy points at clrnd jobs" "use the 'clrnd jobs' commands"
+write_manifest "$DJ/service.yaml"
+run_cmd "$CLRND" jobs deploy "$SERVICE" "$DJ/service.yaml" --auto-approve
+if [ "$RC" -ne 0 ]; then ok "jobs deploy refuses a service manifest"; else ng "jobs deploy accepted a service manifest"; fi
+assert_contains "jobs deploy points at the top-level commands" "use the top-level commands"
+
+info "--- J-4. init, then the scaffold diffs clean ---"
+DJI="$DJ/init"; mkdir -p "$DJI"; cd "$DJI" || die "cannot enter $DJI"
+run_cmd "$CLRND" jobs init "$JOB"
+assert_rc_zero "jobs init succeeds"
+assert_file_has "the scaffold is a job manifest" "$DJI/manifest.yaml" "kind: Job"
+assert_file_has "the config names the job" "$DJI/clrnd.yml" "job: $JOB"
+assert_file_lacks "the config does not name a service" "$DJI/clrnd.yml" "service:"
+assert_file_lacks "the scaffold carries no server-managed label" "$DJI/manifest.yaml" "lastUpdatedTime"
+run_cmd "$CLRND" jobs diff --exit-code
+assert_rc_zero "jobs diff right after jobs init is empty"
+run_cmd "$CLRND" jobs diff --exit-code --no-server-defaults
+assert_rc_zero "jobs diff --no-server-defaults right after jobs init is empty"
+run_cmd "$CLRND" diff
+if [ "$RC" -ne 0 ]; then ok "diff refuses a config that names a job"; else ng "diff accepted a config that names a job"; fi
+assert_contains "diff says the config names a job" "names a job"
+
+info "--- J-5. a template change ---"
+set_env_value "$DJI/manifest.yaml" "changed"
+run_cmd "$CLRND" jobs diff --exit-code
+if [ "$RC" -eq 2 ]; then ok "jobs diff shows the change"; else ng "jobs diff exited $RC, want 2"; fi
+run_cmd "$CLRND" jobs deploy --auto-approve
+assert_rc_zero "jobs deploy applies the change"
+run_cmd "$CLRND" jobs diff --exit-code
+assert_rc_zero "jobs diff is empty after the deploy"
+
+info "--- J-6. run and wait ---"
+run_cmd "$CLRND" jobs run
+assert_rc_zero "jobs run succeeds and waits for the execution"
+assert_contains "jobs run prints the execution's name" "^$JOB-"
+assert_contains "jobs run reports the execution completing" "Completed=True"
+run_cmd "$CLRND" jobs status
+assert_contains "jobs status reports the last execution" "Last execution:  $JOB-.*(Succeeded"
+
+info "--- J-7. a failing execution fails the command ---"
+run_cmd "$CLRND" jobs execute --env FAIL_RATE=1
+if [ "$RC" -ne 0 ]; then ok "jobs execute exits non-zero when the execution fails"; else ng "jobs execute exited 0 for a failed execution"; fi
+assert_contains "the error says the execution did not succeed" "did not succeed"
+
+info "--- J-8. stopping the wait leaves the execution running ---"
+run_cmd "$CLRND" jobs run --env SLEEP_MS=600000 --timeout 10s
+if [ "$RC" -ne 0 ]; then ok "jobs run --timeout gives up"; else ng "jobs run --timeout exited 0"; fi
+assert_contains "the error says the execution keeps running" "keeps running"
+run_cmd "$CLRND" jobs run --no-wait
+assert_rc_zero "jobs run --no-wait returns at once"
+assert_contains "jobs run --no-wait prints the execution's name" "^$JOB-"
+
+info "--- J-9. delete ---"
+run_cmd "$CLRND" jobs delete --dry-run
+assert_rc_zero "jobs delete --dry-run succeeds"
+assert_contains "jobs delete shows the executions going with it" "deleted with the job"
+if resource_exists jobs "$JOB"; then ok "jobs delete --dry-run left the job alone"; else ng "jobs delete --dry-run removed the job"; fi
+# The job still has a running execution (J-8); it is deleted with the job.
+run_cmd "$CLRND" jobs delete --auto-approve --timeout 120s
+assert_rc_zero "jobs delete succeeds while an execution is running"
+if resource_exists jobs "$JOB"; then ng "the job still exists right after jobs delete returned"; else ok "the job is gone by the time jobs delete returns"; fi
+fi
+
+# =====================================================================
+if [ -n "$OLD_REF" ] && { [ -z "${ONLY:-}" ] || [ "${ONLY:-}" = "old" ]; }; then
 step "Phase 2: comparison against $OLD_REF"
 
 D3="$WORK/old-init"; mkdir -p "$D3"; cd "$D3" || die "cannot enter $D3"

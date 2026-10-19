@@ -31,11 +31,11 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./... 
 # End-to-end test against a real Cloud Run project. NOT part of `go test ./...`
 # and it cannot run in CI (no credentials). See test/e2e/README.md.
 PROJECT=<project-id> ./test/e2e/run.sh
-./test/e2e/run.sh --cleanup-orphans   # remove services a killed run left behind
+./test/e2e/run.sh --cleanup-orphans   # remove services and jobs a killed run left behind
 ```
 
 [test/e2e](test/e2e/) holds a shell-driven end-to-end test that creates and deletes a real Cloud
-Run service. The directory has no Go files, so the whole Go toolchain ignores it; it is opt-in and
+Run service and job. The directory has no Go files, so the whole Go toolchain ignores it; it is opt-in and
 refuses to run without an explicitly configured project. Run it by hand when changing anything that
 talks to the Cloud Run API — it is the only check that covers server-side behaviour (defaulting,
 revision-name conflicts, asynchronous rollout failures).
