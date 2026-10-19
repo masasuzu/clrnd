@@ -2,9 +2,12 @@ package cloudrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"strconv"
 
 	run "google.golang.org/api/run/v1"
 	"sigs.k8s.io/yaml"
@@ -38,6 +41,7 @@ var jobKind = &kindOf[*run.Job]{
 	workload: jobWorkload,
 	status:   newJobStatus,
 	explicit: keepExplicitMaxRetries,
+	retype:   quoteTaskTimeout,
 
 	get: func(ctx context.Context, c *Client, name string) (*run.Job, error) {
 		return fromAPI(c.api.Namespaces.Jobs.Get(c.jobName(name)).Context(ctx).Do())
@@ -154,8 +158,41 @@ func keepExplicitMaxRetries(manifest []byte, j *run.Job) error {
 		}
 		m = next
 	}
-	if _, ok := m["maxRetries"]; ok {
+	// A null (`maxRetries:` with nothing after it, as a template whose variable is unset renders)
+	// leaves it out too: forcing it would send the 0 the null parsed into.
+	if v, ok := m["maxRetries"]; ok && v != nil {
 		sendMaxRetries(j)
 	}
 	return nil
+}
+
+// quoteTaskTimeout rewrites a numeric task timeoutSeconds into the string the generated type
+// insists on. TaskSpec.TimeoutSeconds is tagged `json:",string"` (the API sends it as "600"), so
+// `timeoutSeconds: 600` — how a service's timeout is written, and how anyone would write it —
+// failed the strict parse with "invalid use of ,string struct tag", which does not say what to do.
+// Only a whole number is rewritten; anything else is left for the original error.
+//
+// The manifest is read strictly here too. The rewritten copy is built from this map, and a lenient
+// read would keep one of two duplicate keys without a word — `maxRetries: 0` and `maxRetries: 3`
+// side by side would then be accepted, where the strict parse rejects them. That duplicate is the
+// error reported, rather than the ",string" one it was found behind.
+func quoteTaskTimeout(manifest []byte) ([]byte, error) {
+	var m map[string]any
+	if err := yaml.UnmarshalStrict(manifest, &m); err != nil {
+		return nil, err
+	}
+	task := m
+	for _, key := range []string{"spec", "template", "spec", "template", "spec"} {
+		next, ok := task[key].(map[string]any)
+		if !ok {
+			return nil, nil
+		}
+		task = next
+	}
+	v, ok := task["timeoutSeconds"].(float64)
+	if !ok || v != math.Trunc(v) {
+		return nil, nil
+	}
+	task["timeoutSeconds"] = strconv.FormatInt(int64(v), 10)
+	return json.Marshal(m)
 }

@@ -47,6 +47,20 @@ func TestParseImageRef(t *testing.T) {
 			wantAR:   true,
 			wantName: "projects/p/locations/us/repositories/r/dockerImages/img@sha256:abc",
 		},
+		{
+			// Renovate and ko write a tag and a digest together. The digest decides the image; a
+			// tag left on the path looked up an image named "img:v1".
+			name:     "a tag next to a digest is dropped",
+			image:    "us-docker.pkg.dev/p/r/img:v1@sha256:abc",
+			wantAR:   true,
+			wantName: "projects/p/locations/us/repositories/r/dockerImages/img@sha256:abc",
+		},
+		{
+			name:     "a nested path with a tag and a digest",
+			image:    "us-docker.pkg.dev/p/r/team/app:v2@sha256:def",
+			wantAR:   true,
+			wantName: "projects/p/locations/us/repositories/r/dockerImages/team%2Fapp@sha256:def",
+		},
 		{name: "gcr.io is not checkable", image: "gcr.io/my-project/app:v1"},
 		{name: "regional gcr.io is not checkable", image: "asia.gcr.io/my-project/app"},
 		{name: "docker hub is not checkable", image: "nginx:1.27"},

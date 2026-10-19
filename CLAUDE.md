@@ -140,7 +140,8 @@ revision-name conflicts, asynchronous rollout failures).
   ([internal/cloudrun/image.go](internal/cloudrun/image.go) parses the reference; `checkImages` in
   `verify.go` makes the call). Only `<location>-docker.pkg.dev` is checkable, and the location and
   project come from the *image*, not from the target — a digest goes to `dockerImages.get` and a tag
-  to `packages/<path>/tags/<tag>`, with the image path's `/` written as `%2F` **exactly once** (the
+  to `packages/<path>/tags/<tag>` (a tag written next to a digest, `img:v1@sha256:…`, is dropped:
+  the digest decides, and keeping the tag looked up an image named `img:v1`), with the image path's `/` written as `%2F` **exactly once** (the
   API returns names in that form and rejects a double-escaped one with a 404). Images on other
   registries are **skipped silently, not reported as `Unchecked`**: warning about every Docker Hub
   image would put a `warning:` line on every run and train people to ignore them. Confirmed against
@@ -173,6 +174,17 @@ revision-name conflicts, asynchronous rollout failures).
   a job manifest parsed strictly as a service fails on the first job-only field, and that error
   points at a field instead of at `clrnd jobs`. Only kinds in `kindHints` get the redirect; an
   unknown kind falls through to `validate`'s "kind must be".
+  It also **drops `metadata.resourceVersion`**: a manifest made from `gcloud ... describe
+  --format=yaml` keeps one, and `setResourceVersion` (which must keep a version that came from a
+  live read) would send it — every write then got a 409 no re-run fixed, while the diff, which
+  never shows the field, looked clean (reproduced against the real API).
+  `kindOf.retype` runs only when the strict parse **fails**, rewrites the value the generated type
+  will not take, and parses again; a manifest that parses as written is never touched, so the
+  strict parse keeps catching what it catches (duplicate keys, misspellings). The rewrite reads the
+  manifest strictly as well: it rebuilds the manifest from a map, and a lenient read would quietly
+  keep one of two duplicate keys. The job kind uses it
+  for the task `timeoutSeconds`, which `TaskSpec` tags `json:",string"`: `timeoutSeconds: 600`
+  failed with "invalid use of ,string struct tag".
 - **An explicit zero is lost by the generated types**: they drop an int64 that is 0 when they
   marshal, unless the field is named in `ForceSendFields`, and decoding never fills that in. For
   almost every field that is harmless — confirmed against the real API, a job's `parallelism`,
@@ -182,8 +194,9 @@ revision-name conflicts, asynchronous rollout failures).
   empty diff. The job kind therefore forces the field in both directions: `kindOf.explicit` (a
   parse hook that sees the raw manifest) forces it when the manifest writes the key, and `fromAPI`
   forces it on every job `get`/`create`/`replace` returns, because the API always sends it. A
-  manifest that omits it still sends nothing, so the default keeps applying. Probe a new field the
-  same way before adding it here.
+  manifest that omits it still sends nothing, so the default keeps applying — and so does a YAML
+  null (`maxRetries:` as a template with an unset variable renders it), which parses to 0. Probe a
+  new field the same way before adding it here.
 - Deploy is split into `Client.Plan` (parse + validate the manifest, then delegate) and
   `kindOf.planObject` (`Get` the live object, compute the `Diff` of live vs desired; `Create` when
   404 via `isNotFound`/`googleapi.Error`). `Client.PlanService` is `planObject` for services, the

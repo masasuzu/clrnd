@@ -67,6 +67,12 @@ type kindOf[T resource] struct {
 	// a field was written at all. A zero value and an absent field parse to the same thing. nil
 	// adds nothing.
 	explicit func(manifest []byte, obj T) error
+	// retype rewrites a manifest the strict parse rejected into one it accepts, for a value written
+	// in a form the generated type does not take (a number where it wants a string). It returns
+	// nil bytes when it changed nothing, and the original error stands, or an error when what it
+	// found is the real problem. It only runs after a failure, so a manifest that parses as written
+	// is never rewritten. nil adds nothing.
+	retype func(manifest []byte) ([]byte, error)
 
 	// The API calls. They return the API's error as is; the callers add what they were doing.
 	get     func(ctx context.Context, c *Client, name string) (T, error)
@@ -104,12 +110,33 @@ func (k *kindOf[T]) parse(manifest []byte) (T, error) {
 	}
 	obj := k.newObject()
 	if err := yaml.UnmarshalStrict(manifest, obj); err != nil {
-		return zero, fmt.Errorf("failed to parse the manifest: %w", err)
+		var retyped []byte
+		if k.retype != nil {
+			var rerr error
+			if retyped, rerr = k.retype(manifest); rerr != nil {
+				return zero, fmt.Errorf("failed to parse the manifest: %w", rerr)
+			}
+		}
+		if retyped == nil {
+			return zero, fmt.Errorf("failed to parse the manifest: %w", err)
+		}
+		obj = k.newObject()
+		if err := yaml.UnmarshalStrict(retyped, obj); err != nil {
+			return zero, fmt.Errorf("failed to parse the manifest: %w", err)
+		}
+		manifest = retyped
 	}
 	if k.explicit != nil {
 		if err := k.explicit(manifest, obj); err != nil {
 			return zero, err
 		}
+	}
+	// A manifest never carries a version to compare against: the version comes from the live read
+	// the diff is computed from (setResourceVersion). One left in — a manifest made from
+	// `gcloud ... describe` keeps it — would otherwise be sent as is, and every write would fail
+	// with a 409 that no re-run fixes, while the diff, which never shows the field, looked clean.
+	if meta := k.meta(obj); meta != nil {
+		meta.ResourceVersion = ""
 	}
 	return obj, nil
 }
