@@ -80,6 +80,12 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No cache for the build that is signed and attested. setup-go restores the module and
+          # build caches by default, and a tag run can restore entries a main-branch run saved;
+          # Go trusts its build cache, so anything that ever gets code execution in a CI job on
+          # main could plant objects the release then links. The signature and provenance would
+          # attest a binary that does not match the source. A clean build is a few minutes.
+          cache: false
 
       # Pin the version of cosign itself too. Even with the action pinned by SHA, the behaviour
       # changes when the cosign it installs by default moves up (v3 made the bundle format the
