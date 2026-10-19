@@ -114,7 +114,8 @@ Each run uses a unique service named `clrnd-e2e-<timestamp>` and a job named
 Ctrl-C. `kill -9` skips that cleanup; use
 `--cleanup-orphans` to remove anything left behind.
 
-Build output and scratch directories go to `$TMPDIR/clrnd-e2e-work`, **not** into
+Build output and scratch directories go to a directory of their own,
+`$TMPDIR/clrnd-e2e-work.XXXXXX` (made by `mktemp -d` for each run), **not** into
 the repository. That is deliberate: when the checkout lives in a cloud-synced
 folder (Dropbox, iCloud, OneDrive), the sync client can restore an older copy of
 a binary while it is being rebuilt, or move the new one aside as a "conflicted
@@ -122,8 +123,12 @@ copy" — and the run then silently tests a stale binary. `build_binary` also fa
 the run if the output was not actually rewritten.
 
 `WORK_ROOT=<dir>` moves that directory elsewhere. It names the **parent**: the run
-always works inside `<dir>/clrnd-e2e-work` and only ever deletes that
-subdirectory, so pointing `WORK_ROOT` at a directory of your own does not wipe it.
+always works inside a `<dir>/clrnd-e2e-work.XXXXXX` it created, and only ever
+deletes that, so pointing `WORK_ROOT` at a directory of your own does not wipe it.
+The directory is removed after a run that passes, and kept (the run says where)
+after one that fails or with `KEEP=1`. A fresh directory each time also means
+nobody else on a shared machine can have prepared it: the binary built there runs
+with your credentials.
 
 That directory **contains the real service name, service account, and URL** — do
 not paste it into an issue or a pull request.

@@ -31,13 +31,19 @@ REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
 # folder (Dropbox, iCloud, OneDrive ...), the sync client can revert a binary being built to an
 # older version or create a "conflicted copy", and the test then silently runs an old binary.
 #
-# WORK_ROOT is "the parent directory of the work area". What is actually used is always a
-# dedicated directory under it, and only that directory is removed (if WORK itself could be
-# overridden, the rm -rf further down would wipe out whatever directory the user specified).
+# WORK_ROOT is "the parent directory of the work area". What is actually used is a directory
+# mktemp creates under it for this run (clrnd-e2e-work.XXXXXX), and only that directory is ever
+# removed (if WORK itself could be overridden, the rm -rf in cleanup would wipe out whatever
+# directory the user specified).
+#
+# It is a fresh mktemp directory rather than a fixed name: the binary built there is run with the
+# tester's credentials, and on a shared host a fixed /tmp/clrnd-e2e-work could be created by
+# another user between this script's rm -rf and its mkdir -p, which would then accept it — leaving
+# them able to swap the binary. mktemp -d creates the directory itself, mode 0700, or fails.
 WORK_DIR_NAME="clrnd-e2e-work"
 WORK_ROOT="${WORK_ROOT:-${TMPDIR:-/tmp}}"
-WORK="${WORK_ROOT%/}/$WORK_DIR_NAME"
-BIN="$WORK/bin"
+WORK=""
+BIN=""
 
 # Common prefix of the throwaway services and jobs. It is also what --cleanup-orphans targets.
 SERVICE_PREFIX="clrnd-e2e-"
@@ -260,6 +266,7 @@ cleanup() {
   if [ "${KEEP:-}" = "1" ]; then
     step "Skipping cleanup (KEEP=1)"
     info "service and job left behind; remove them with: $0 --cleanup-orphans"
+    [ -z "$WORK" ] || info "work directory kept: $WORK"
     return $rc
   fi
   step "Cleanup"
@@ -277,7 +284,23 @@ cleanup() {
     fi
   done
   [ "$deleted" -eq 1 ] || info "nothing to delete"
+  remove_work_dir "$rc"
   return $rc
+}
+
+# remove_work_dir <exit code> : remove this run's work directory after a successful run, and keep
+# it (saying where) after a failed one, where its files are what there is to look at.
+remove_work_dir() {
+  [ -n "$WORK" ] || return 0
+  if [ "$1" -ne 0 ]; then
+    info "work directory kept for inspection: $WORK"
+    return 0
+  fi
+  # Never remove anything other than the directory mktemp made for this run.
+  case "$WORK" in
+    "${WORK_ROOT%/}/$WORK_DIR_NAME".??????) rm -rf "$WORK" ;;
+    *) c '31' "     not removing $WORK: not this run's $WORK_DIR_NAME directory" ;;
+  esac
 }
 
 # ---------- assertions ----------
@@ -625,13 +648,9 @@ trap cleanup EXIT
 
 step "Setup"
 command -v go >/dev/null || die "go is not on PATH"
-# Never remove anything other than the dedicated directory this script creates.
-case "$WORK" in
-  */"$WORK_DIR_NAME") ;;
-  *) die "refusing to remove $WORK: not a $WORK_DIR_NAME directory" ;;
-esac
-rm -rf "$WORK"
-mkdir -p "$BIN"
+WORK="$(mktemp -d "${WORK_ROOT%/}/$WORK_DIR_NAME.XXXXXX")" || die "cannot create a work directory under $WORK_ROOT"
+BIN="$WORK/bin"
+mkdir -p "$BIN" || die "cannot create $BIN"
 info "region  = $REGION"
 info "repo    = $REPO"
 info "service = ${SERVICE_PREFIX}<timestamp>, job = ${SERVICE_PREFIX}<timestamp>-job"
