@@ -485,3 +485,26 @@ func TestPlanDoesNotCreateWhenTheEndpointIsMissing(t *testing.T) {
 		t.Errorf("Plan() = %+v, %v; want the endpoint's 404 as an error", plan, err)
 	}
 }
+
+// TestPlanIgnoresAResourceVersionInTheManifest checks that a manifest made from a live definition
+// (gcloud ... describe keeps metadata.resourceVersion) is compared and written against the live
+// version. Sending the manifest's stale one made every write a 409 that no re-run fixed.
+func TestPlanIgnoresAResourceVersionInTheManifest(t *testing.T) {
+	const liveRV = "LIVE-RV"
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		live := liveService("gcr.io/project/image:old")
+		live.Metadata.ResourceVersion = liveRV
+		return http.StatusOK, live
+	})
+	manifest := strings.Replace(validManifest, "  name: my-svc\n", "  name: my-svc\n  resourceVersion: STALE-RV\n", 1)
+	plan, err := c.Plan(context.Background(), KindService, "my-svc", []byte(manifest), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if put := lastRequest(t, api, http.MethodPut); !strings.Contains(string(put.Body), `"resourceVersion":"`+liveRV+`"`) {
+		t.Errorf("ReplaceService body = %s, want the live resourceVersion", put.Body)
+	}
+}

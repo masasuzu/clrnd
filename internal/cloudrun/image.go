@@ -57,14 +57,17 @@ func parseImageRef(image string) imageRef {
 		}
 	}
 
-	// The end of what remains may carry a tag. Only a ":" after the last "/" is a tag.
-	if ref.Digest == "" {
-		if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+	// The end of what remains may carry a tag. Only a ":" after the last "/" is a tag. It is cut
+	// off even when there is a digest: in `img:v1@sha256:...` (what Renovate and ko write) the
+	// digest decides the image and the tag is only a label, and leaving it on the path looked up
+	// an image named "img:v1", which does not exist.
+	if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+		if ref.Digest == "" {
 			ref.Tag = rest[i+1:]
-			rest = rest[:i]
-		} else {
-			ref.Tag = defaultImageTag
 		}
+		rest = rest[:i]
+	} else if ref.Digest == "" {
+		ref.Tag = defaultImageTag
 	}
 
 	m := artifactRegistryHost.FindStringSubmatch(ref.Host)

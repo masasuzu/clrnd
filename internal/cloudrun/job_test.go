@@ -531,3 +531,68 @@ func TestJobDiffWithServerDefaultsKeepsAZeroMaxRetries(t *testing.T) {
 		t.Errorf("diff does not show maxRetries 0:\n%s", diff)
 	}
 }
+
+// TestJobManifestWithANullMaxRetriesSendsNothing checks that `maxRetries:` with no value — what a
+// template renders when its variable is unset — leaves the API's default alone instead of sending
+// the 0 a null parses into.
+func TestJobManifestWithANullMaxRetriesSendsNothing(t *testing.T) {
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodGet {
+			return http.StatusNotFound, googleAPIError(404, "not found")
+		}
+		return http.StatusOK, liveJob("gcr.io/project/job:v1")
+	})
+	for _, value := range []string{"", "null", "~"} {
+		plan, err := c.Plan(context.Background(), KindJob, "my-job", []byte(withMaxRetries(validJobManifest, value)), PlanOptions{})
+		if err != nil {
+			t.Fatalf("maxRetries: %q: Plan() error = %v", value, err)
+		}
+		if _, err := plan.Apply(context.Background(), false); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if post := lastRequest(t, api, http.MethodPost); strings.Contains(string(post.Body), "maxRetries") {
+			t.Errorf("maxRetries: %q: create body = %s, want no maxRetries", value, post.Body)
+		}
+	}
+}
+
+// TestJobManifestTakesANumericTaskTimeout checks that a task timeout written as a number — the way
+// a service's is — parses. The generated type wants a string, and the strict parse used to fail
+// with "invalid use of ,string struct tag".
+func TestJobManifestTakesANumericTaskTimeout(t *testing.T) {
+	withTimeout := func(v string) string {
+		return strings.Replace(validJobManifest, "          containers:\n",
+			"          timeoutSeconds: "+v+"\n          containers:\n", 1)
+	}
+	for _, v := range []string{"600", `"600"`} {
+		if err := Validate(KindJob, []byte(withTimeout(v)), "my-job"); err != nil {
+			t.Errorf("timeoutSeconds: %s: Validate() error = %v", v, err)
+		}
+	}
+	c, api := newTestClient(t, func(r *http.Request) (int, interface{}) {
+		if r.Method == http.MethodGet {
+			return http.StatusNotFound, googleAPIError(404, "not found")
+		}
+		return http.StatusOK, liveJob("gcr.io/project/job:v1")
+	})
+	plan, err := c.Plan(context.Background(), KindJob, "my-job", []byte(withTimeout("600")), PlanOptions{})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if _, err := plan.Apply(context.Background(), false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if post := lastRequest(t, api, http.MethodPost); !strings.Contains(string(post.Body), `"timeoutSeconds":"600"`) {
+		t.Errorf("create body = %s, want the timeout sent as the API's string", post.Body)
+	}
+
+	// Only a whole number is rewritten, and a manifest the strict parse rejects for another reason
+	// is still rejected for it.
+	if err := Validate(KindJob, []byte(withTimeout("1.5")), "my-job"); err == nil {
+		t.Error("timeoutSeconds: 1.5: Validate() = nil, want an error")
+	}
+	typo := strings.Replace(withTimeout("600"), "          containers:\n", "          maxRetriez: 1\n          containers:\n", 1)
+	if err := Validate(KindJob, []byte(typo), "my-job"); err == nil || !strings.Contains(err.Error(), "maxRetriez") {
+		t.Errorf("Validate(misspelled field) error = %v, want it to name the field", err)
+	}
+}
