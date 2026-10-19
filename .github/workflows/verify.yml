@@ -48,6 +48,11 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      # Build the opt-in E2E suite and exercise its harness without cloud credentials.
+      # -trimpath breaks any path derived from the source file's location, as a user's GOFLAGS may.
+      - name: Check the E2E harness offline
+        run: go test -race -trimpath -tags=e2e ./test/e2e -run '^TestHarness' -count=1
+
       # tfstate-lookup pulls in the AWS SDK, the Azure SDK, go-tfe, go-jsonnet and
       # gojq, so most of the dependency tree is indirect. This is the only thing
       # that looks at it, and it covers stdlib advisories too.
@@ -127,6 +132,7 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.1
+          args: --build-tags=e2e
 
       # The runner ships a shellcheck too, but its version cannot be pinned. So that the check
       # does not flip between failing and passing, install it ourselves with a pinned version
@@ -144,8 +150,7 @@ jobs:
           rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
           shellcheck --version
 
-      # The E2E test is not part of go test, so the Go-side checks cannot notice it breaking.
-      # A syntax check (bash -n) and static analysis (shellcheck) cost nothing to run.
+      # The E2E launcher and CI helpers still need shell syntax and static checks.
       - name: Check the shell scripts
         run: |
           # bash -n only reads the first file (the rest become positional args), so run it per file.

@@ -1182,8 +1182,9 @@ Releases are cut from `main` only: the release workflow refuses a tag whose comm
 ancestor of `main`, and runs the same checks as CI before it builds anything.
 
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
-[test/e2e](test/e2e/), which creates and deletes a real service. It is opt-in, cannot run in CI,
-and needs a project you are happy to create Cloud Run services in — see
+[test/e2e](test/e2e/), which creates and deletes a real service and job. The Go suite is gated by
+the `e2e` build tag; ordinary `go test ./...` excludes it. The cloud scenarios cannot run in CI
+and need a project intended for disposable services and jobs — see
 [test/e2e/README.md](test/e2e/README.md).
 
 ## License
