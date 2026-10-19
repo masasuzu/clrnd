@@ -171,27 +171,28 @@ func keepExplicitMaxRetries(manifest []byte, j *run.Job) error {
 // `timeoutSeconds: 600` — how a service's timeout is written, and how anyone would write it —
 // failed the strict parse with "invalid use of ,string struct tag", which does not say what to do.
 // Only a whole number is rewritten; anything else is left for the original error.
-func quoteTaskTimeout(manifest []byte) ([]byte, bool) {
+//
+// The manifest is read strictly here too. The rewritten copy is built from this map, and a lenient
+// read would keep one of two duplicate keys without a word — `maxRetries: 0` and `maxRetries: 3`
+// side by side would then be accepted, where the strict parse rejects them. That duplicate is the
+// error reported, rather than the ",string" one it was found behind.
+func quoteTaskTimeout(manifest []byte) ([]byte, error) {
 	var m map[string]any
-	if err := yaml.Unmarshal(manifest, &m); err != nil {
-		return nil, false
+	if err := yaml.UnmarshalStrict(manifest, &m); err != nil {
+		return nil, err
 	}
 	task := m
 	for _, key := range []string{"spec", "template", "spec", "template", "spec"} {
 		next, ok := task[key].(map[string]any)
 		if !ok {
-			return nil, false
+			return nil, nil
 		}
 		task = next
 	}
 	v, ok := task["timeoutSeconds"].(float64)
 	if !ok || v != math.Trunc(v) {
-		return nil, false
+		return nil, nil
 	}
 	task["timeoutSeconds"] = strconv.FormatInt(int64(v), 10)
-	out, err := json.Marshal(m)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
+	return json.Marshal(m)
 }

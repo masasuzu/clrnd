@@ -69,9 +69,10 @@ type kindOf[T resource] struct {
 	explicit func(manifest []byte, obj T) error
 	// retype rewrites a manifest the strict parse rejected into one it accepts, for a value written
 	// in a form the generated type does not take (a number where it wants a string). It returns
-	// false when it changed nothing, and the original error stands. It only runs after a failure,
-	// so a manifest that parses as written is never rewritten. nil adds nothing.
-	retype func(manifest []byte) ([]byte, bool)
+	// nil bytes when it changed nothing, and the original error stands, or an error when what it
+	// found is the real problem. It only runs after a failure, so a manifest that parses as written
+	// is never rewritten. nil adds nothing.
+	retype func(manifest []byte) ([]byte, error)
 
 	// The API calls. They return the API's error as is; the callers add what they were doing.
 	get     func(ctx context.Context, c *Client, name string) (T, error)
@@ -109,11 +110,14 @@ func (k *kindOf[T]) parse(manifest []byte) (T, error) {
 	}
 	obj := k.newObject()
 	if err := yaml.UnmarshalStrict(manifest, obj); err != nil {
-		retyped, ok := []byte(nil), false
+		var retyped []byte
 		if k.retype != nil {
-			retyped, ok = k.retype(manifest)
+			var rerr error
+			if retyped, rerr = k.retype(manifest); rerr != nil {
+				return zero, fmt.Errorf("failed to parse the manifest: %w", rerr)
+			}
 		}
-		if !ok {
+		if retyped == nil {
 			return zero, fmt.Errorf("failed to parse the manifest: %w", err)
 		}
 		obj = k.newObject()

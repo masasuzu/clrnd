@@ -595,4 +595,11 @@ func TestJobManifestTakesANumericTaskTimeout(t *testing.T) {
 	if err := Validate(KindJob, []byte(typo), "my-job"); err == nil || !strings.Contains(err.Error(), "maxRetriez") {
 		t.Errorf("Validate(misspelled field) error = %v, want it to name the field", err)
 	}
+	// Duplicate keys are still refused when the timeout is rewritten: a lenient read of the
+	// manifest for the rewrite would keep one of them without a word.
+	dup := strings.Replace(withTimeout("600"), "          containers:\n",
+		"          maxRetries: 0\n          maxRetries: 3\n          containers:\n", 1)
+	if err := Validate(KindJob, []byte(dup), "my-job"); err == nil || !strings.Contains(err.Error(), "maxRetries") {
+		t.Errorf("Validate(duplicate key) error = %v, want the duplicate reported", err)
+	}
 }

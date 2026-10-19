@@ -180,7 +180,9 @@ revision-name conflicts, asynchronous rollout failures).
   never shows the field, looked clean (reproduced against the real API).
   `kindOf.retype` runs only when the strict parse **fails**, rewrites the value the generated type
   will not take, and parses again; a manifest that parses as written is never touched, so the
-  strict parse keeps catching what it catches (duplicate keys, misspellings). The job kind uses it
+  strict parse keeps catching what it catches (duplicate keys, misspellings). The rewrite reads the
+  manifest strictly as well: it rebuilds the manifest from a map, and a lenient read would quietly
+  keep one of two duplicate keys. The job kind uses it
   for the task `timeoutSeconds`, which `TaskSpec` tags `json:",string"`: `timeoutSeconds: 600`
   failed with "invalid use of ,string struct tag".
 - **An explicit zero is lost by the generated types**: they drop an int64 that is 0 when they
