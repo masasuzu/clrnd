@@ -111,6 +111,8 @@ gcloud auth application-default login
 | `jobs diff` | `run.jobs.get` **and `run.jobs.update`** — plus `run.jobs.create` for a job that does not exist yet, for the same reason as `diff` |
 | `jobs deploy` | `run.jobs.get`, `run.jobs.update`, and `run.jobs.create` for a job that does not exist yet |
 | `jobs run` | `run.jobs.run` — `run.jobs.runWithOverrides` instead when `--args` / `--env` / `--task-count` / `--task-timeout` is given — plus `run.executions.get` for the wait |
+| `jobs status`, `jobs init` | `run.jobs.get` |
+| `jobs delete` | `run.jobs.get`, `run.jobs.delete` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -349,10 +351,9 @@ express. These live next to it and are deliberately out of scope:
   capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
   silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
   or Terraform.
-- **The rest of a Cloud Run job's lifecycle.** `clrnd jobs` deploys, diffs, verifies and runs a
-  job, but does not yet show its status, list or cancel its executions, delete it, or scaffold a
-  manifest from it. Use `gcloud run jobs describe` / `executions list` / `executions cancel` /
-  `delete` for those.
+- **A job's executions as a list.** `clrnd jobs` covers a job from `init` to `delete`, and
+  `jobs run` waits for the execution it starts, but there is no command yet to list a job's
+  executions or cancel one. Use `gcloud run jobs executions list` / `cancel` for those.
 - **Cloud Run worker pools.** A `kind: WorkerPool` manifest is refused with a message saying so.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
@@ -385,7 +386,7 @@ clrnd [command]
 | `traffic` | Change how traffic is split between revisions.            |
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
-| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`. |
+| `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs delete`, `jobs init`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -1004,6 +1005,15 @@ What differs from a service:
 
 Each kind's commands refuse the other's manifest before contacting the API and say where it
 belongs (`kind is "Job", but this command takes a Service: ... use the 'clrnd jobs' commands`).
+
+#### Status, delete and init
+
+`jobs status`, `jobs delete` and `jobs init` are the service commands of the same name for a job.
+`jobs status` shows the Ready condition, the generation, how many executions the job has had and
+how the last one went (`--format json` too). `jobs delete` shows the job with its project, region
+and execution count, asks before deleting (`--auto-approve`, `--dry-run`), and waits until the job
+is gone; its executions are deleted with it. `jobs init` scaffolds `manifest.yaml` and a `clrnd.yml`
+that names the job with `job:`, so `clrnd jobs diff` right after it is empty.
 
 #### Running a job
 

@@ -152,16 +152,7 @@ func (s *Status) Text() string {
 	line("Service", s.Service)
 	line("URL", s.URL)
 
-	// Ready is shown with its reason when there is one. The message is long, so it gets its own
-	// line.
-	if c := s.Ready(); c != nil {
-		status := c.Status
-		if c.Reason != "" {
-			status = fmt.Sprintf("%s (%s)", c.Status, c.Reason)
-		}
-		line("Ready", status)
-		line("Message", c.Message)
-	}
+	writeReady(line, s.Ready())
 
 	line("Latest ready", s.LatestReadyRevision)
 	line("Latest created", s.LatestCreatedRevision)
@@ -185,22 +176,41 @@ func (s *Status) Text() string {
 		}
 	}
 
-	if len(s.Conditions) > 0 {
-		b.WriteString("Conditions:\n")
-		width := 0
-		for _, c := range s.Conditions {
-			if len(c.Type) > width {
-				width = len(c.Type)
-			}
-		}
-		for _, c := range s.Conditions {
-			fmt.Fprintf(&b, "  %-*s  %s", width, c.Type, c.Status)
-			if c.Reason != "" {
-				fmt.Fprintf(&b, "  %s", c.Reason)
-			}
-			b.WriteString("\n")
+	writeConditions(&b, s.Conditions)
+	return b.String()
+}
+
+// writeReady writes the Ready condition through line: its status with the reason when there is
+// one, and the message, which is long, on its own line. Nothing when there is no Ready condition.
+func writeReady(line func(label, value string), c *Condition) {
+	if c == nil {
+		return
+	}
+	status := c.Status
+	if c.Reason != "" {
+		status = fmt.Sprintf("%s (%s)", c.Status, c.Reason)
+	}
+	line("Ready", status)
+	line("Message", c.Message)
+}
+
+// writeConditions writes every condition as an aligned table. Nothing when there are none.
+func writeConditions(b *strings.Builder, conds []Condition) {
+	if len(conds) == 0 {
+		return
+	}
+	b.WriteString("Conditions:\n")
+	width := 0
+	for _, c := range conds {
+		if len(c.Type) > width {
+			width = len(c.Type)
 		}
 	}
-
-	return b.String()
+	for _, c := range conds {
+		fmt.Fprintf(b, "  %-*s  %s", width, c.Type, c.Status)
+		if c.Reason != "" {
+			fmt.Fprintf(b, "  %s", c.Reason)
+		}
+		b.WriteString("\n")
+	}
 }

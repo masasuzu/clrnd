@@ -53,6 +53,14 @@ var jobKind = &kindOf[*run.Job]{
 		}
 		return call.Context(ctx).Do()
 	},
+	del: func(ctx context.Context, c *Client, name string, dryRun bool) error {
+		call := c.api.Namespaces.Jobs.Delete(c.jobName(name))
+		if dryRun {
+			call = call.DryRun(dryRunAll)
+		}
+		_, err := call.Context(ctx).Do()
+		return err
+	},
 
 	prepare: func(desired, _ *run.Job, _ string, opts PlanOptions) (*run.Job, error) {
 		if opts.KeepTraffic {
