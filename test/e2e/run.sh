@@ -1306,10 +1306,12 @@ fi
 run_cmd "$CLRND" jobs executions cancel "$SUCCEEDED_EXEC" --auto-approve
 if [ "$RC" -ne 0 ]; then ok "cancel refuses a finished execution"; else ng "cancel accepted a finished execution"; fi
 assert_contains "cancel says the execution has finished" "has already finished (Succeeded)"
-# Without --auto-approve and with no one to answer, nothing may be cancelled. Whether clrnd refuses
-# outright or prompts and reads "no" depends on how it sees this script's stdin, so the check is on
-# the outcome: the execution is still running.
-run_cmd "$CLRND" jobs executions cancel "$RUNNING_EXEC"
+# Without --auto-approve and with no one to answer, nothing may be cancelled. stdin is /dev/null so
+# that the command cannot wait on the terminal this script was started from (run_cmd captures the
+# output, so the prompt would not even show). Whether clrnd then refuses outright or prompts and
+# reads EOF as "no" depends on how it judges /dev/null, so the check is on the outcome: the
+# execution is still running.
+run_cmd "$CLRND" jobs executions cancel "$RUNNING_EXEC" </dev/null
 run_cmd "$CLRND" jobs executions list
 assert_contains "cancel without --auto-approve cancels nothing" "^$RUNNING_EXEC  *Running"
 run_cmd "$CLRND" jobs executions cancel "$RUNNING_EXEC" --auto-approve --timeout 120s
