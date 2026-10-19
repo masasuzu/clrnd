@@ -95,7 +95,8 @@ func applyPlan(cmd *cobra.Command, plan *cloudrun.DeployPlan, o applyOptions) er
 		// Re-running with the same manifest after a failed deploy produces an empty diff, so
 		// letting this case through would report a broken service as a success (defeating the
 		// point of adding the wait).
-		// No Generation is given: only "is it Ready now", whatever the generation.
+		// No Generation is given: the wait takes the one the first read reports, so it is about
+		// the definition as it is now, not a previous generation's Ready.
 		return waitForRollout(cmd, plan.Name, plan.Wait, cloudrun.WaitOptions{
 			Timeout:  o.Timeout,
 			Interval: o.Interval,

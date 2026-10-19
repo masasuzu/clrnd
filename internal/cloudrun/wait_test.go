@@ -600,3 +600,30 @@ func TestAZeroTimeoutMeansNoLimit(t *testing.T) {
 		t.Error("withWaitTimeout(1m) set no deadline")
 	}
 }
+
+// TestWaitWithoutAGenerationWaitsForTheCurrentOne checks a wait started right after a write the
+// server has not observed yet (deploy --no-wait, then wait): generation 5, observedGeneration 4,
+// and the previous generation's Ready=True. Taking any generation, it succeeded at once.
+func TestWaitWithoutAGenerationWaitsForTheCurrentOne(t *testing.T) {
+	var mu sync.Mutex
+	polls := 0
+	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		polls++
+		svc := readyService()
+		svc.Metadata.Generation = 5
+		svc.Status.ObservedGeneration = 4
+		if polls >= 3 {
+			svc.Status.ObservedGeneration = 5
+		}
+		return http.StatusOK, svc
+	})
+	got, err := c.Wait(context.Background(), KindService, "my-svc", fastWait(0))
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if got.ObservedGeneration != 5 || polls != 3 {
+		t.Errorf("Wait() returned at observedGeneration %d after %d polls, want 5 after 3", got.ObservedGeneration, polls)
+	}
+}

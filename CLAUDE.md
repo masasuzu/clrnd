@@ -490,7 +490,9 @@ revision-name conflicts, asynchronous rollout failures).
 - `wait` (in [internal/cloudrun/wait.go](internal/cloudrun/wait.go)) polls `Client.Status` until
   the rollout settles. `waitDone` is the pure decision function: it refuses to judge until
   `status.observedGeneration` reaches the generation being waited for (otherwise the *previous*
-  generation's `Ready=True` reads as success), then succeeds on `Ready=True` and **fails
+  generation's `Ready=True` reads as success). With no generation given (`wait`, `jobs wait`, an
+  empty diff), `waitReady` takes the one the **first read** reports — taking "any generation"
+  let `deploy --no-wait` followed by `wait` succeed before the change was observed. It then succeeds on `Ready=True` and **fails
   immediately** on `Ready=False` rather than burning the timeout. The interval backs off from 2s to
   15s, and the whole loop honours `cmd.Context()` so Ctrl-C stops it.
   A failed *poll* is not a failed rollout: the generated API client does not retry, so a single
@@ -659,7 +661,7 @@ revision-name conflicts, asynchronous rollout failures).
   the one flow
   (print the diff to stdout → confirm on stderr → apply → wait for the rollout). Only the prompt
   text differs per command. Do not re-implement that sequence.
-  An **empty diff still waits** (for readiness only, with no generation to reach): a deploy that
+  An **empty diff still waits** (for the generation live reports, since none was applied): a deploy that
   failed its rollout leaves live == desired, so a retry with the same manifest produces no diff, and
   returning early there would hand CI a green run over a broken service — the exact failure the wait
   exists to catch. `confirmAction` in the same file is
