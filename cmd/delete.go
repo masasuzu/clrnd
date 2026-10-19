@@ -100,14 +100,14 @@ func runDelete(cmd *cobra.Command, args []string, t target, o *deleteOptions) er
 	return waitForDeletion(cmd, client, t, name, o.timeout, o.interval)
 }
 
-// deleteDetail is one extra line of what printDeleteTarget shows.
-type deleteDetail struct {
+// targetDetail is one extra line of what printTarget shows.
+type targetDetail struct {
 	label, value string
 }
 
 // deleteDetails fetches the resource (failing when it does not exist) and returns what is worth
 // showing about it before it goes: a service's URL, a job's executions.
-func deleteDetails(ctx context.Context, client *cloudrun.Client, t target, name string) ([]deleteDetail, error) {
+func deleteDetails(ctx context.Context, client *cloudrun.Client, t target, name string) ([]targetDetail, error) {
 	if t.isService() {
 		status, err := client.Status(ctx, name)
 		if err != nil {
@@ -116,27 +116,33 @@ func deleteDetails(ctx context.Context, client *cloudrun.Client, t target, name 
 		if status.URL == "" {
 			return nil, nil
 		}
-		return []deleteDetail{{"url", status.URL}}, nil
+		return []targetDetail{{"url", status.URL}}, nil
 	}
 	status, err := client.GetJobStatus(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return []deleteDetail{{"executions", fmt.Sprintf("%d (deleted with the job)", status.ExecutionCount)}}, nil
+	return []targetDetail{{"executions", fmt.Sprintf("%d (deleted with the job)", status.ExecutionCount)}}, nil
 }
 
-// printDeleteTarget lists what is about to be deleted on stderr. The project and region are always
-// printed to prevent the accident of deleting something after mixing them up.
-func printDeleteTarget(cmd *cobra.Command, project, region, noun, name string, details []deleteDetail) {
+// printDeleteTarget lists what is about to be deleted on stderr.
+func printDeleteTarget(cmd *cobra.Command, project, region, noun, name string, details []targetDetail) {
+	printTarget(cmd, "About to delete:", project, region, noun, name, details)
+}
+
+// printTarget lists what a destructive command is about to act on, on stderr, under heading. The
+// project and region are always printed to prevent the accident of acting on the right name after
+// mixing them up.
+func printTarget(cmd *cobra.Command, heading, project, region, noun, name string, details []targetDetail) {
 	out := cmd.ErrOrStderr()
-	rows := append([]deleteDetail{{noun, name}, {"project", project}, {"region", region}}, details...)
+	rows := append([]targetDetail{{noun, name}, {"project", project}, {"region", region}}, details...)
 	width := 0
 	for _, r := range rows {
 		if len(r.label) > width {
 			width = len(r.label)
 		}
 	}
-	fmt.Fprintln(out, "About to delete:")
+	fmt.Fprintln(out, heading)
 	for _, r := range rows {
 		fmt.Fprintf(out, "  %-*s %s\n", width+1, r.label+":", r.value)
 	}

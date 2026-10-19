@@ -335,8 +335,8 @@ func TestClientListRevisionsFailsAtThePageLimit(t *testing.T) {
 	if got != nil {
 		t.Errorf("ListRevisions() returned %d revisions, want no partial list alongside the error", len(got))
 	}
-	if pages != listRevisionsMaxPages {
-		t.Errorf("requested %d pages, want it to stop at the limit of %d", pages, listRevisionsMaxPages)
+	if pages != listMaxPages {
+		t.Errorf("requested %d pages, want it to stop at the limit of %d", pages, listMaxPages)
 	}
 }
 

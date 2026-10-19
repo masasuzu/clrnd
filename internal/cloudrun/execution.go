@@ -88,8 +88,12 @@ func (o RunOptions) overrides() *run.Overrides {
 // Execution is the state of one run of a job. It holds only read-only information taken from the
 // API response.
 type Execution struct {
-	Name           string      `json:"name"`
+	Name string `json:"name"`
+	// Status is what the execution is doing or how it ended: Pending, Running, Cancelling,
+	// Succeeded, Failed or Cancelled (see executionStatus).
+	Status         string      `json:"status"`
 	Job            string      `json:"job,omitempty"`
+	Created        string      `json:"created,omitempty"`
 	TaskCount      int64       `json:"taskCount,omitempty"`
 	Running        int64       `json:"running"`
 	Succeeded      int64       `json:"succeeded"`
@@ -105,17 +109,26 @@ type Execution struct {
 // jobLabel is the label an execution carries naming its job.
 const jobLabel = "run.googleapis.com/job"
 
+// cancelTimeLabel is the label Cloud Run puts on an execution once a cancel has been requested.
+// Completed stays Unknown, with no reason, for a while after that, so the label is what tells a
+// cancelling execution from a running one.
+const cancelTimeLabel = "run.googleapis.com/cancelTime"
+
 // newExecution converts an API response into an Execution. It is pure, so the judging and the
 // messages built on it are testable without the API. The counts are omitted by the API when they
 // are zero, which the zero values here reproduce.
 func newExecution(obj *run.Execution) *Execution {
 	e := &Execution{}
 	if obj == nil {
+		e.Status = executionStatus(e, false)
 		return e
 	}
+	cancelRequested := false
 	if obj.Metadata != nil {
 		e.Name = obj.Metadata.Name
 		e.Job = obj.Metadata.Labels[jobLabel]
+		e.Created = obj.Metadata.CreationTimestamp
+		_, cancelRequested = obj.Metadata.Labels[cancelTimeLabel]
 	}
 	if obj.Spec != nil {
 		e.TaskCount = obj.Spec.TaskCount
@@ -131,7 +144,40 @@ func newExecution(obj *run.Execution) *Execution {
 		e.LogURI = s.LogUri
 		e.Conditions = newConditions(s.Conditions)
 	}
+	e.Status = executionStatus(e, cancelRequested)
 	return e
+}
+
+// executionStatus names what an execution is doing, from its Completed condition. Confirmed
+// against the real API: True is a success; False with reason Cancelled is a cancel and any other
+// reason (NonZeroExitCode, ...) a failure; Unknown is still going, and a cancel that was requested
+// but has not taken effect yet is also Unknown, with no reason, until it settles.
+//
+// The cancel label only fills in for a missing reason. A task can fail while a cancel is pending,
+// and the execution then ends False with that failure's reason (NonZeroExitCode, ...) and the
+// label both; calling it Cancelled would hide the failure.
+func executionStatus(e *Execution, cancelRequested bool) string {
+	completed := e.Completed()
+	switch {
+	case completed == nil:
+		return "Pending"
+	case completed.Status == conditionTrue:
+		return "Succeeded"
+	case completed.Status == conditionFalse &&
+		(completed.Reason == "Cancelled" || (completed.Reason == "" && cancelRequested)):
+		return "Cancelled"
+	case completed.Status == conditionFalse:
+		return "Failed"
+	case cancelRequested:
+		return "Cancelling"
+	}
+	return "Running"
+}
+
+// Finished reports whether the execution has ended, whichever way.
+func (e *Execution) Finished() bool {
+	completed := e.Completed()
+	return completed != nil && (completed.Status == conditionTrue || completed.Status == conditionFalse)
 }
 
 // Completed returns the Completed condition, or nil if there is none yet.
@@ -180,6 +226,23 @@ func (c *Client) GetExecution(ctx context.Context, execution string) (*Execution
 // error says so and how to cancel it, because "the command ended" is easily read as "the job
 // stopped".
 func (c *Client) WaitExecution(ctx context.Context, execution string, opts WaitOptions) (*Execution, error) {
+	return c.pollExecution(ctx, execution, opts, executionDone, c.executionWaitInterrupted)
+}
+
+// WaitExecutionStopped polls until an execution that was asked to cancel has stopped. It succeeds
+// once Completed is False — cancelled, or failed on its own first — and fails when the execution
+// succeeded before the cancel took effect, because then nothing was cancelled. A zero Timeout
+// means no limit, as in WaitExecution.
+func (c *Client) WaitExecutionStopped(ctx context.Context, execution string, opts WaitOptions) (*Execution, error) {
+	return c.pollExecution(ctx, execution, opts, executionStopped, c.cancelWaitInterrupted)
+}
+
+// pollExecution is the loop under WaitExecution and WaitExecutionStopped. done decides when it
+// ends and how; interrupted explains a wait that ended first.
+func (c *Client) pollExecution(ctx context.Context, execution string, opts WaitOptions,
+	done func(*Execution, string) (bool, error),
+	interrupted func(parent, waitCtx context.Context, execution string, timeout time.Duration, lastErr error) error,
+) (*Execution, error) {
 	interval := opts.Interval
 	if interval <= 0 {
 		interval = defaultWaitInterval
@@ -210,11 +273,11 @@ func (c *Client) WaitExecution(ctx context.Context, execution string, opts WaitO
 					opts.OnUpdate(progress)
 				}
 			}
-			if done, doneErr := executionDone(e, execution); done {
+			if ok, doneErr := done(e, execution); ok {
 				return e, doneErr
 			}
 		case waitCtx.Err() != nil:
-			return last, c.executionWaitInterrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
+			return last, interrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
 		case !isRetryable(err):
 			return last, err
 		default:
@@ -226,7 +289,7 @@ func (c *Client) WaitExecution(ctx context.Context, execution string, opts WaitO
 
 		select {
 		case <-waitCtx.Done():
-			return last, c.executionWaitInterrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
+			return last, interrupted(ctx, waitCtx, execution, opts.Timeout, lastErr)
 		case <-time.After(interval):
 		}
 		interval = nextWaitInterval(interval)
@@ -251,6 +314,21 @@ func executionDone(e *Execution, execution string) (bool, error) {
 			msg += "; logs: " + e.LogURI
 		}
 		return true, errors.New(msg)
+	}
+	return false, nil
+}
+
+// executionStopped reports whether a cancelled execution has stopped (see WaitExecutionStopped).
+func executionStopped(e *Execution, execution string) (bool, error) {
+	completed := e.Completed()
+	if completed == nil {
+		return false, nil
+	}
+	switch completed.Status {
+	case conditionFalse:
+		return true, nil
+	case conditionTrue:
+		return true, fmt.Errorf("execution %q succeeded before the cancel took effect (%s)", execution, taskCounts(e))
 	}
 	return false, nil
 }
@@ -286,7 +364,7 @@ func taskCounts(e *Execution) string {
 func (c *Client) executionWaitInterrupted(parent, waitCtx context.Context, execution string,
 	timeout time.Duration, lastErr error) error {
 	still := fmt.Sprintf("the execution keeps running; to stop it: "+
-		"gcloud run jobs executions cancel %s --project %s --region %s", execution, c.project, c.region)
+		"clrnd jobs executions cancel %s --project %s --region %s", execution, c.project, c.region)
 	if parent.Err() != nil {
 		return fmt.Errorf("stopped waiting for execution %q (%w); %s", execution, parent.Err(), still)
 	}
@@ -298,4 +376,24 @@ func (c *Client) executionWaitInterrupted(parent, waitCtx context.Context, execu
 		return fmt.Errorf("timed out after %s waiting for execution %q; %s", timeout, execution, still)
 	}
 	return fmt.Errorf("stopped waiting for execution %q (%w); %s", execution, waitCtx.Err(), still)
+}
+
+// cancelWaitInterrupted builds the reason the wait for a cancel ended before the execution
+// stopped. The cancel has been requested either way and Cloud Run carries it out, so the message
+// says that rather than suggesting to cancel again.
+func (c *Client) cancelWaitInterrupted(parent, waitCtx context.Context, execution string,
+	timeout time.Duration, lastErr error) error {
+	const pending = "the cancel was requested and Cloud Run carries it out; " +
+		"clrnd jobs executions list shows when it has stopped"
+	if parent.Err() != nil {
+		return fmt.Errorf("stopped waiting for execution %q to stop (%w); %s", execution, parent.Err(), pending)
+	}
+	if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		if lastErr != nil {
+			return fmt.Errorf("timed out after %s waiting for execution %q to stop, and the last poll failed (%w); %s",
+				timeout, execution, lastErr, pending)
+		}
+		return fmt.Errorf("timed out after %s waiting for execution %q to stop; %s", timeout, execution, pending)
+	}
+	return fmt.Errorf("stopped waiting for execution %q to stop (%w); %s", execution, waitCtx.Err(), pending)
 }

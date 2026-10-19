@@ -239,7 +239,7 @@ func TestWaitExecutionHasNoDefaultTimeout(t *testing.T) {
 		t.Fatalf("WaitExecution() error = %v, want it to run until cancelled", err)
 	}
 	for _, want := range []string{"stopped waiting", "keeps running",
-		"gcloud run jobs executions cancel my-job-abcde --project test-project --region asia-northeast1"} {
+		"clrnd jobs executions cancel my-job-abcde --project test-project --region asia-northeast1"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to contain %q", err, want)
 		}
