@@ -55,6 +55,7 @@ func (s *suite) poolCount(t *testing.T, pool *run.WorkerPool, want string) {
 }
 
 func (s *suite) workerPools(t *testing.T) {
+	s.own("worker pool", s.pool)
 	dir := s.dir(t, "worker-pools")
 	s.config(t, dir)
 	manifest := filepath.Join(dir, "pool.yaml")

@@ -33,6 +33,7 @@ func (s *suite) executionStatus(t *testing.T, dir, name, want string) {
 	s.fatal(t, "execution %s missing from list", name)
 }
 func (s *suite) jobs(t *testing.T) {
+	s.own("job", s.job)
 	dir := s.dir(t, "jobs")
 	s.config(t, dir)
 	manifest := filepath.Join(dir, "job.yaml")

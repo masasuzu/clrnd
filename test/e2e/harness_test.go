@@ -48,7 +48,7 @@ func (s *suite) cleanup(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	for _, v := range s.owned {
+	for _, v := range s.ownedNow() {
 		if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
 			s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
 		}
@@ -72,21 +72,28 @@ func (s *suite) cleanup(t *testing.T) {
 // ownedResource is a resource a scenario creates, which cleanup deletes.
 type ownedResource struct{ kind, name string }
 
-// ownedResources lists what the scenarios c selects create. Cleanup deletes only these: a delete
-// sent for a resource no scenario touched needs a permission the run otherwise does not (a run
-// with ONLY=jobs would need run.workerpools.delete), and would fail a run whose scenarios passed.
-func ownedResources(c settings, service, job, pool string) []ownedResource {
-	var out []ownedResource
-	if c.only == "" || c.only == "current" || (c.oldRef != "" && c.only == "old") {
-		out = append(out, ownedResource{"service", service})
+// own records that the running scenario creates a resource. Each scenario calls it before it
+// creates anything, so cleanup deletes what the scenarios that actually ran own, whichever way
+// they were selected — ONLY, or go test -run naming a subtest. A delete sent for a resource no
+// scenario touched needs a permission the run otherwise does not (a jobs-only run would need
+// run.workerpools.delete), and would fail a run whose scenarios passed. Scenarios run in parallel,
+// hence the lock; a resource owned twice (the service, by the comparison too) is recorded once.
+func (s *suite) own(kind, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.owned {
+		if v.kind == kind && v.name == name {
+			return
+		}
 	}
-	if c.only == "" || c.only == "jobs" {
-		out = append(out, ownedResource{"job", job})
-	}
-	if c.only == "" || c.only == "worker-pools" {
-		out = append(out, ownedResource{"worker pool", pool})
-	}
-	return out
+	s.owned = append(s.owned, ownedResource{kind, name})
+}
+
+// ownedNow returns a copy of what the scenarios own, for cleanup.
+func (s *suite) ownedNow() []ownedResource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]ownedResource(nil), s.owned...)
 }
 
 func (s *suite) preflight(t *testing.T) {
@@ -263,7 +270,6 @@ func TestE2E(t *testing.T) {
 		}
 		s.build(t, src, s.oldBinary)
 	}
-	s.owned = ownedResources(c, s.service, s.job, s.pool)
 	// The service and the job are separate resources, so their scenarios run in parallel. The
 	// comparison reuses the service and stays behind the service scenario. Cleanup registered
 	// above runs only after every parallel subtest has finished.

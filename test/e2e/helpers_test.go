@@ -116,28 +116,22 @@ func TestHarnessPackageDirectory(t *testing.T) {
 		t.Fatalf("root %s is not the repository: %v", c.root, err)
 	}
 }
-func TestHarnessOwnedResources(t *testing.T) {
-	names := func(c settings) []string {
-		var out []string
-		for _, r := range ownedResources(c, "svc", "svc-job", "svc-wp") {
-			out = append(out, r.kind+"="+r.name)
+
+// TestHarnessOwn checks that parallel scenarios can record what they own, and that the service,
+// owned by both of its scenarios, is deleted once.
+func TestHarnessOwn(t *testing.T) {
+	s := &suite{}
+	t.Run("scenarios", func(t *testing.T) {
+		for _, r := range []ownedResource{{"service", "svc"}, {"service", "svc"}, {"job", "svc-job"}} {
+			t.Run(r.kind, func(t *testing.T) {
+				t.Parallel()
+				s.own(r.kind, r.name)
+			})
 		}
-		return out
-	}
-	for _, tc := range []struct {
-		c    settings
-		want []string
-	}{
-		{settings{}, []string{"service=svc", "job=svc-job", "worker pool=svc-wp"}},
-		{settings{only: "current"}, []string{"service=svc"}},
-		{settings{only: "jobs"}, []string{"job=svc-job"}},
-		{settings{only: "worker-pools"}, []string{"worker pool=svc-wp"}},
-		// The comparison creates the service with gcloud even when the service scenario is not run.
-		{settings{only: "old", oldRef: "v0.1.0"}, []string{"service=svc"}},
-	} {
-		if got := names(tc.c); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("ownedResources(only=%q) = %q, want %q", tc.c.only, got, tc.want)
-		}
+	})
+	got := s.ownedNow()
+	if len(got) != 2 {
+		t.Fatalf("owned = %+v, want the service and the job once each", got)
 	}
 }
 func TestHarnessRedaction(t *testing.T) {
