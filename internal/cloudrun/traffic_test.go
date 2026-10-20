@@ -40,7 +40,7 @@ func TestShiftTrafficTargetSplitsAgainstTheLargestShare(t *testing.T) {
 		},
 		"my-svc-00008-ghi")
 
-	got, err := ShiftTrafficTarget(live, TrafficRequest{Revision: "my-svc-00008-ghi", Percent: 20})
+	got, err := ShiftTrafficTarget(live, SplitRequest{Revision: "my-svc-00008-ghi", Percent: 20})
 	if err != nil {
 		t.Fatalf("ShiftTrafficTarget() error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestShiftTrafficTargetToLatestFollowsTheNewest(t *testing.T) {
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00006-def", Percent: 100}},
 		"my-svc-00008-ghi")
 
-	got, err := ShiftTrafficTarget(live, TrafficRequest{Latest: true, Percent: 100})
+	got, err := ShiftTrafficTarget(live, SplitRequest{Latest: true, Percent: 100})
 	if err != nil {
 		t.Fatalf("ShiftTrafficTarget() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestShiftTrafficTargetToLatestRefusesWhenOnlyTheLatestServes(t *testing.T) 
 		},
 		"my-svc-00008-ghi")
 
-	_, err := ShiftTrafficTarget(live, TrafficRequest{Latest: true, Percent: 10})
+	_, err := ShiftTrafficTarget(live, SplitRequest{Latest: true, Percent: 10})
 	if err == nil {
 		t.Fatal("ShiftTrafficTarget() error = nil, want it to refuse: nothing else is serving")
 	}
@@ -107,7 +107,7 @@ func TestShiftTrafficTargetKeepsTags(t *testing.T) {
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
 		"my-svc-00007-abc")
 
-	got, err := ShiftTrafficTarget(live, TrafficRequest{Revision: "my-svc-00006-def", Percent: 100})
+	got, err := ShiftTrafficTarget(live, SplitRequest{Revision: "my-svc-00006-def", Percent: 100})
 	if err != nil {
 		t.Fatalf("ShiftTrafficTarget() error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestShiftTrafficTargetLeavesTheTemplateAlone(t *testing.T) {
 		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
 		"my-svc-00007-abc")
 
-	got, err := ShiftTrafficTarget(live, TrafficRequest{Revision: "my-svc-00006-def", Percent: 100})
+	got, err := ShiftTrafficTarget(live, SplitRequest{Revision: "my-svc-00006-def", Percent: 100})
 	if err != nil {
 		t.Fatalf("ShiftTrafficTarget() error = %v", err)
 	}
@@ -145,28 +145,28 @@ func TestShiftTrafficTargetLeavesTheTemplateAlone(t *testing.T) {
 	}
 }
 
-func TestValidateTrafficRequest(t *testing.T) {
+func TestValidateSplitRequest(t *testing.T) {
 	tests := []struct {
 		name string
-		req  TrafficRequest
+		req  SplitRequest
 		want string // string the error should contain. When empty, success.
 	}{
-		{"revision", TrafficRequest{Revision: "my-svc-00007-abc", Percent: 100}, ""},
-		{"latest", TrafficRequest{Latest: true, Percent: 50}, ""},
-		{"both", TrafficRequest{Revision: "r", Latest: true, Percent: 100}, "cannot be combined"},
-		{"neither", TrafficRequest{Percent: 100}, "--to or --to-latest"},
-		{"zero percent", TrafficRequest{Latest: true}, "between 1 and 100"},
-		{"over 100", TrafficRequest{Latest: true, Percent: 101}, "between 1 and 100"},
-		{"negative", TrafficRequest{Latest: true, Percent: -1}, "between 1 and 100"},
+		{"revision", SplitRequest{Revision: "my-svc-00007-abc", Percent: 100}, ""},
+		{"latest", SplitRequest{Latest: true, Percent: 50}, ""},
+		{"both", SplitRequest{Revision: "r", Latest: true, Percent: 100}, "cannot be combined"},
+		{"neither", SplitRequest{Percent: 100}, "--to or --to-latest"},
+		{"zero percent", SplitRequest{Latest: true}, "between 1 and 100"},
+		{"over 100", SplitRequest{Latest: true, Percent: 101}, "between 1 and 100"},
+		{"negative", SplitRequest{Latest: true, Percent: -1}, "between 1 and 100"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateTrafficRequest(tt.req)
+			err := ValidateSplitRequest(KindService, tt.req)
 			switch {
 			case tt.want == "" && err != nil:
-				t.Errorf("ValidateTrafficRequest() error = %v, want nil", err)
+				t.Errorf("ValidateSplitRequest() error = %v, want nil", err)
 			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
-				t.Errorf("ValidateTrafficRequest() error = %v, want it to mention %q", err, tt.want)
+				t.Errorf("ValidateSplitRequest() error = %v, want it to mention %q", err, tt.want)
 			}
 		})
 	}
@@ -180,7 +180,7 @@ func TestLargestShareIsDeterministic(t *testing.T) {
 		TrafficTarget{RevisionName: "my-svc-00006-def", Percent: 50},
 	)
 	for i := 0; i < 20; i++ {
-		got, share := largestShare(status)
+		got, share := largestShare(trafficByRevision(status))
 		if got != "my-svc-00006-def" || share != 50 {
 			t.Fatalf("largestShare() = %q, %d; want the name-ordered winner on every run", got, share)
 		}
@@ -203,7 +203,7 @@ func TestShiftTrafficTargetRefusesToDemoteTheServingRevision(t *testing.T) {
 		},
 		"my-svc-00007-abc")
 
-	for _, req := range []TrafficRequest{
+	for _, req := range []SplitRequest{
 		{Latest: true, Percent: 10},                 // latestRevision resolves to the stable revision
 		{Revision: "my-svc-00007-abc", Percent: 10}, // the same one pointed at by name
 	} {
@@ -228,7 +228,7 @@ func TestShiftTrafficTargetSplitsAgainstTheStableRevisionMidCanary(t *testing.T)
 		},
 		"my-svc-00007-abc")
 
-	got, err := ShiftTrafficTarget(live, TrafficRequest{Revision: "my-svc-00006-def", Percent: 30})
+	got, err := ShiftTrafficTarget(live, SplitRequest{Revision: "my-svc-00006-def", Percent: 30})
 	if err != nil {
 		t.Fatalf("ShiftTrafficTarget() error = %v", err)
 	}
@@ -263,13 +263,37 @@ func TestPinnedTrafficFixesTheLatestPointer(t *testing.T) {
 	}
 }
 
-func TestHasTraffic(t *testing.T) {
-	with := []byte(validManifest + "  traffic:\n  - revisionName: my-svc-00007-abc\n    percent: 100\n")
-	if ok, err := HasTraffic(with); err != nil || !ok {
-		t.Errorf("HasTraffic(with traffic) = %v, %v; want true, nil", ok, err)
+// TestValidateSplitRequestNamesWhatTheKindSplits checks that the message for a missing target puts
+// it in the kind's terms, and that a kind without revisions has no split to change.
+func TestValidateSplitRequestNamesWhatTheKindSplits(t *testing.T) {
+	for kind, want := range map[Kind]string{
+		KindService:    "no revision to send traffic to",
+		KindWorkerPool: "no revision to run the instances on",
+		KindJob:        "a job has no revisions",
+	} {
+		if err := ValidateSplitRequest(kind, SplitRequest{Percent: 100}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateSplitRequest(%s) error = %v, want it to mention %q", kind.Name(), err, want)
+		}
 	}
-	if ok, err := HasTraffic([]byte(validManifest)); err != nil || ok {
-		t.Errorf("HasTraffic(without traffic) = %v, %v; want false, nil", ok, err)
+}
+
+func TestHasSplit(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     Kind
+		manifest string
+		want     bool
+	}{
+		{"service with traffic", KindService, validManifest + "  traffic:\n  - revisionName: my-svc-00007-abc\n    percent: 100\n", true},
+		{"service without", KindService, validManifest, false},
+		{"worker pool with instanceSplits", KindWorkerPool, validWorkerPoolManifest + "  instanceSplits:\n  - latestRevision: true\n    percent: 100\n", true},
+		{"worker pool without", KindWorkerPool, validWorkerPoolManifest, false},
+		{"job", KindJob, validJobManifest, false},
+	}
+	for _, tt := range tests {
+		if got, err := HasSplit(tt.kind, []byte(tt.manifest)); err != nil || got != tt.want {
+			t.Errorf("HasSplit(%s) = %v, %v; want %v, nil", tt.name, got, err, tt.want)
+		}
 	}
 }
 

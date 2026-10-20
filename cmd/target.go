@@ -33,8 +33,6 @@ type target struct {
 	// target with one has revisions: a manifest may pin a revision name, which verify and deploy
 	// warn about. nil for a target without revisions.
 	split *revisionSplit
-	// hasTraffic: deploy offers --no-traffic.
-	hasTraffic bool
 	// waitFor is what deploy waits for after applying, as its help puts it.
 	waitFor string
 	// deployLong is deploy's help text.
@@ -60,7 +58,6 @@ var (
 		configName:     func(c *config.Config) *string { return &c.Service },
 		commands:       "the top-level commands such as 'clrnd deploy'",
 		split:          serviceSplit,
-		hasTraffic:     true,
 		waitFor:        "the rollout",
 		deployLong:     serviceDeployLong,
 		manifestFormat: "Knative-style YAML",
@@ -111,6 +108,17 @@ type revisionSplit struct {
 	rollbackShort, rollbackLong, rollbackKeeps, rollbackPrompt string
 	// table formats a list of revisions as text.
 	table func(cloudrun.Revisions) string
+
+	// The command that changes the split (newSplitCmd): its name and help.
+	command, commandShort, commandLong string
+	what                               string // what is split ("traffic")
+	verb                               string // a revision having a share, before "the most" ("serving")
+	sendTo                             string // giving a revision a share ("send traffic to")
+	toLatestUsage                      string // --to-latest's help
+	splitPrompt                        string // the confirmation; takes the percentage and the revision
+	// deploy's flag that keeps the current split (keepFlag, without the dashes), its help, and the
+	// warning that it replaces the split the manifest writes.
+	keepFlag, keepUsage, keepWarning string
 }
 
 var (
@@ -124,6 +132,26 @@ var (
 		rollbackKeeps:  ", and traffic tags are kept (pinned at 0%)",
 		rollbackPrompt: "Send all traffic to %s?",
 		table:          cloudrun.Revisions.Text,
+		command:        "traffic",
+		commandShort:   "Change how traffic is split between revisions",
+		commandLong: "Send a share of the traffic to a revision. Only spec.traffic changes: no new revision\n" +
+			"is created, and traffic tags are kept (pinned at 0%).\n" +
+			"--percent below 100 leaves the rest on the revision that is currently serving the most,\n" +
+			"which is the canary shape (new 10% / stable 90%).\n" +
+			"--to-latest follows whatever the newest revision is, so it is also how you undo a\n" +
+			"rollback: the traffic stops being pinned to the older revision.\n" +
+			"The diff is shown and confirmed the same way deploy does, and the rollout is waited\n" +
+			"for unless --no-wait is given.\n" +
+			"service may be omitted when set in the config file.",
+		what:          "traffic",
+		verb:          "serving",
+		sendTo:        "send traffic to",
+		toLatestUsage: "send traffic to the latest revision, and keep following it",
+		splitPrompt:   "Send %d%% of the traffic to %s?",
+		keepFlag:      "no-traffic",
+		keepUsage:     "create the revision without sending traffic to it (keep the current split)",
+		keepWarning: "--no-traffic replaces the spec.traffic written in the manifest with the " +
+			"split the service is serving now",
 	}
 	workerPoolSplit = &revisionSplit{
 		listed:         "the share of the instances each one runs",
@@ -134,6 +162,27 @@ var (
 		rollbackLong:   "Run every instance on an earlier revision.",
 		rollbackPrompt: "Run every instance on %s?",
 		table:          cloudrun.Revisions.InstancesText,
+		command:        "instance-split",
+		commandShort:   "Change how a worker pool's instances are split between revisions",
+		commandLong: "Run a share of the instances on a revision. Only spec.instanceSplits changes: no new\n" +
+			"revision is created, and the instance count stays as it is.\n" +
+			"--percent below 100 leaves the rest on the revision that is currently running the most,\n" +
+			"which is the canary shape (new 10% / stable 90%). Every revision with a share needs an\n" +
+			"instance of its own, so a split between two revisions needs at least 2 instances.\n" +
+			"--to-latest follows whatever the newest revision is, so it is also how you undo a\n" +
+			"rollback or a deploy --no-promote: the instances stop being pinned to the older revision.\n" +
+			"The diff is shown and confirmed the same way deploy does, and the rollout is waited\n" +
+			"for unless --no-wait is given.\n" +
+			"worker-pool may be omitted when set in the config file.",
+		what:          "instances",
+		verb:          "running",
+		sendTo:        "run the instances on",
+		toLatestUsage: "run the instances on the latest revision, and keep following it",
+		splitPrompt:   "Run %d%% of the instances on %s?",
+		keepFlag:      "no-promote",
+		keepUsage:     "create the revision without running instances on it (keep the current split)",
+		keepWarning: "--no-promote replaces the spec.instanceSplits written in the manifest with the " +
+			"split the worker pool runs now",
 	}
 )
 

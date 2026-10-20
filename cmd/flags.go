@@ -186,19 +186,18 @@ func warnPinnedRevision(cmd *cobra.Command, kind cloudrun.Kind, manifest []byte)
 	return nil
 }
 
-// warnManifestTraffic warns on stderr that --no-traffic overwrites the manifest's spec.traffic.
-// It does nothing when the manifest has none.
-func warnManifestTraffic(cmd *cobra.Command, manifest []byte) error {
-	pinned, err := cloudrun.HasTraffic(manifest)
+// warnManifestSplit warns on stderr that deploy's flag for keeping the current split (--no-traffic,
+// --no-promote) overwrites the split the manifest writes. It does nothing when the manifest has
+// none.
+func warnManifestSplit(cmd *cobra.Command, t target, manifest []byte) error {
+	pinned, err := cloudrun.HasSplit(t.kind, manifest)
 	if err != nil {
 		return err
 	}
 	if !pinned {
 		return nil
 	}
-	fmt.Fprintln(cmd.ErrOrStderr(),
-		"warning: --no-traffic replaces the spec.traffic written in the manifest with the "+
-			"split the service is serving now")
+	fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", t.split.keepWarning)
 	return nil
 }
 

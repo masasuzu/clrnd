@@ -37,16 +37,21 @@ type splitWords struct {
 	idle    string // a revision without one ("serves no traffic")
 	holder  string // the split, as the subject of "is still on" ("traffic is")
 	wait    string // the command that waits for the rollout
+	sendTo  string // giving a revision a share, as in "no revision to send traffic to"
+	verb    string // a revision having a share, before what it has ("serving")
+	what    string // what is split ("traffic")
 }
 
 var (
 	serviceSplitWords = splitWords{
 		noun: "service", serving: "receiving traffic", idle: "serves no traffic",
 		holder: "traffic is", wait: "clrnd wait",
+		sendTo: "send traffic to", verb: "serving", what: "traffic",
 	}
 	workerPoolSplitWords = splitWords{
 		noun: "worker pool", serving: "running instances", idle: "runs no instances",
 		holder: "the instances are", wait: "clrnd worker-pools wait",
+		sendTo: "run the instances on", verb: "running", what: "instances",
 	}
 )
 
@@ -80,13 +85,9 @@ func selectRollbackRevision(revisions Revisions, requested string, words splitWo
 		revisions[current].Name)
 }
 
-// FindRevision returns the revision in the list whose name matches. It is an error if none does.
-// It is also the check that "this is a revision of this service": sending traffic to a mistyped
+// findRevision returns the revision in the list whose name matches. It is an error if none does.
+// It is also the check that "this is a revision of this resource": sending a share to a mistyped
 // name would produce a split that reaches no revision at all.
-func FindRevision(revisions Revisions, name string) (*Revision, error) {
-	return findRevision(revisions, name, "service")
-}
-
 func findRevision(revisions Revisions, name, noun string) (*Revision, error) {
 	for i := range revisions {
 		if revisions[i].Name == name {

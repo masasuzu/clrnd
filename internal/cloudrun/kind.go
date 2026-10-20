@@ -39,6 +39,9 @@ type Kind interface {
 	revisionName(manifest []byte) (string, error)
 	listRevisions(ctx context.Context, c *Client, name string) (Revisions, error)
 	planRollback(ctx context.Context, c *Client, name, requested string) (*DeployPlan, *Revision, error)
+	validateSplit(req SplitRequest) error
+	planSplit(ctx context.Context, c *Client, name string, req SplitRequest) (*DeployPlan, *Revision, error)
+	manifestPinsSplit(manifest []byte) (bool, error)
 }
 
 // The kinds clrnd deploys.
@@ -282,9 +285,9 @@ func (k *kindOf[T]) planAgainst(ctx context.Context, c *Client, name string, cur
 	c.setNamespace(k.meta(desired))
 	create := current == zero
 
-	// Anything that rewrites desired (pinning the traffic for --no-traffic) happens before setting
-	// resourceVersion and before diffing. Both what is applied and what shows in the diff have to
-	// be the definition after it.
+	// Anything that rewrites desired (pinning the split for --no-traffic / --no-promote) happens
+	// before setting resourceVersion and before diffing. Both what is applied and what shows in the
+	// diff have to be the definition after it.
 	if k.prepare != nil {
 		if desired, err = k.prepare(desired, current, name, opts); err != nil {
 			return nil, err
@@ -517,11 +520,12 @@ type PlanOptions struct {
 	// filled in are never written back.
 	ResolveDefaults bool
 
-	// KeepTraffic, when true, pins the current split by revision name before applying
-	// (deploy --no-traffic). Without spec.traffic in the manifest, Cloud Run sends all traffic to
-	// latestRevision, so left as is, the new revision would take production the moment it is
-	// deployed. Set this when traffic is meant to be moved gradually. Services only.
-	KeepTraffic bool
+	// KeepSplit, when true, pins the current split by revision name before applying (a service's
+	// deploy --no-traffic, a worker pool's deploy --no-promote). Without spec.traffic or
+	// spec.instanceSplits in the manifest, Cloud Run gives everything to latestRevision, so left as
+	// is, the new revision would take production the moment it is deployed. Set this when the
+	// split is meant to be moved gradually. Kinds with revisions only.
+	KeepSplit bool
 }
 
 // Plan validates the manifest and computes the diff against what is live (changes nothing).

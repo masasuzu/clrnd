@@ -211,19 +211,6 @@ func TestPlanWorkerPoolUpdateIsACompareAndSwap(t *testing.T) {
 	}
 }
 
-// TestWorkerPoolPlanRefusesKeepTraffic checks that --no-traffic, a service's flag, cannot reach a
-// worker pool through the shared plan.
-func TestWorkerPoolPlanRefusesKeepTraffic(t *testing.T) {
-	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
-		return http.StatusOK, liveWorkerPool("gcr.io/project/worker:v1")
-	})
-	_, err := c.Plan(context.Background(), KindWorkerPool, "my-pool", []byte(validWorkerPoolManifest),
-		PlanOptions{KeepTraffic: true})
-	if err == nil || !strings.Contains(err.Error(), "serves no traffic") {
-		t.Errorf("Plan(KeepTraffic) error = %v", err)
-	}
-}
-
 // TestWorkerPoolDiffIgnoresServerManagedFields checks that a manifest written the way init writes
 // one diffs clean against the live worker pool: the metadata the server manages and a revision
 // name the manifest does not pin are not differences.

@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"maps"
 	"path/filepath"
 	"testing"
 	"time"
@@ -45,6 +46,21 @@ func (s *suite) poolReady(t *testing.T) *run.WorkerPool {
 		return false
 	})
 	return pool
+}
+
+// poolSplit checks the instance split the worker pool reports: the share each revision runs.
+// Entries at 0% are ignored.
+func (s *suite) poolSplit(t *testing.T, pool *run.WorkerPool, want map[string]int64) {
+	t.Helper()
+	got := map[string]int64{}
+	for _, split := range pool.Status.InstanceSplits {
+		if split.Percent > 0 {
+			got[split.RevisionName] += split.Percent
+		}
+	}
+	if !maps.Equal(got, want) {
+		s.fatal(t, "worker pool runs its instances as %v, want %v", got, want)
+	}
 }
 
 func (s *suite) poolCount(t *testing.T, pool *run.WorkerPool, want string) {
@@ -145,9 +161,7 @@ func (s *suite) workerPools(t *testing.T) {
 	}
 	s.code(t, s.cli(t, dir, "worker-pools", "rollback", s.pool, "--auto-approve", "--timeout", "180s"), 0)
 	pool = s.poolReady(t)
-	if splits := pool.Status.InstanceSplits; len(splits) != 1 || splits[0].RevisionName != first || splits[0].Percent != 100 {
-		s.fatal(t, "rollback left the instances on %+v, want all of them on %s", splits, first)
-	}
+	s.poolSplit(t, pool, map[string]int64{first: 100})
 	if pool.Status.LatestCreatedRevisionName != second {
 		s.fatal(t, "rollback created a revision")
 	}
@@ -160,6 +174,27 @@ func (s *suite) workerPools(t *testing.T) {
 			s.fatal(t, "prune after a rollback picked %s", v.Name)
 		}
 	}
+
+	t.Log("deploy --no-promote creates a revision that runs nothing; instance-split moves instances onto it")
+	s.edit(t, manifest, func(m map[string]any) { setEnv(m, "third") })
+	s.code(t, s.cli(t, dir, "worker-pools", "deploy", s.pool, manifest, "--no-promote", "--auto-approve", "--timeout", "180s"), 0)
+	pool = s.poolReady(t)
+	third := pool.Status.LatestCreatedRevisionName
+	if third == second {
+		s.fatal(t, "a template change with --no-promote created no revision")
+	}
+	s.poolSplit(t, pool, map[string]int64{first: 100})
+	// --to-latest resolves to the revision just created, which runs nothing yet, so the rest stays on
+	// the one running every instance.
+	s.code(t, s.cli(t, dir, "worker-pools", "instance-split", s.pool, "--to-latest", "--percent", "50", "--auto-approve", "--timeout", "180s"), 0)
+	s.poolSplit(t, s.poolReady(t), map[string]int64{third: 50, first: 50})
+	s.code(t, s.cli(t, dir, "worker-pools", "instance-split", s.pool, "--to-latest", "--auto-approve", "--timeout", "180s"), 0)
+	pool = s.poolReady(t)
+	s.poolSplit(t, pool, map[string]int64{third: 100})
+	s.poolCount(t, pool, "3")
+	// Following the latest again is what a manifest without spec.instanceSplits asks for.
+	r = s.code(t, s.cli(t, dir, "worker-pools", "diff", s.pool, manifest, "--exit-code"), 0)
+	s.empty(t, r.stdout)
 
 	r = s.code(t, s.cli(t, dir, "worker-pools", "delete", s.pool, "--dry-run"), 0)
 	s.contains(t, r.stderr, "instances:   3 (stopped with it)")

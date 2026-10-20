@@ -70,8 +70,8 @@ var jobKind = &kindOf[*run.Job]{
 	},
 
 	prepare: func(desired, _ *run.Job, _ string, opts PlanOptions) (*run.Job, error) {
-		if opts.KeepTraffic {
-			return nil, errors.New("a job serves no traffic, so there is no traffic to keep")
+		if opts.KeepSplit {
+			return nil, errors.New("a job has no revisions, so there is no split between them to keep")
 		}
 		return desired, nil
 	},

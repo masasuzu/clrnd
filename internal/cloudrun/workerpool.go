@@ -2,7 +2,6 @@ package cloudrun
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -72,11 +71,11 @@ var workerPoolKind = &kindOf[*run.WorkerPool]{
 		return err
 	},
 
-	prepare: func(desired, _ *run.WorkerPool, _ string, opts PlanOptions) (*run.WorkerPool, error) {
-		if opts.KeepTraffic {
-			return nil, errors.New("a worker pool serves no traffic, so there is no traffic to keep")
+	prepare: func(desired, current *run.WorkerPool, name string, opts PlanOptions) (*run.WorkerPool, error) {
+		if !opts.KeepSplit {
+			return desired, nil
 		}
-		return desired, nil
+		return keepInstanceSplit(desired, current, name)
 	},
 	template:  workerPoolTemplate,
 	revisions: workerPoolRevisions,

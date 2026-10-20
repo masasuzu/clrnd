@@ -370,13 +370,13 @@ func TestPlanJobResolvesServerDefaults(t *testing.T) {
 	}
 }
 
-func TestPlanJobRefusesToKeepTraffic(t *testing.T) {
+func TestPlanJobRefusesToKeepASplit(t *testing.T) {
 	c, _ := newTestClient(t, func(*http.Request) (int, interface{}) {
 		return http.StatusOK, liveJob("gcr.io/project/job:v1")
 	})
-	_, err := c.Plan(context.Background(), KindJob, "my-job", []byte(validJobManifest), PlanOptions{KeepTraffic: true})
-	if err == nil || !strings.Contains(err.Error(), "no traffic") {
-		t.Errorf("Plan(KeepTraffic) error = %v, want a refusal", err)
+	_, err := c.Plan(context.Background(), KindJob, "my-job", []byte(validJobManifest), PlanOptions{KeepSplit: true})
+	if err == nil || !strings.Contains(err.Error(), "no revisions") {
+		t.Errorf("Plan(KeepSplit) error = %v, want a refusal", err)
 	}
 }
 
