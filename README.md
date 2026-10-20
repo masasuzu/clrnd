@@ -124,6 +124,8 @@ gcloud auth application-default login
 | `worker-pools deploy` | `run.workerpools.get`, `run.workerpools.update`, and `run.workerpools.create` for a worker pool that does not exist yet |
 | `worker-pools status`, `worker-pools wait`, `worker-pools init` | `run.workerpools.get` |
 | `worker-pools delete` | `run.workerpools.get`, `run.workerpools.delete` |
+| `worker-pools revisions` | `run.workerpools.get`, `run.revisions.list`, plus `run.revisions.delete` for `--prune` |
+| `worker-pools rollback` | `run.workerpools.get`, `run.revisions.list`, `run.workerpools.update` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -421,7 +423,7 @@ clrnd [command]
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
 | `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs wait`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions wait`, `jobs executions cancel`. |
-| `worker-pools` | Commands for Cloud Run worker pools: `worker-pools verify`, `worker-pools diff`, `worker-pools deploy`, `worker-pools status`, `worker-pools wait`, `worker-pools delete`, `worker-pools init`. |
+| `worker-pools` | Commands for Cloud Run worker pools: `worker-pools verify`, `worker-pools diff`, `worker-pools deploy`, `worker-pools status`, `worker-pools wait`, `worker-pools delete`, `worker-pools init`, `worker-pools revisions`, `worker-pools rollback`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -1164,8 +1166,10 @@ What differs from a service:
   handled the same way (see [Revision names](#revision-names)). Its `--format json` names the
   worker pool under `workerPool`.
 - There is no traffic. What a worker pool splits between revisions is its instances
-  (`spec.instanceSplits`), which a manifest can set like any other field; there is no `rollback`,
-  `traffic` or `--no-traffic` for it yet.
+  (`spec.instanceSplits`), which a manifest can set like any other field. `worker-pools revisions`
+  and `worker-pools rollback` work on that split as [`revisions`](#revisions) and
+  [`rollback`](#rollback) work on a service's traffic; there is no `traffic` or `--no-traffic` for
+  it yet.
 - In the config file, name the worker pool with `workerPool:` instead of `service:`. A worker pool
   cannot share a name with a service in the same project.
 
@@ -1191,6 +1195,14 @@ revisions go with it. `worker-pools init` scaffolds `manifest.yaml` with the cou
 a `clrnd.yml` that names it with `workerPool:`, so `clrnd worker-pools diff` right after it is
 empty — remove the two annotations from the manifest if an autoscaler should own the count.
 `worker-pools wait` waits until the worker pool is ready after a `worker-pools deploy --no-wait`.
+
+`worker-pools revisions` lists the revisions with the share of the instances each one runs, and
+`--prune` deletes old ones under the same rules as for a service. `worker-pools rollback` moves every
+instance to the revision before the newest one running instances (or to `--revision`), editing only
+`spec.instanceSplits`, so no revision is created. The rollback holds until the next deploy: a
+manifest that does not write `spec.instanceSplits` sends every instance to the latest revision again
+(confirmed against the API), as a service manifest without `spec.traffic` does with traffic, and
+`worker-pools diff` shows that move beforehand.
 
 ## Exit codes
 

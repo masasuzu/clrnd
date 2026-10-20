@@ -129,7 +129,9 @@ forces failure.
 - `workerpools_test.go`: the refused `scalingMode: manual` without a count; verify, deploy, status
   text/JSON, wait and a clean diff; init with a clean diff with and without defaults; a count-only
   change that creates no revision; a count set the way an autoscaler sets it, kept by a deploy of a
-  manifest that leaves the count out; cross-kind refusals; dry-run and real delete.
+  manifest that leaves the count out; revisions and a rollback that moves the instances without
+  creating a revision, then a prune that spares both the revision running and the latest created;
+  cross-kind refusals; dry-run and real delete.
 - `services_test.go`'s comparison scenario: builds `OLD_REF` from a git archive, pins a live revision,
   scaffolds with the historical binary, then records its behavior after changing the template. Old
   versions may fail synchronously or asynchronously, or succeed; this phase intentionally observes

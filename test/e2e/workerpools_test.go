@@ -137,6 +137,30 @@ func (s *suite) workerPools(t *testing.T) {
 	r = s.code(t, s.cli(t, dir, "worker-pools", "diff", s.pool, manifest, "--exit-code"), 0)
 	s.empty(t, r.stdout)
 
+	t.Log("Rollback moves the instances back to the previous revision without creating one")
+	second := pool.Status.LatestReadyRevisionName
+	r = s.code(t, s.cli(t, dir, "worker-pools", "revisions", s.pool), 0)
+	for _, want := range []string{"INSTANCES", second, first} {
+		s.contains(t, r.stdout, want)
+	}
+	s.code(t, s.cli(t, dir, "worker-pools", "rollback", s.pool, "--auto-approve", "--timeout", "180s"), 0)
+	pool = s.poolReady(t)
+	if splits := pool.Status.InstanceSplits; len(splits) != 1 || splits[0].RevisionName != first || splits[0].Percent != 100 {
+		s.fatal(t, "rollback left the instances on %+v, want all of them on %s", splits, first)
+	}
+	if pool.Status.LatestCreatedRevisionName != second {
+		s.fatal(t, "rollback created a revision")
+	}
+	s.poolCount(t, pool, "3")
+	// Neither the revision now running nor the latest created one, which Cloud Run refuses to
+	// delete, may be pruned.
+	r = s.code(t, s.cli(t, dir, "worker-pools", "revisions", s.pool, "--prune", "--keep", "0", "--dry-run", "--format", "json"), 0)
+	for _, v := range decode[[]revisionRow](s, t, []byte(r.stdout)) {
+		if v.Name == first || v.Name == second {
+			s.fatal(t, "prune after a rollback picked %s", v.Name)
+		}
+	}
+
 	r = s.code(t, s.cli(t, dir, "worker-pools", "delete", s.pool, "--dry-run"), 0)
 	s.contains(t, r.stderr, "instances:   3 (stopped with it)")
 	s.poolState(t)

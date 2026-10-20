@@ -29,8 +29,10 @@ type target struct {
 	// config naming this kind while another kind's command runs.
 	commands string
 
-	// hasRevisions: a manifest may pin a revision name, which verify and deploy warn about.
-	hasRevisions bool
+	// split describes how the kind's revisions share what it runs, for revisions and rollback. A
+	// target with one has revisions: a manifest may pin a revision name, which verify and deploy
+	// warn about. nil for a target without revisions.
+	split *revisionSplit
 	// hasTraffic: deploy offers --no-traffic.
 	hasTraffic bool
 	// waitFor is what deploy waits for after applying, as its help puts it.
@@ -57,7 +59,7 @@ var (
 		configKey:      "service",
 		configName:     func(c *config.Config) *string { return &c.Service },
 		commands:       "the top-level commands such as 'clrnd deploy'",
-		hasRevisions:   true,
+		split:          serviceSplit,
 		hasTraffic:     true,
 		waitFor:        "the rollout",
 		deployLong:     serviceDeployLong,
@@ -86,7 +88,7 @@ var (
 		configKey:      "workerPool",
 		configName:     func(c *config.Config) *string { return &c.WorkerPool },
 		commands:       "the 'clrnd worker-pools' commands",
-		hasRevisions:   true,
+		split:          workerPoolSplit,
 		waitFor:        "the rollout",
 		deployLong:     workerPoolDeployLong,
 		manifestFormat: "YAML",
@@ -96,6 +98,43 @@ var (
 	}
 	// targets are every target, for the check that the config file does not name another kind.
 	targets = []target{serviceTarget, jobTarget, workerPoolTarget}
+)
+
+// revisionSplit is how help and messages put what a kind splits between its revisions: a
+// service's traffic, a worker pool's instances.
+type revisionSplit struct {
+	listed    string // what revisions lists for each revision
+	protected string // the revisions a prune never deletes
+	serving   string // a revision with a share
+	serve     string // what a revision has to be able to do
+	// rollback's help and prompt (rollbackPrompt takes the revision's name).
+	rollbackShort, rollbackLong, rollbackKeeps, rollbackPrompt string
+	// table formats a list of revisions as text.
+	table func(cloudrun.Revisions) string
+}
+
+var (
+	serviceSplit = &revisionSplit{
+		listed:         "the share of traffic each one currently receives and its traffic tags",
+		protected:      "serving traffic, carrying a tag, or named in spec.traffic",
+		serving:        "receiving traffic",
+		serve:          "serve traffic",
+		rollbackShort:  "Send traffic back to an earlier revision",
+		rollbackLong:   "Send all traffic back to an earlier revision.",
+		rollbackKeeps:  ", and traffic tags are kept (pinned at 0%)",
+		rollbackPrompt: "Send all traffic to %s?",
+		table:          cloudrun.Revisions.Text,
+	}
+	workerPoolSplit = &revisionSplit{
+		listed:         "the share of the instances each one runs",
+		protected:      "running instances or named in spec.instanceSplits",
+		serving:        "running instances",
+		serve:          "run instances",
+		rollbackShort:  "Run a worker pool's instances on an earlier revision again",
+		rollbackLong:   "Run every instance on an earlier revision.",
+		rollbackPrompt: "Run every instance on %s?",
+		table:          cloudrun.Revisions.InstancesText,
+	}
 )
 
 // arg is how usage lines and help name the positional argument: the noun, hyphenated, as gcloud

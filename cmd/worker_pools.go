@@ -7,8 +7,9 @@ import "github.com/spf13/cobra"
 //
 // A worker pool is deployed, inspected and removed the same way a service is, so deploy, diff,
 // verify, wait, delete and init are the services' commands built for worker pools (newDeployCmd and
-// friends). It has revisions like a service but no URL and no traffic: what it splits between
-// revisions is its instances, which have no command here yet.
+// friends), and so are revisions and rollback, since a worker pool has revisions too. It has no URL
+// and no traffic: what it splits between revisions is its instances, which rollback moves and
+// which have no command of their own yet.
 var workerPoolsCmd = &cobra.Command{
 	Use:   "worker-pools",
 	Short: "Deploy Cloud Run worker pools",
@@ -55,6 +56,8 @@ func init() {
 	workerPoolsCmd.AddCommand(newWaitCmd(workerPoolTarget))
 	workerPoolsCmd.AddCommand(newDeleteCmd(workerPoolTarget))
 	workerPoolsCmd.AddCommand(newInitCmd(workerPoolTarget))
+	workerPoolsCmd.AddCommand(newRevisionsCmd(workerPoolTarget))
+	workerPoolsCmd.AddCommand(newRollbackCmd(workerPoolTarget))
 }
 
 func runWorkerPoolsStatus(cmd *cobra.Command, args []string) error {

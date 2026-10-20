@@ -26,8 +26,33 @@ import (
 // Pinning the serving revision instead would not help either: the template still describes the
 // failed revision, so the service stays not Ready and the rollback's wait would fail anyway.
 func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, error) {
+	return selectRollbackRevision(revisions, requested, serviceSplitWords)
+}
+
+// splitWords are how messages about what a kind splits between its revisions put it: a service's
+// traffic, a worker pool's instances.
+type splitWords struct {
+	noun    string // the resource ("service")
+	serving string // a revision with a share ("receiving traffic")
+	idle    string // a revision without one ("serves no traffic")
+	holder  string // the split, as the subject of "is still on" ("traffic is")
+	wait    string // the command that waits for the rollout
+}
+
+var (
+	serviceSplitWords = splitWords{
+		noun: "service", serving: "receiving traffic", idle: "serves no traffic",
+		holder: "traffic is", wait: "clrnd wait",
+	}
+	workerPoolSplitWords = splitWords{
+		noun: "worker pool", serving: "running instances", idle: "runs no instances",
+		holder: "the instances are", wait: "clrnd worker-pools wait",
+	}
+)
+
+func selectRollbackRevision(revisions Revisions, requested string, words splitWords) (*Revision, error) {
 	if requested != "" {
-		return FindRevision(revisions, requested)
+		return findRevision(revisions, requested, words.noun)
 	}
 
 	// revisions is newest first, so the first one found "with a share" is the newest serving
@@ -40,10 +65,10 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 		}
 	}
 	if current < 0 {
-		return nil, errors.New("no revision is currently receiving traffic; pass --revision to choose one")
+		return nil, fmt.Errorf("no revision is currently %s; pass --revision to choose one", words.serving)
 	}
 	if newest := revisions[0]; current > 0 && !newest.IsReady() {
-		return nil, unfinishedRolloutError(newest, revisions[current])
+		return nil, unfinishedRolloutError(newest, revisions[current], words)
 	}
 
 	for i := current + 1; i < len(revisions); i++ {
@@ -59,12 +84,16 @@ func SelectRollbackRevision(revisions Revisions, requested string) (*Revision, e
 // It is also the check that "this is a revision of this service": sending traffic to a mistyped
 // name would produce a split that reaches no revision at all.
 func FindRevision(revisions Revisions, name string) (*Revision, error) {
+	return findRevision(revisions, name, "service")
+}
+
+func findRevision(revisions Revisions, name, noun string) (*Revision, error) {
 	for i := range revisions {
 		if revisions[i].Name == name {
 			return &revisions[i], nil
 		}
 	}
-	return nil, fmt.Errorf("revision %q does not belong to this service", name)
+	return nil, fmt.Errorf("revision %q does not belong to this %s", name, noun)
 }
 
 // RollbackTarget returns a new service definition with 100% of the live service's traffic sent
@@ -101,18 +130,18 @@ func RollbackTarget(live *run.Service, revision string) (*run.Service, error) {
 
 // unfinishedRolloutError explains why rollback will not pick a revision while the newest one is
 // not Ready (see SelectRollbackRevision).
-func unfinishedRolloutError(newest, serving Revision) error {
+func unfinishedRolloutError(newest, serving Revision, words splitWords) error {
 	if newest.Ready == conditionFalse {
 		state := "failed"
 		if newest.Reason != "" {
 			state = fmt.Sprintf("failed (%s)", newest.Reason)
 		}
-		return fmt.Errorf("the newest revision %q %s and serves no traffic; traffic is still on %q, "+
+		return fmt.Errorf("the newest revision %q %s and %s; %s still on %q, "+
 			"the last revision that became ready, so there is nothing to roll back: fix the manifest "+
-			"and deploy again, or pass --revision to send traffic to a specific revision",
-			newest.Name, state, serving.Name)
+			"and deploy again, or pass --revision to choose a specific revision",
+			newest.Name, state, words.idle, words.holder, serving.Name)
 	}
-	return fmt.Errorf("the newest revision %q is not ready yet and serves no traffic; traffic is still "+
-		"on %q: wait for the rollout to finish (clrnd wait), or pass --revision to send traffic to a "+
-		"specific revision", newest.Name, serving.Name)
+	return fmt.Errorf("the newest revision %q is not ready yet and %s; %s still "+
+		"on %q: wait for the rollout to finish (%s), or pass --revision to choose a "+
+		"specific revision", newest.Name, words.idle, words.holder, serving.Name, words.wait)
 }

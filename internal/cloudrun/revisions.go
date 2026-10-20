@@ -2,7 +2,6 @@ package cloudrun
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -67,66 +66,55 @@ func (c *Client) ListRevisions(ctx context.Context, service string) (Revisions, 
 // ListServiceRevisions is ListRevisions for a service already read, so a command that goes on to
 // edit that service (rollback, traffic) reads it once.
 func (c *Client) ListServiceRevisions(ctx context.Context, svc *run.Service) (Revisions, error) {
-	if svc == nil || svc.Metadata == nil || svc.Metadata.Name == "" {
-		return nil, errors.New("no service to list the revisions of")
-	}
-	service := svc.Metadata.Name
-	selector := fmt.Sprintf("%s=%s", serviceLabel, service)
-	items, err := listAll(fmt.Sprintf("revisions of service %q", service),
-		func(token string) ([]*run.Revision, string, error) {
-			call := c.api.Namespaces.Revisions.List(c.parent()).LabelSelector(selector).Limit(listPageLimit)
-			if token != "" {
-				call = call.Continue(token)
-			}
-			resp, err := call.Context(ctx).Do()
-			if err != nil {
-				return nil, "", err
-			}
-			return resp.Items, continueToken(resp.Metadata), nil
-		})
-	if err != nil {
-		return nil, err
-	}
-
-	return newRevisions(items, newStatus(svc), pinnedRevisionNames(svc)), nil
+	return serviceKind.listRevisionsOf(ctx, c, svc)
 }
 
 // pinnedRevisionNames collects the revisions spec.traffic names.
 // The status side sometimes has no names until serving settles, so protection from deletion also
 // looks at the declaration (spec).
 func pinnedRevisionNames(svc *run.Service) map[string]bool {
-	out := make(map[string]bool)
 	if svc == nil || svc.Spec == nil {
-		return out
+		return map[string]bool{}
 	}
+	var named []string
 	followsLatest := false
 	for _, t := range svc.Spec.Traffic {
 		if t == nil {
 			continue
 		}
-		if t.RevisionName != "" {
-			out[t.RevisionName] = true
-		}
+		named = append(named, t.RevisionName)
 		followsLatest = followsLatest || t.LatestRevision
 	}
+	var latestReady, latestCreated string
+	if svc.Status != nil {
+		latestReady, latestCreated = svc.Status.LatestReadyRevisionName, svc.Status.LatestCreatedRevisionName
+	}
+	return protectedRevisions(named, followsLatest, latestReady, latestCreated)
+}
 
-	if svc.Status == nil {
-		return out
+// protectedRevisions is the set a prune must not delete, for any kind that splits something
+// between revisions: the revisions the split names, and the latest ones as follows.
+func protectedRevisions(named []string, followsLatest bool, latestReady, latestCreated string) map[string]bool {
+	out := make(map[string]bool)
+	for _, name := range named {
+		if name != "" {
+			out[name] = true
+		}
 	}
 	// Cloud Run refuses to delete the latest created revision, serving or not ("cannot be directly
-	// deleted", confirmed against the real API): after a rollback pins traffic by name it serves
-	// nothing, yet a prune that tried it would stop with a 400 halfway through its list.
-	if name := svc.Status.LatestCreatedRevisionName; name != "" {
-		out[name] = true
+	// deleted", confirmed against the real API for services and worker pools): after a rollback pins
+	// the split by name it serves nothing, yet a prune that tried it would stop with a 400 halfway
+	// through its list.
+	if latestCreated != "" {
+		out[latestCreated] = true
 	}
-	// latestRevision: true writes no name, so the loop above protects nothing for it. During a
-	// rollout the new revision can already be in the list while status.traffic shows no share for
-	// it yet, so left as is, --keep 0 could delete "the version about to serve": the one
-	// latestRevision points to now. Only when traffic follows the latest revision: once it is
-	// pinned by name, the latest ready revision really is idle and stays prunable unless it is also
-	// the latest created.
-	if name := svc.Status.LatestReadyRevisionName; followsLatest && name != "" {
-		out[name] = true
+	// latestRevision: true writes no name, so the names above protect nothing for it. During a
+	// rollout the new revision can already be in the list while the status shows no share for it
+	// yet, so left as is, --keep 0 could delete "the version about to serve": the one latestRevision
+	// points to now. Only when the split follows the latest revision: once it is pinned by name, the
+	// latest ready revision really is idle and stays prunable unless it is also the latest created.
+	if followsLatest && latestReady != "" {
+		out[latestReady] = true
 	}
 	return out
 }
@@ -134,7 +122,12 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 // newRevisions converts an API response into Revisions. It is pure, with no API access, so the
 // formatting and ordering can be tested entirely through this function.
 func newRevisions(items []*run.Revision, status *Status, pinned map[string]bool) Revisions {
-	traffic := trafficByRevision(status)
+	return newRevisionsWithShares(items, trafficByRevision(status), pinned)
+}
+
+// newRevisionsWithShares is newRevisions for a split already gathered per revision, whatever it
+// splits: a service's traffic or a worker pool's instances.
+func newRevisionsWithShares(items []*run.Revision, traffic map[string]revisionTraffic, pinned map[string]bool) Revisions {
 
 	out := make(Revisions, 0, len(items))
 	for _, item := range items {
@@ -239,19 +232,33 @@ func sortRevisionsNewestFirst(rs Revisions) {
 	})
 }
 
-// Text returns a human-readable table. It ends with a newline. Empty if there are no revisions.
-func (rs Revisions) Text() string {
+// Text returns a human-readable table of a service's revisions. It ends with a newline. Empty if
+// there are no revisions.
+func (rs Revisions) Text() string { return rs.table("TRAFFIC", true) }
+
+// InstancesText is Text for a worker pool's revisions: the share is of its instances, and a worker
+// pool has no traffic tags.
+func (rs Revisions) InstancesText() string { return rs.table("INSTANCES", false) }
+
+func (rs Revisions) table(share string, tags bool) string {
 	if len(rs) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "REVISION\tREADY\tTRAFFIC\tTAGS\tCREATED\tIMAGE")
+	columns := []string{"REVISION", "READY", share}
+	if tags {
+		columns = append(columns, "TAGS")
+	}
+	fmt.Fprintln(w, strings.Join(append(columns, "CREATED", "IMAGE"), "\t"))
 	for _, r := range rs {
-		fmt.Fprintf(w, "%s\t%s\t%d%%\t%s\t%s\t%s\n",
-			dash(r.Name), dash(readyLabel(r)), r.Percent,
-			dash(strings.Join(r.Tags, ",")), dash(r.Created), dash(strings.Join(r.Images, ",")))
+		cells := []string{dash(r.Name), dash(readyLabel(r)), fmt.Sprintf("%d%%", r.Percent)}
+		if tags {
+			cells = append(cells, dash(strings.Join(r.Tags, ",")))
+		}
+		cells = append(cells, dash(r.Created), dash(strings.Join(r.Images, ",")))
+		fmt.Fprintln(w, strings.Join(cells, "\t"))
 	}
 	// tabwriter only writes on Flush. Writing to a builder cannot fail.
 	_ = w.Flush()

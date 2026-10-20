@@ -48,7 +48,7 @@ var verifyCmd = newVerifyCmd(serviceTarget)
 func newVerifyCmd(t target) *cobra.Command {
 	o := &verifyOptions{}
 	warnings := "warnings (a check that could not be completed) go to\nstderr"
-	if t.hasRevisions {
+	if t.split != nil {
 		warnings = "warnings (a pinned revision name, a check\n" +
 			"that could not be completed) go to stderr"
 	}
