@@ -126,6 +126,7 @@ gcloud auth application-default login
 | `worker-pools delete` | `run.workerpools.get`, `run.workerpools.delete` |
 | `worker-pools revisions` | `run.workerpools.get`, `run.revisions.list`, plus `run.revisions.delete` for `--prune` |
 | `worker-pools rollback` | `run.workerpools.get`, `run.revisions.list`, `run.workerpools.update` |
+| `worker-pools instance-split` | `run.workerpools.get`, `run.workerpools.update`, plus `run.revisions.list` for `--to` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -423,7 +424,7 @@ clrnd [command]
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
 | `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs wait`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions wait`, `jobs executions cancel`. |
-| `worker-pools` | Commands for Cloud Run worker pools: `worker-pools verify`, `worker-pools diff`, `worker-pools deploy`, `worker-pools status`, `worker-pools wait`, `worker-pools delete`, `worker-pools init`, `worker-pools revisions`, `worker-pools rollback`. |
+| `worker-pools` | Commands for Cloud Run worker pools: `worker-pools verify`, `worker-pools diff`, `worker-pools deploy`, `worker-pools status`, `worker-pools wait`, `worker-pools delete`, `worker-pools init`, `worker-pools revisions`, `worker-pools rollback`, `worker-pools instance-split`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -1168,8 +1169,9 @@ What differs from a service:
 - There is no traffic. What a worker pool splits between revisions is its instances
   (`spec.instanceSplits`), which a manifest can set like any other field. `worker-pools revisions`
   and `worker-pools rollback` work on that split as [`revisions`](#revisions) and
-  [`rollback`](#rollback) work on a service's traffic; there is no `traffic` or `--no-traffic` for
-  it yet.
+  [`rollback`](#rollback) work on a service's traffic, and `worker-pools instance-split` and
+  `worker-pools deploy --no-promote` are its [`traffic`](#traffic) and
+  [`--no-traffic`](#deploy), named the way gcloud names them for worker pools.
 - In the config file, name the worker pool with `workerPool:` instead of `service:`. A worker pool
   cannot share a name with a service in the same project.
 
@@ -1203,6 +1205,25 @@ instance to the revision before the newest one running instances (or to `--revis
 manifest that does not write `spec.instanceSplits` sends every instance to the latest revision again
 (confirmed against the API), as a service manifest without `spec.traffic` does with traffic, and
 `worker-pools diff` shows that move beforehand.
+
+`worker-pools instance-split` runs a share of the instances on a revision, with the same flags and
+rules as [`traffic`](#traffic): `--to <revision>` or `--to-latest`, and `--percent` below 100 leaves
+the rest on the revision running the most. Only `spec.instanceSplits` changes; the instance count
+stays as it is. Every revision with a share needs an instance of its own — Cloud Run rejects one
+instance split between two revisions — so a split needs at least 2 instances, and clrnd says so
+before the prompt rather than after it. `worker-pools deploy --no-promote` creates the new revision
+without running any instances on it, pinning the split to the revisions running them now; it needs
+an existing worker pool and replaces any `spec.instanceSplits` the manifest writes, as
+`--no-traffic` does for a service:
+
+```sh
+clrnd worker-pools deploy --no-promote               # the new revision runs nothing yet
+clrnd worker-pools instance-split --to-latest --percent 50
+clrnd worker-pools instance-split --to-latest        # all of them, following the newest again
+```
+
+`--to-latest` follows the newest revision created, which right after `--no-promote` is the one that
+runs nothing yet.
 
 ## Exit codes
 

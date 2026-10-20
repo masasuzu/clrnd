@@ -15,7 +15,7 @@ type deployOptions struct {
 	tfstate    []string
 	images     []string
 	noDefaults bool
-	noTraffic  bool
+	keepSplit  bool
 	apply      applyOptions
 }
 
@@ -38,9 +38,8 @@ func newDeployCmd(t target) *cobra.Command {
 	addImageFlag(cmd, &o.images)
 	addApplyFlags(cmd, &o.apply, t.waitFor)
 	addServerDefaultsFlag(cmd, &o.noDefaults)
-	if t.hasTraffic {
-		cmd.Flags().BoolVar(&o.noTraffic, "no-traffic", false,
-			"create the revision without sending traffic to it (keep the current split)")
+	if t.split != nil {
+		cmd.Flags().BoolVar(&o.keepSplit, t.split.keepFlag, false, t.split.keepUsage)
 	}
 	return cmd
 }
@@ -84,6 +83,9 @@ const (
 		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
 		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
 		"--image replaces a container image without editing the manifest.\n" +
+		"With --no-promote the new revision is created without running any instances: the current\n" +
+		"split is pinned to the revisions running them now, so you can move instances over afterwards\n" +
+		"with 'clrnd worker-pools instance-split'.\n" +
 		"worker-pool and manifest may be omitted when set in the config file."
 )
 
@@ -124,12 +126,12 @@ func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) er
 	if err := warnPinnedRevision(cmd, t.kind, manifest); err != nil {
 		return err
 	}
-	// --no-traffic ignores the manifest's spec.traffic and replaces it with the current split.
-	// Overwriting it silently would mean "I wrote it and it has no effect", so say so when the
-	// manifest has one. This is also a local check, so it comes before creating the client
+	// --no-traffic / --no-promote ignores the split the manifest writes and replaces it with the
+	// current one. Overwriting it silently would mean "I wrote it and it has no effect", so say so
+	// when the manifest has one. This is also a local check, so it comes before creating the client
 	// (= ADC discovery).
-	if o.noTraffic {
-		if err := warnManifestTraffic(cmd, manifest); err != nil {
+	if o.keepSplit {
+		if err := warnManifestSplit(cmd, t, manifest); err != nil {
 			return err
 		}
 	}
@@ -144,7 +146,7 @@ func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) er
 
 	plan, err := client.Plan(ctx, t.kind, name, manifest, cloudrun.PlanOptions{
 		ResolveDefaults: !o.noDefaults,
-		KeepTraffic:     o.noTraffic,
+		KeepSplit:       o.keepSplit,
 	})
 	if err != nil {
 		return err

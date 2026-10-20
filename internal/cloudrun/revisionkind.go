@@ -24,6 +24,12 @@ type revisionsOf[T resource] struct {
 	// routeAllTo returns a copy of the live resource that sends everything to revision, for
 	// rollback. It does not modify its argument.
 	routeAllTo func(live T, revision string) (T, error)
+	// shift returns a copy of the live resource with its split changed as req asks, for traffic
+	// and instance-split. It does not modify its argument.
+	shift func(live T, req SplitRequest) (T, error)
+	// pinsSplit reports whether a manifest sets the split itself (spec.traffic,
+	// spec.instanceSplits), which deploy's flag for keeping the current split replaces.
+	pinsSplit func(T) bool
 	// words are how messages put what the kind splits between revisions.
 	words splitWords
 }
@@ -104,6 +110,55 @@ func (k *kindOf[T]) planRollback(ctx context.Context, c *Client, name, requested
 	return plan, target, nil
 }
 
+func (k *kindOf[T]) validateSplit(req SplitRequest) error {
+	if k.revisions == nil {
+		return k.errNoRevisions()
+	}
+	return validateSplitRequest(req, k.revisions.words)
+}
+
+// planSplit reads the resource once, checks that a revision named in req is one of its own, and
+// plans the split req asks for against that same read. Only the split changes, so no revision is
+// created. It returns the revision named in req, so that the caller can warn when it is not Ready;
+// nil for --to-latest.
+func (k *kindOf[T]) planSplit(ctx context.Context, c *Client, name string, req SplitRequest) (*DeployPlan, *Revision, error) {
+	if err := k.validateSplit(req); err != nil {
+		return nil, nil, err
+	}
+	live, err := k.get(ctx, c, name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
+	}
+	var target *Revision
+	if req.Revision != "" {
+		revisions, err := k.listRevisionsOf(ctx, c, live)
+		if err != nil {
+			return nil, nil, err
+		}
+		if target, err = findRevision(revisions, req.Revision, k.noun); err != nil {
+			return nil, nil, err
+		}
+	}
+	desired, err := k.revisions.shift(live, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	// desired comes from the live definition, so the defaults are already in it: no resolution.
+	plan, err := k.planAgainst(ctx, c, name, live, desired, PlanOptions{}, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return plan, target, nil
+}
+
+func (k *kindOf[T]) manifestPinsSplit(manifest []byte) (bool, error) {
+	obj, err := k.parse(manifest)
+	if err != nil {
+		return false, err
+	}
+	return k.revisions != nil && k.revisions.pinsSplit(obj), nil
+}
+
 // ListKindRevisions returns the revisions of a resource of the given kind, newest first, with
 // the share of what it splits each one serves. It fails for a kind without revisions.
 func (c *Client) ListKindRevisions(ctx context.Context, kind Kind, name string) (Revisions, error) {
@@ -117,12 +172,28 @@ func (c *Client) PlanRollback(ctx context.Context, kind Kind, name, requested st
 	return kind.planRollback(ctx, c, name, requested)
 }
 
+// PlanSplit plans sending a share of what a resource of the given kind splits between its
+// revisions (a service's traffic, a worker pool's instances) as req asks. It returns the plan and
+// the revision req names, nil for --to-latest.
+func (c *Client) PlanSplit(ctx context.Context, kind Kind, name string, req SplitRequest) (*DeployPlan, *Revision, error) {
+	return kind.planSplit(ctx, c, name, req)
+}
+
+// HasSplit reports whether the manifest sets the split itself: a service's spec.traffic, a worker
+// pool's spec.instanceSplits. It is used to warn that keeping the current split on deploy replaces
+// it (it only parses and does not use the API). It is false for a kind without revisions.
+func HasSplit(kind Kind, manifest []byte) (bool, error) {
+	return kind.manifestPinsSplit(manifest)
+}
+
 // serviceRevisions is the revisions hook of the service kind.
 var serviceRevisions = &revisionsOf[*run.Service]{
 	label:      serviceLabel,
 	shares:     func(svc *run.Service) map[string]revisionTraffic { return trafficByRevision(newStatus(svc)) },
 	protected:  pinnedRevisionNames,
 	routeAllTo: RollbackTarget,
+	shift:      ShiftTrafficTarget,
+	pinsSplit:  func(svc *run.Service) bool { return svc.Spec != nil && len(svc.Spec.Traffic) > 0 },
 	words:      serviceSplitWords,
 }
 
@@ -137,6 +208,8 @@ var workerPoolRevisions = &revisionsOf[*run.WorkerPool]{
 	shares:     instancesByRevision,
 	protected:  protectedWorkerPoolRevisions,
 	routeAllTo: workerPoolRollbackTarget,
+	shift:      shiftInstanceSplit,
+	pinsSplit:  func(pool *run.WorkerPool) bool { return pool.Spec != nil && len(pool.Spec.InstanceSplits) > 0 },
 	words:      workerPoolSplitWords,
 }
 

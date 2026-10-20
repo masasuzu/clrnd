@@ -50,8 +50,9 @@ Cloud Run API, and extend it when you add a command that does.
 - Commands: one file per command in [cmd/](cmd/), registered on `rootCmd` ([cmd/root.go](cmd/root.go)),
   `jobsCmd` ([cmd/jobs.go](cmd/jobs.go)), `jobsExecutionsCmd` or `workerPoolsCmd`
   ([cmd/worker_pools.go](cmd/worker_pools.go)). The commands every kind has —
-  `verify`, `diff`, `deploy`, `delete`, `init`, `wait`, plus `revisions` and `rollback` for the
-  kinds that have revisions — are built once per `target`
+  `verify`, `diff`, `deploy`, `delete`, `init`, `wait`, plus `revisions`, `rollback` and the
+  command that changes the split (`traffic`, `worker-pools instance-split`) for the kinds that have
+  revisions — are built once per `target`
   ([cmd/target.go](cmd/target.go)) by `newXCmd(t)` factories.
 - Shared cmd pieces: the apply flow and confirmation ([cmd/apply.go](cmd/apply.go)), target and
   format flags and resolution ([cmd/flags.go](cmd/flags.go)), file writing
@@ -61,16 +62,17 @@ Cloud Run API, and extend it when you add a command that does.
   - kinds and the plan/diff/apply flow: [kind.go](internal/cloudrun/kind.go); the service kind and
     manifest normalization: [cloudrun.go](internal/cloudrun/cloudrun.go); the job kind:
     [job.go](internal/cloudrun/job.go); the worker pool kind and its instance-count rules:
-    [workerpool.go](internal/cloudrun/workerpool.go); listing revisions and rolling back for any
-    kind that has them: [revisionkind.go](internal/cloudrun/revisionkind.go); revision-template helpers:
+    [workerpool.go](internal/cloudrun/workerpool.go); listing revisions, rolling back and changing
+    the split for any kind that has them: [revisionkind.go](internal/cloudrun/revisionkind.go);
+    revision-template helpers:
     [template.go](internal/cloudrun/template.go); what a manifest runs:
     [workload.go](internal/cloudrun/workload.go)
   - the client and target validation: [client.go](internal/cloudrun/client.go),
     [target.go](internal/cloudrun/target.go)
   - API existence checks: [verify.go](internal/cloudrun/verify.go), [image.go](internal/cloudrun/image.go)
   - waiting: [wait.go](internal/cloudrun/wait.go); listing: [paging.go](internal/cloudrun/paging.go)
-  - per-command logic: `status.go`, `revisions.go`, `rollback.go`, `traffic.go`, `refresh.go`,
-    `jobstatus.go`, `workerpoolstatus.go`, `execution.go`, `executions.go`, `imageoverride.go`
+  - per-command logic: `status.go`, `revisions.go`, `rollback.go`, `traffic.go`,
+    `instancesplit.go`, `refresh.go`, `jobstatus.go`, `workerpoolstatus.go`, `execution.go`, `executions.go`, `imageoverride.go`
 - Manifest templating (ecspresso-compatible `tfstate`, `env`, `must_env`, `json_escape`):
   [internal/render](internal/render/render.go). The config file: [internal/config](internal/config/config.go).
 
@@ -93,8 +95,9 @@ implemented.
   from (`setResourceVersion`). Never invent one, and never send one a manifest carried (`parse`
   drops it).
 - **diff is deploy without the apply.** Both go through `planObject`/`planAgainst`
-  (`TestDiffAndPlanAgree`). Commands that edit the live definition (rollback, traffic, refresh) read
-  it once and plan against that read with `PlanEdit`.
+  (`TestDiffAndPlanAgree`). Commands that edit the live definition (rollback, traffic,
+  instance-split, refresh) read it once and plan against that read (`PlanRollback`, `PlanSplit`,
+  `PlanEdit`).
 - **Server defaults are for the diff only.** The dry-run copy is compared, never written back.
 - **clrnd does not manage revision names**: `init` drops them and `diff` ignores a live one the
   manifest does not pin. `refresh` is the one exception.

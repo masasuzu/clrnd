@@ -65,7 +65,7 @@ var serviceKind = &kindOf[*run.Service]{
 	},
 
 	prepare: func(desired, current *run.Service, name string, opts PlanOptions) (*run.Service, error) {
-		if !opts.KeepTraffic {
+		if !opts.KeepSplit {
 			return desired, nil
 		}
 		return keepTraffic(desired, current, name)
