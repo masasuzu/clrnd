@@ -5,8 +5,8 @@ description: Put a new Cloud Run resource kind (after services, jobs and worker 
 
 # Add a resource kind
 
-Jobs (#132) and worker pools (#142) were added this way. Each step's output feeds the next, so do
-them in order.
+The jobs and worker pools kinds (`job.go`, `workerpool.go`) are worked examples of each step. Each
+step's output feeds the next, so do them in order.
 
 ## 1. Probe the real API first
 

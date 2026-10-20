@@ -27,7 +27,7 @@ go test ./...           # run tests
 go test -run TestName ./internal/cloudrun   # run a single test
 go vet ./...            # static checks
 gofmt -w .              # format
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...   # lint (CI pins the same version in verify.yml; keep both in sync)
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...   # lint (bump every copy of this pin together; check-tool-pins.sh fails when they disagree)
 
 # End-to-end test against a real Cloud Run project. NOT part of `go test ./...`
 # and it cannot run in CI (no credentials). See test/e2e/README.md.
@@ -158,8 +158,7 @@ that matches the task before starting it:
 ## Writing rules
 
 - Everything written in the repository is in **English**: user-facing strings, code comments (Go,
-  shell, YAML), test names and messages, and documentation. Translate any Japanese comment left from
-  before this rule rather than editing it in Japanese.
+  shell, YAML), test names and messages, and documentation.
 - Commit messages, issues, PR titles and descriptions, and review replies are in **English**. Older
   history is in Japanese; leave it. The PR title becomes the squash commit's subject on `main`.
 - **No real Google Cloud identifiers anywhere public** — code, tests, docs, commits, issues, PRs,
@@ -168,10 +167,10 @@ that matches the task before starting it:
   (`<number>-compute@developer.gserviceaccount.com`), so output from the API, gcloud or the E2E
   suite cannot be pasted as is. Use placeholders: `<project>`, `my-svc`, `my-svc-00002-xxx`.
 - **Do not write a count unless the number itself matters.** "Twelve subcommands", "three things to
-  know", "CI's third job" summarize a list and go stale silently (README said `eleven` long after
-  `traffic` made it twelve, #114). Name the items or say "the following". "Both" over a list that
-  can grow has the same problem — say "each" or "all of them". Keep a number when it *is* the fact:
-  a timeout, a page limit, a two-way split, "exactly one container".
+  know", "CI's third job" summarize a list and go stale silently. Name the items or say "the
+  following". "Both" over a list that can grow has the same problem — say "each" or "all of them".
+  Keep a number when it *is* the fact: a timeout, a page limit, a two-way split, "exactly one
+  container".
 
 ## Code Review Rules
 
