@@ -110,21 +110,23 @@ func pinnedRevisionNames(svc *run.Service) map[string]bool {
 		followsLatest = followsLatest || t.LatestRevision
 	}
 
-	// latestRevision: true writes no name, so the loop above protects nothing for it.
-	// During a rollout the new revision can already be in the list while status.traffic shows no
-	// share for it yet, so left as is, --keep 0 could delete "the version about to serve".
-	// Fill in from status which revisions the declaration can resolve to.
-	// Only when traffic follows the latest revision: once it is pinned by name (after a rollback),
-	// the newest revision really is idle and should stay prunable.
-	if followsLatest && svc.Status != nil {
-		for _, name := range []string{
-			svc.Status.LatestReadyRevisionName,   // the revision latestRevision points to now
-			svc.Status.LatestCreatedRevisionName, // the revision it will point to once converged
-		} {
-			if name != "" {
-				out[name] = true
-			}
-		}
+	if svc.Status == nil {
+		return out
+	}
+	// Cloud Run refuses to delete the latest created revision, serving or not ("cannot be directly
+	// deleted", confirmed against the real API): after a rollback pins traffic by name it serves
+	// nothing, yet a prune that tried it would stop with a 400 halfway through its list.
+	if name := svc.Status.LatestCreatedRevisionName; name != "" {
+		out[name] = true
+	}
+	// latestRevision: true writes no name, so the loop above protects nothing for it. During a
+	// rollout the new revision can already be in the list while status.traffic shows no share for
+	// it yet, so left as is, --keep 0 could delete "the version about to serve": the one
+	// latestRevision points to now. Only when traffic follows the latest revision: once it is
+	// pinned by name, the latest ready revision really is idle and stays prunable unless it is also
+	// the latest created.
+	if name := svc.Status.LatestReadyRevisionName; followsLatest && name != "" {
+		out[name] = true
 	}
 	return out
 }

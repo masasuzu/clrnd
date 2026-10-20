@@ -121,6 +121,15 @@ func (s *suite) services(t *testing.T) {
 	s.code(t, s.cli(t, dir, "rollback", s.service, "--auto-approve", "--timeout", "120s"), 0)
 	s.ready(t)
 	s.eventually(t, time.Minute, func() bool { return s.serving(t) == expected })
+	// The rollback leaves the latest created revision serving nothing, but Cloud Run refuses to
+	// delete it, so a prune must not pick it.
+	latestCreated := s.serviceState(t).Status.LatestCreatedRevisionName
+	r = s.code(t, s.cli(t, dir, "revisions", s.service, "--prune", "--keep", "0", "--dry-run", "--format", "json"), 0)
+	for _, v := range decode[[]revisionRow](s, t, []byte(r.stdout)) {
+		if v.Name == latestCreated || v.Name == expected {
+			s.fatal(t, "prune after a rollback picked %s", v.Name)
+		}
+	}
 	currentTemplate := s.serviceState(t).Spec.Template.Metadata.Name
 	if currentTemplate == "" {
 		s.fatal(t, "refresh should have pinned a template revision")

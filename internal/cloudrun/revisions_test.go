@@ -530,16 +530,18 @@ func TestListRevisionsProtectsTheLatestWhileRollingOut(t *testing.T) {
 	}
 }
 
-// TestPinnedRevisionNamesIgnoresTheLatestWhenTrafficIsPinned checks that, while traffic is pinned
-// by name (after a rollback), the latest revision is not additionally protected. Protecting that
-// far means a revision left behind by a rollback can never be pruned.
-func TestPinnedRevisionNamesIgnoresTheLatestWhenTrafficIsPinned(t *testing.T) {
+// TestPinnedRevisionNamesWhenTrafficIsPinned checks what a rollback leaves protected. The latest
+// created revision always is: Cloud Run refuses to delete it even when it serves nothing, so
+// pruning it would stop with a 400. The latest ready one is not, when it is a different revision:
+// traffic no longer follows it, so protecting it would leave a revision a rollback left behind
+// unprunable forever.
+func TestPinnedRevisionNamesWhenTrafficIsPinned(t *testing.T) {
 	svc := &run.Service{
 		Spec: &run.ServiceSpec{
 			Traffic: []*run.TrafficTarget{{RevisionName: "my-svc-00006-def", Percent: 100}},
 		},
 		Status: &run.ServiceStatus{
-			LatestCreatedRevisionName: "my-svc-00008-ghi",
+			LatestCreatedRevisionName: "my-svc-00009-jkl",
 			LatestReadyRevisionName:   "my-svc-00008-ghi",
 		},
 	}
@@ -547,7 +549,10 @@ func TestPinnedRevisionNamesIgnoresTheLatestWhenTrafficIsPinned(t *testing.T) {
 	if !got["my-svc-00006-def"] {
 		t.Error("the revision named in spec.traffic is not protected")
 	}
+	if !got["my-svc-00009-jkl"] {
+		t.Error("the latest created revision is not protected; Cloud Run refuses to delete it")
+	}
 	if got["my-svc-00008-ghi"] {
-		t.Error("the latest revision is protected even though spec.traffic pins a name")
+		t.Error("the latest ready revision is protected even though spec.traffic pins another name")
 	}
 }
