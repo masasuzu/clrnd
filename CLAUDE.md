@@ -8,12 +8,14 @@ copies cannot drift apart.
 
 ## Overview
 
-`clrnd` is a Go CLI that deploys Cloud Run services and jobs from Knative-style YAML manifests.
+`clrnd` is a Go CLI that deploys Cloud Run services, jobs and worker pools from Knative-style YAML
+manifests.
 For services it offers the subcommand set ecspresso has where Cloud Run's model allows it (ECS-only
 commands such as `register`/`exec`/`scale` are deliberately absent), plus `traffic`, which splits
-traffic between revisions — Cloud Run's own model. Jobs live under `clrnd jobs`, spelled the way
-gcloud spells it (`gcloud run jobs`); the top-level commands stay the services'. Worker pools are
-next (#142); see [Adding a resource kind](#adding-a-resource-kind).
+traffic between revisions — Cloud Run's own model. Jobs live under `clrnd jobs` and worker pools
+under `clrnd worker-pools`, spelled the way gcloud spells them (`gcloud run jobs`,
+`gcloud run worker-pools`); the top-level commands stay the services'. See
+[Adding a resource kind](#adding-a-resource-kind) for how a kind is put on the shared path.
 
 ## Commands
 
@@ -30,10 +32,11 @@ go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./... 
 # End-to-end test against a real Cloud Run project. NOT part of `go test ./...`
 # and it cannot run in CI (no credentials). See test/e2e/README.md.
 PROJECT=<project-id> ./test/e2e/run.sh
-./test/e2e/run.sh --cleanup-orphans   # remove services and jobs a killed run left behind
+./test/e2e/run.sh --cleanup-orphans   # remove what a killed run left behind
 ```
 
-[test/e2e](test/e2e/) uses Go with the `e2e` build tag to create and delete a real service and job.
+[test/e2e](test/e2e/) uses Go with the `e2e` build tag to create and delete a real resource of each
+kind.
 Ordinary `go test ./...` excludes it, and without `CLRND_E2E_CLOUD=1` (which `run.sh` sets) it
 skips; opt in through `run.sh` with an explicitly configured project.
 It is the only check of server-side behaviour (defaulting, revision-name conflicts, asynchronous
@@ -45,7 +48,8 @@ Cloud Run API, and extend it when you add a command that does.
 - [main.go](main.go) → `cmd.Execute`. [cmd/](cmd/) parses flags and does I/O only;
   [internal/cloudrun](internal/cloudrun/) holds every API call and all manifest handling.
 - Commands: one file per command in [cmd/](cmd/), registered on `rootCmd` ([cmd/root.go](cmd/root.go)),
-  `jobsCmd` ([cmd/jobs.go](cmd/jobs.go)) or `jobsExecutionsCmd`. The commands both kinds have —
+  `jobsCmd` ([cmd/jobs.go](cmd/jobs.go)), `jobsExecutionsCmd` or `workerPoolsCmd`
+  ([cmd/worker_pools.go](cmd/worker_pools.go)). The commands every kind has —
   `verify`, `diff`, `deploy`, `delete`, `init`, `wait` — are built once per `target`
   ([cmd/target.go](cmd/target.go)) by `newXCmd(t)` factories.
 - Shared cmd pieces: the apply flow and confirmation ([cmd/apply.go](cmd/apply.go)), target and
@@ -55,7 +59,8 @@ Cloud Run API, and extend it when you add a command that does.
 - [internal/cloudrun](internal/cloudrun/), by concern:
   - kinds and the plan/diff/apply flow: [kind.go](internal/cloudrun/kind.go); the service kind and
     manifest normalization: [cloudrun.go](internal/cloudrun/cloudrun.go); the job kind:
-    [job.go](internal/cloudrun/job.go); revision-template helpers:
+    [job.go](internal/cloudrun/job.go); the worker pool kind and its instance-count rules:
+    [workerpool.go](internal/cloudrun/workerpool.go); revision-template helpers:
     [template.go](internal/cloudrun/template.go); what a manifest runs:
     [workload.go](internal/cloudrun/workload.go)
   - the client and target validation: [client.go](internal/cloudrun/client.go),
@@ -63,7 +68,7 @@ Cloud Run API, and extend it when you add a command that does.
   - API existence checks: [verify.go](internal/cloudrun/verify.go), [image.go](internal/cloudrun/image.go)
   - waiting: [wait.go](internal/cloudrun/wait.go); listing: [paging.go](internal/cloudrun/paging.go)
   - per-command logic: `status.go`, `revisions.go`, `rollback.go`, `traffic.go`, `refresh.go`,
-    `jobstatus.go`, `execution.go`, `executions.go`, `imageoverride.go`
+    `jobstatus.go`, `workerpoolstatus.go`, `execution.go`, `executions.go`, `imageoverride.go`
 - Manifest templating (ecspresso-compatible `tfstate`, `env`, `must_env`, `json_escape`):
   [internal/render](internal/render/render.go). The config file: [internal/config](internal/config/config.go).
 
@@ -101,17 +106,18 @@ implemented.
 
 ## Adding a resource kind
 
-Worker pools (#142) are the next kind. The shape to follow:
+Jobs and worker pools were added this way; follow the same shape for the next one:
 
-1. **Probe the real API first**, as jobs were: compare-and-swap on `resourceVersion` (409/400), a
+1. **Probe the real API first**, as jobs and worker pools were: compare-and-swap on `resourceVersion` (409/400), a
    dry run that returns the defaults, `observedGeneration`/`Ready` settling, async deletion, the
    annotations and labels the server manages (they go into the `serverManaged*` lists in
    cloudrun.go), and every integer field where 0 might differ from leaving it out — the generated
    types drop a 0 unless the field is in `ForceSendFields` (see `maxRetries` in job.go).
 2. **internal/cloudrun:** a `kindOf[T]` with the API calls, `apiVersion`, `meta`, a `workload`
    extractor and `status`, plus the hooks it needs. A kind holding a `RevisionTemplate` supplies
-   `template` and reuses [template.go](internal/cloudrun/template.go) for `align`/`scaffold`. Add the
-   type to `resource`; `kindHints` already names `WorkerPool`.
+   `template` and reuses [template.go](internal/cloudrun/template.go) for `align`/`scaffold`; rules
+   only this kind has go in `check` (a worker pool's instance count). Add the type to `resource`
+   and the kind to `kindHints`.
 3. **cmd:** a `target` in [cmd/target.go](cmd/target.go), added to `targets`
    (`TestTargetsAreComplete` fails on a missing field), a command group with `Args: cobra.NoArgs`
    and a `RunE` that prints the help (otherwise a mistyped subcommand exits 0), and a config key in

@@ -49,7 +49,7 @@ func (s *suite) cleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if s.resourcesStarted {
-		for _, v := range []struct{ kind, name string }{{"service", s.service}, {"job", s.job}} {
+		for _, v := range []struct{ kind, name string }{{"service", s.service}, {"job", s.job}, {"worker pool", s.pool}} {
 			if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
 				s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
 			}
@@ -120,6 +120,9 @@ func (s *suite) preflight(t *testing.T) {
 	}
 }
 
+// cleanupOrphans removes services and jobs with gcloud alone, so it works without ADC. Worker
+// pools go through the API, since the gcloud releases still in use predate its worker-pools
+// commands: without a usable ADC they are reported as unchecked, after everything else is gone.
 func (s *suite) cleanupOrphans(t *testing.T) {
 	t.Helper()
 	for _, kind := range []string{"services", "jobs"} {
@@ -127,6 +130,23 @@ func (s *suite) cleanupOrphans(t *testing.T) {
 		for _, name := range strings.Fields(r.stdout) {
 			if strings.HasPrefix(name, resourcePrefix) {
 				s.code(t, s.gcloud(t, "run", kind, "delete", name, "--quiet"), 0)
+			}
+		}
+	}
+	var err error
+	if s.api, err = newAPI(s.c); err != nil {
+		s.errorf(t, "worker pools not checked: the API client needs ADC: %v", err)
+		return
+	}
+	names, err := s.listWorkerPools(t)
+	if err != nil {
+		s.errorf(t, "worker pools not checked: %v", err)
+		return
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, resourcePrefix) {
+			if err := s.deleteResource(t, s.ctx, "worker pool", name); err != nil {
+				s.errorf(t, "delete worker pool %s: %v", name, err)
 			}
 		}
 	}
@@ -162,7 +182,8 @@ func TestE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := resourcePrefix + time.Now().UTC().Format("20060102150405") + "-" + hex.EncodeToString(id)
-	s := &suite{c: c, ctx: ctx, work: work, service: name, job: name + "-job"}
+	// A worker pool may not share a service's name, hence the suffix.
+	s := &suite{c: c, ctx: ctx, work: work, service: name, job: name + "-job", pool: name + "-wp"}
 	s.binary = filepath.Join(work, "clrnd")
 	if runtime.GOOS == "windows" {
 		s.binary += ".exe"
@@ -251,6 +272,12 @@ func TestE2E(t *testing.T) {
 		t.Run("jobs", func(t *testing.T) {
 			t.Parallel()
 			s.jobs(t)
+		})
+	}
+	if c.only == "" || c.only == "worker-pools" {
+		t.Run("worker-pools", func(t *testing.T) {
+			t.Parallel()
+			s.workerPools(t)
 		})
 	}
 }

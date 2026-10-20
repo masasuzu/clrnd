@@ -28,12 +28,12 @@ type result struct {
 func (r result) text() string { return r.stdout + "\n" + r.stderr }
 
 type suite struct {
-	resourcesStarted                      bool
-	c                                     settings
-	ctx                                   context.Context
-	work, binary, oldBinary, service, job string
-	transcript                            *os.File
-	api                                   *run.APIService
+	resourcesStarted                            bool
+	c                                           settings
+	ctx                                         context.Context
+	work, binary, oldBinary, service, job, pool string
+	transcript                                  *os.File
+	api                                         *run.APIService
 	// Scenarios run in parallel; mu keeps each command's transcript entry in one piece.
 	mu sync.Mutex
 }

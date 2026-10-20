@@ -126,7 +126,7 @@ func TestHarnessRedaction(t *testing.T) {
 	}
 }
 func TestHarnessManifests(t *testing.T) {
-	for _, b := range [][]byte{serviceManifest("svc", "img"), jobManifest("job", "img")} {
+	for _, b := range [][]byte{serviceManifest("svc", "img"), jobManifest("job", "img"), workerPoolManifest("pool", "img")} {
 		var m map[string]any
 		if err := yaml.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
