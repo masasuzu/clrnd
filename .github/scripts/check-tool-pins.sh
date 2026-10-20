@@ -34,12 +34,12 @@ version_in() {
   grep -hoE "$2" "$1" | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true
 }
 
-# golangci-lint: CI (the action's version input) and the go run in README / CLAUDE.md.
+# golangci-lint: CI (the action's version input) and the go run in README / AGENTS.md.
 pin golangci-lint \
   "$(grep -A8 'golangci-lint-action@' .github/workflows/verify.yml |
     grep -hoE 'version: v?[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')" \
   "$(version_in README.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+')" \
-  "$(version_in CLAUDE.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+')"
+  "$(version_in AGENTS.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+')"
 
 # GoReleaser: unless the PR cross-build (verify.yml) and the actual release (release.yml) use
 # the same version, the config a PR validated and the GoReleaser that builds the release differ.

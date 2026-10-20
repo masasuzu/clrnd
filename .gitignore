@@ -26,5 +26,7 @@ go.work.sum
 /clrnd.yaml
 /manifest.yaml
 
-# Local-only instructions. Not versioned, and it discusses the project ID.
+# Local-only instructions and agent settings. Not versioned; CLAUDE.local.md discusses the
+# project ID.
 /CLAUDE.local.md
+/.claude/settings.local.json

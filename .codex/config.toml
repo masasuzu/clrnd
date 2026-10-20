@@ -1,5 +1,0 @@
-#:schema https://developers.openai.com/codex/config-schema.json
-
-# Keep CLAUDE.md as the single source of repository guidance for both agents.
-# Codex checks this fallback only when AGENTS.md is absent.
-project_doc_fallback_filenames = ["CLAUDE.md"]
