@@ -29,13 +29,13 @@ func newInitCmd(t target) *cobra.Command {
 	o := &initOptions{}
 	format := t.manifestFormat
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("init [%s]", t.noun),
+		Use:   fmt.Sprintf("init [%s]", t.arg()),
 		Short: fmt.Sprintf("Initialize a project from an existing %s", t.noun),
 		Long: fmt.Sprintf("Fetch an existing Cloud Run %[1]s and scaffold a project from it: write its\n"+
 			"manifest (%[2]s, with server-managed fields stripped) and a clrnd.yml\n"+
 			"holding the project, region, %[1]s, and manifest path. Existing files are not\n"+
 			"overwritten unless --force is given.\n"+
-			"%[1]s may be omitted when set in the config file.", t.noun, format),
+			"%[3]s may be omitted when set in the config file.", t.noun, format, t.arg()),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit(cmd, args, t, o)

@@ -27,7 +27,7 @@ func newDeleteCmd(t target) *cobra.Command {
 	o := &deleteOptions{}
 	goes := t.deleteGoes
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("delete [%s]", t.noun),
+		Use:   fmt.Sprintf("delete [%s]", t.arg()),
 		Short: fmt.Sprintf("Delete a %s", t.noun),
 		Long: fmt.Sprintf("Delete a Cloud Run %[1]s. This cannot be undone: %[2]s.\n"+
 			"What is about to be deleted is printed on stderr and confirmed before anything happens.\n"+
@@ -35,7 +35,7 @@ func newDeleteCmd(t target) *cobra.Command {
 			"server-side without deleting anything.\n"+
 			"Deletion is asynchronous, so delete waits until the %[1]s is actually gone; pass\n"+
 			"--no-wait to return as soon as the request is accepted.\n"+
-			"%[1]s may be omitted when set in the config file.", t.noun, goes),
+			"%[3]s may be omitted when set in the config file.", t.noun, goes, t.arg()),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDelete(cmd, args, t, o)
@@ -125,6 +125,19 @@ func jobDeleteDetails(ctx context.Context, client *cloudrun.Client, name string)
 		return nil, err
 	}
 	return []targetDetail{{"executions", fmt.Sprintf("%d (deleted with the job)", status.ExecutionCount)}}, nil
+}
+
+// workerPoolDeleteDetails fetches the worker pool (failing when it does not exist) and returns how
+// many instances it runs, which stop with it.
+func workerPoolDeleteDetails(ctx context.Context, client *cloudrun.Client, name string) ([]targetDetail, error) {
+	status, err := client.GetWorkerPoolStatus(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if status.InstanceCount == nil {
+		return nil, nil
+	}
+	return []targetDetail{{"instances", fmt.Sprintf("%d (stopped with it)", *status.InstanceCount)}}, nil
 }
 
 // printDeleteTarget lists what is about to be deleted on stderr.

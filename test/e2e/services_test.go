@@ -30,6 +30,7 @@ func (s *suite) cleanDiff(t *testing.T, dir string) {
 	s.empty(t, r.stdout)
 }
 func (s *suite) services(t *testing.T) {
+	s.own("service", s.service)
 	dir := s.dir(t, "current")
 	// Keep an ambient gcloud target to prove clrnd only accepts its explicit target.
 	r := s.command(t, s.ctx, dir, map[string]string{"CLOUDSDK_CORE_PROJECT": s.c.project, "CLOUDSDK_RUN_REGION": s.c.region}, s.binary, "status", s.service)
@@ -290,6 +291,7 @@ func (s *suite) prune(t *testing.T, dir string) {
 }
 
 func (s *suite) comparison(t *testing.T) {
+	s.own("service", s.service)
 	dir := s.dir(t, "old-init")
 	// gcloud creates the precondition even when ONLY=old skipped the service scenario.
 	s.pinLive(t, "phase2")

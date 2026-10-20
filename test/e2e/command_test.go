@@ -28,13 +28,16 @@ type result struct {
 func (r result) text() string { return r.stdout + "\n" + r.stderr }
 
 type suite struct {
-	resourcesStarted                      bool
-	c                                     settings
-	ctx                                   context.Context
-	work, binary, oldBinary, service, job string
-	transcript                            *os.File
-	api                                   *run.APIService
-	// Scenarios run in parallel; mu keeps each command's transcript entry in one piece.
+	// owned are the resources the scenarios that ran create, and the only ones cleanup deletes
+	// (see own). mu guards it.
+	owned                                       []ownedResource
+	c                                           settings
+	ctx                                         context.Context
+	work, binary, oldBinary, service, job, pool string
+	transcript                                  *os.File
+	api                                         *run.APIService
+	// Scenarios run in parallel; mu keeps each command's transcript entry in one piece, and guards
+	// owned.
 	mu sync.Mutex
 }
 

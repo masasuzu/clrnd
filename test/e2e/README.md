@@ -1,10 +1,11 @@
 # End-to-end test
 
 The Go tests build and execute the clrnd binary against a real Cloud Run project. They create a
-service and a job, deploy and run them, inspect their state independently, and remove them. These
-are external CLI tests: they do not call clrnd's internal implementation. The live state is read
-straight from the Cloud Run API with Google's generated Go client, never through clrnd's code;
-gcloud pins a revision as a writer other than clrnd and deletes orphans.
+service, a job and a worker pool, deploy and run them, inspect their state independently, and
+remove them. These are external CLI tests: they do not call clrnd's internal implementation. The
+live state is read straight from the Cloud Run API with Google's generated Go client, never through
+clrnd's code; gcloud pins a revision as a writer other than clrnd and deletes orphaned services and
+jobs.
 
 **This creates real, billable resources.** Use a project intended for disposable test resources.
 The `e2e` build tag excludes the suite from ordinary `go test ./...`. The cloud test also skips
@@ -66,6 +67,7 @@ The existing entry point remains a small launcher; all test logic is Go:
 PROJECT=<project-id> ./test/e2e/run.sh
 ONLY=current ./test/e2e/run.sh         # service scenario only
 ONLY=jobs ./test/e2e/run.sh            # job scenario only
+ONLY=worker-pools ./test/e2e/run.sh    # worker pool scenario only
 OLD_REF=<git-ref> ./test/e2e/run.sh     # also observe the old binary's revision-name behavior
 ONLY=old OLD_REF=<git-ref> ./test/e2e/run.sh
 KEEP=1 ./test/e2e/run.sh               # retain resources and scratch files
@@ -90,10 +92,13 @@ CLI calls are bounded, including explicit timeouts on deliberately failing rollo
 test commands and attempts cleanup with a separate bounded context. A second interrupt restores
 the default kill. Forced termination, including `kill -9`, may leave resources; use orphan cleanup.
 
-Resources are named `clrnd-e2e-<timestamp>-<random-id>` and `<service-name>-job`. Ordinary cleanup
-only deletes this run's names. `--cleanup-orphans` deliberately deletes every service and job with
+Resources are named `clrnd-e2e-<timestamp>-<random-id>`, `<service-name>-job` and
+`<service-name>-wp` (a worker pool cannot share a service's name). Ordinary cleanup only deletes
+this run's names. `--cleanup-orphans` deliberately deletes every service, job and worker pool with
 the `clrnd-e2e-` prefix in the configured project and region; do not run it while another test is
-using that project. `KEEP=1` does not affect this explicit orphan-cleanup command.
+using that project. `KEEP=1` does not affect this explicit orphan-cleanup command. Services and
+jobs are removed with gcloud alone; worker pools go through the API (gcloud releases before its
+worker-pools commands are still common), so without a usable ADC they are reported as not checked.
 
 Each run uses a private `clrnd-e2e-work.*` directory under `WORK_ROOT` (default: the OS temporary
 directory). It is removed on success and retained on failure or with `KEEP=1`; the log prints its
@@ -121,6 +126,10 @@ forces failure.
   cross-kind refusals; init and template changes; successful and failing executions; deferred waits,
   timeout and no-wait behavior; execution lists in text/JSON; cancel refusals and completion; deletion
   while an execution is still running.
+- `workerpools_test.go`: the refused `scalingMode: manual` without a count; verify, deploy, status
+  text/JSON, wait and a clean diff; init with a clean diff with and without defaults; a count-only
+  change that creates no revision; a count set the way an autoscaler sets it, kept by a deploy of a
+  manifest that leaves the count out; cross-kind refusals; dry-run and real delete.
 - `services_test.go`'s comparison scenario: builds `OLD_REF` from a git archive, pins a live revision,
   scaffolds with the historical binary, then records its behavior after changing the template. Old
   versions may fail synchronously or asynchronously, or succeed; this phase intentionally observes
@@ -133,8 +142,9 @@ forces failure.
   separately. A failed exit code or live-state check stops its scenario, while the other scenarios
   still run; a wording check on output is recorded and the scenario continues, so one run reports
   every message that changed.
-- The service scenario (`TestE2E/service/current`, then `TestE2E/service/comparison`) and the job
-  scenario (`TestE2E/jobs`) run in parallel: they own separate resources and work directories.
+- The service scenario (`TestE2E/service/current`, then `TestE2E/service/comparison`), the job
+  scenario (`TestE2E/jobs`) and the worker pool scenario (`TestE2E/worker-pools`) run in parallel:
+  they own separate resources and work directories.
   Console lines carry the subtest name, and every `commands.log` entry starts with it. Cleanup runs
   after every scenario has finished.
 - `helpers_test.go`: offline regression checks for the harness. Run them without any credentials:

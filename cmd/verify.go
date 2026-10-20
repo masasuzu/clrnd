@@ -24,10 +24,11 @@ type verifyOptions struct {
 // warnings on stderr and the error on failure) in structured form, so CI can decide for itself
 // whether to ignore a warning or fail on it.
 type verifyResult struct {
-	// Service or Job names what was verified; the other is left out.
-	Service  string `json:"service,omitempty"`
-	Job      string `json:"job,omitempty"`
-	Manifest string `json:"manifest"`
+	// Service, Job or WorkerPool names what was verified; the others are left out.
+	Service    string `json:"service,omitempty"`
+	Job        string `json:"job,omitempty"`
+	WorkerPool string `json:"workerPool,omitempty"`
+	Manifest   string `json:"manifest"`
 	// OK reports whether there was no failure. It is false when anything is Missing or local
 	// validation failed.
 	OK bool `json:"ok"`
@@ -52,7 +53,7 @@ func newVerifyCmd(t target) *cobra.Command {
 			"that could not be completed) go to stderr"
 	}
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("verify [%s] [manifest]", t.noun),
+		Use:   fmt.Sprintf("verify [%s] [manifest]", t.arg()),
 		Short: "Verify a manifest",
 		Long: fmt.Sprintf("Validate that the manifest file is a well-formed Cloud Run %[1]s definition and\n"+
 			"contains the fields required to deploy. This local check never needs the API.\n"+
@@ -66,7 +67,7 @@ func newVerifyCmd(t target) *cobra.Command {
 			"A valid manifest produces no output on stdout; %[2]s without failing the command.\n"+
 			"--format json prints the result instead — missing, unchecked and warnings as one object\n"+
 			"on stdout — while the exit code stays the same.\n"+
-			"%[1]s and manifest may be omitted when set in the config file.", t.noun, warnings),
+			"%[3]s and manifest may be omitted when set in the config file.", t.noun, warnings, t.arg()),
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerify(cmd, args, t, o)

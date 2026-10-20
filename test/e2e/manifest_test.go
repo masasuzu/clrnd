@@ -72,6 +72,10 @@ func jobManifest(name, image string) []byte {
 	return []byte(fmt.Sprintf("apiVersion: run.googleapis.com/v1\nkind: Job\nmetadata:\n  name: %s\nspec:\n  template:\n    spec:\n      template:\n        spec:\n          maxRetries: 0\n          containers:\n          - image: %s\n", name, image))
 }
 
+func workerPoolManifest(name, image string) []byte {
+	return []byte(fmt.Sprintf("apiVersion: run.googleapis.com/v1\nkind: WorkerPool\nmetadata:\n  name: %s\nspec:\n  template:\n    spec:\n      containers:\n      - image: %s\n", name, image))
+}
+
 // Edit parsed YAML rather than depending on key order or indentation in gcloud's output.
 func (s *suite) edit(t *testing.T, path string, fn func(map[string]any)) {
 	t.Helper()
@@ -114,6 +118,11 @@ func setEnv(m map[string]any, value string) {
 		}
 	}
 	c["env"] = append(entries, map[string]any{"name": "CLRND_E2E", "value": value})
+}
+
+// setAnnotation sets one of the resource's own metadata.annotations.
+func setAnnotation(m map[string]any, key, value string) {
+	mapping(m, "metadata", "annotations")[key] = value
 }
 func pinRevision(m map[string]any, name string) {
 	mapping(m, "spec", "template", "metadata")["name"] = name

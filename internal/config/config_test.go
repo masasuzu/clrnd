@@ -63,9 +63,20 @@ func TestLoadJob(t *testing.T) {
 
 // TestLoadRejectsServiceAndJob checks that a config cannot describe a service and a job at once:
 // it has one manifest, and a command of either kind would pick the wrong half up.
-func TestLoadRejectsServiceAndJob(t *testing.T) {
-	_, err := Load(write(t, "service: my-svc\njob: my-job\n"))
-	if err == nil || !strings.Contains(err.Error(), "sets both service and job") {
-		t.Fatalf("Load() error = %v, want it to refuse service and job together", err)
+func TestLoadRejectsMoreThanOneKind(t *testing.T) {
+	for content, want := range map[string]string{
+		"service: my-svc\njob: my-job\n":                      "sets job and service",
+		"service: my-svc\nworkerPool: my-pool\n":              "sets service and workerPool",
+		"job: my-job\nworkerPool: my-pool\n":                  "sets job and workerPool",
+		"service: my-svc\njob: my-job\nworkerPool: my-pool\n": "sets job, service and workerPool",
+	} {
+		_, err := Load(write(t, content))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) error = %v, want it to contain %q", content, err, want)
+		}
+	}
+	c, err := Load(write(t, "workerPool: my-pool\n"))
+	if err != nil || c.WorkerPool != "my-pool" {
+		t.Errorf("Load(workerPool) = %+v, %v", c, err)
 	}
 }

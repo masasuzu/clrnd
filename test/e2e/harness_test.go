@@ -48,11 +48,9 @@ func (s *suite) cleanup(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if s.resourcesStarted {
-		for _, v := range []struct{ kind, name string }{{"service", s.service}, {"job", s.job}} {
-			if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
-				s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
-			}
+	for _, v := range s.ownedNow() {
+		if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
+			s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
 		}
 	}
 	if s.transcript != nil {
@@ -71,6 +69,33 @@ func (s *suite) cleanup(t *testing.T) {
 
 // preflight checks gcloud, which pins revisions and cleans up orphans under its own login. Its
 // calls are independent, so they run at once rather than paying gcloud's start-up for each.
+// ownedResource is a resource a scenario creates, which cleanup deletes.
+type ownedResource struct{ kind, name string }
+
+// own records that the running scenario creates a resource. Each scenario calls it before it
+// creates anything, so cleanup deletes what the scenarios that actually ran own, whichever way
+// they were selected — ONLY, or go test -run naming a subtest. A delete sent for a resource no
+// scenario touched needs a permission the run otherwise does not (a jobs-only run would need
+// run.workerpools.delete), and would fail a run whose scenarios passed. Scenarios run in parallel,
+// hence the lock; a resource owned twice (the service, by the comparison too) is recorded once.
+func (s *suite) own(kind, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.owned {
+		if v.kind == kind && v.name == name {
+			return
+		}
+	}
+	s.owned = append(s.owned, ownedResource{kind, name})
+}
+
+// ownedNow returns a copy of what the scenarios own, for cleanup.
+func (s *suite) ownedNow() []ownedResource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]ownedResource(nil), s.owned...)
+}
+
 func (s *suite) preflight(t *testing.T) {
 	t.Helper()
 	calls := [][]string{
@@ -120,6 +145,9 @@ func (s *suite) preflight(t *testing.T) {
 	}
 }
 
+// cleanupOrphans removes services and jobs with gcloud alone, so it works without ADC. Worker
+// pools go through the API, since the gcloud releases still in use predate its worker-pools
+// commands: without a usable ADC they are reported as unchecked, after everything else is gone.
 func (s *suite) cleanupOrphans(t *testing.T) {
 	t.Helper()
 	for _, kind := range []string{"services", "jobs"} {
@@ -127,6 +155,23 @@ func (s *suite) cleanupOrphans(t *testing.T) {
 		for _, name := range strings.Fields(r.stdout) {
 			if strings.HasPrefix(name, resourcePrefix) {
 				s.code(t, s.gcloud(t, "run", kind, "delete", name, "--quiet"), 0)
+			}
+		}
+	}
+	var err error
+	if s.api, err = newAPI(s.c); err != nil {
+		s.errorf(t, "worker pools not checked: the API client needs ADC: %v", err)
+		return
+	}
+	names, err := s.listWorkerPools(t)
+	if err != nil {
+		s.errorf(t, "worker pools not checked: %v", err)
+		return
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, resourcePrefix) {
+			if err := s.deleteResource(t, s.ctx, "worker pool", name); err != nil {
+				s.errorf(t, "delete worker pool %s: %v", name, err)
 			}
 		}
 	}
@@ -162,7 +207,8 @@ func TestE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := resourcePrefix + time.Now().UTC().Format("20060102150405") + "-" + hex.EncodeToString(id)
-	s := &suite{c: c, ctx: ctx, work: work, service: name, job: name + "-job"}
+	// A worker pool may not share a service's name, hence the suffix.
+	s := &suite{c: c, ctx: ctx, work: work, service: name, job: name + "-job", pool: name + "-wp"}
 	s.binary = filepath.Join(work, "clrnd")
 	if runtime.GOOS == "windows" {
 		s.binary += ".exe"
@@ -224,7 +270,6 @@ func TestE2E(t *testing.T) {
 		}
 		s.build(t, src, s.oldBinary)
 	}
-	s.resourcesStarted = true
 	// The service and the job are separate resources, so their scenarios run in parallel. The
 	// comparison reuses the service and stays behind the service scenario. Cleanup registered
 	// above runs only after every parallel subtest has finished.
@@ -251,6 +296,12 @@ func TestE2E(t *testing.T) {
 		t.Run("jobs", func(t *testing.T) {
 			t.Parallel()
 			s.jobs(t)
+		})
+	}
+	if c.only == "" || c.only == "worker-pools" {
+		t.Run("worker-pools", func(t *testing.T) {
+			t.Parallel()
+			s.workerPools(t)
 		})
 	}
 }

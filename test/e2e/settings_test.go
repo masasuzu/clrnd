@@ -77,9 +77,9 @@ func readSettingsIn(here, caller string) (settings, error) {
 		return c, err
 	}
 	switch c.only {
-	case "", "current", "jobs", "old":
+	case "", "current", "jobs", "worker-pools", "old":
 	default:
-		return c, fmt.Errorf("unknown ONLY=%s: use current, jobs or old", c.only)
+		return c, fmt.Errorf("unknown ONLY=%s: use current, jobs, worker-pools or old", c.only)
 	}
 	if c.only == "old" && c.oldRef == "" {
 		return c, errors.New("ONLY=old requires OLD_REF")

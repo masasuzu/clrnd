@@ -141,6 +141,67 @@ func (s *suite) getJob(t *testing.T, ctx context.Context) (*run.Job, error) {
 	})
 }
 
+func (s *suite) getWorkerPool(t *testing.T, ctx context.Context) (*run.WorkerPool, error) {
+	t.Helper()
+	return call(s, t, ctx, "get worker pool "+s.pool, func(ctx context.Context) (*run.WorkerPool, error) {
+		return s.api.Namespaces.Workerpools.Get(s.namespace() + "/workerpools/" + s.pool).Context(ctx).Do()
+	})
+}
+
+// scaleWorkerPool sets the instance count the way an external autoscaler does: it rewrites the
+// manualInstanceCount annotation on the live worker pool and replaces it, against the version it
+// read.
+func (s *suite) scaleWorkerPool(t *testing.T, count string) error {
+	t.Helper()
+	live, err := s.getWorkerPool(t, s.ctx)
+	if err != nil {
+		return err
+	}
+	live.Metadata.Annotations["run.googleapis.com/scalingMode"] = "manual"
+	live.Metadata.Annotations["run.googleapis.com/manualInstanceCount"] = count
+	live.Status = nil
+	_, err = call(s, t, s.ctx, "scale worker pool "+s.pool+" to "+count, func(ctx context.Context) (*run.WorkerPool, error) {
+		return s.api.Namespaces.Workerpools.ReplaceWorkerPool(s.namespace()+"/workerpools/"+s.pool, live).Context(ctx).Do()
+	})
+	return err
+}
+
+// listWorkerPools lists every worker pool in the project and region, for orphan cleanup: the
+// gcloud releases still in use predate its worker-pools commands.
+func (s *suite) listWorkerPools(t *testing.T) ([]string, error) {
+	t.Helper()
+	var names []string
+	token := ""
+	for {
+		page, err := call(s, t, s.ctx, "list worker pools", func(ctx context.Context) (*run.ListWorkerPoolsResponse, error) {
+			c := s.api.Namespaces.Workerpools.List(s.namespace()).Context(ctx)
+			if token != "" {
+				c = c.Continue(token)
+			}
+			return c.Do()
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Items {
+			if item != nil && item.Metadata != nil {
+				names = append(names, item.Metadata.Name)
+			}
+		}
+		next := ""
+		if page.Metadata != nil {
+			next = page.Metadata.Continue
+		}
+		if next == "" {
+			return names, nil
+		}
+		if next == token {
+			return nil, errors.New("worker pool list repeated its continue token")
+		}
+		token = next
+	}
+}
+
 func (s *suite) getRevision(t *testing.T, name string) (*run.Revision, error) {
 	t.Helper()
 	return call(s, t, s.ctx, "get revision "+name, func(ctx context.Context) (*run.Revision, error) {
@@ -179,12 +240,15 @@ func (s *suite) listRevisions(t *testing.T) ([]*run.Revision, error) {
 	}
 }
 
-// deleteResource removes this run's service or job. A 404 means it is already gone.
+// deleteResource removes this run's service, job or worker pool. A 404 means it is already gone.
 func (s *suite) deleteResource(t *testing.T, ctx context.Context, kind, name string) error {
 	t.Helper()
 	_, err := call(s, t, ctx, "delete "+kind+" "+name, func(ctx context.Context) (*run.Status, error) {
-		if kind == "job" {
+		switch kind {
+		case "job":
 			return s.api.Namespaces.Jobs.Delete(s.namespace() + "/jobs/" + name).Context(ctx).Do()
+		case "worker pool":
+			return s.api.Namespaces.Workerpools.Delete(s.namespace() + "/workerpools/" + name).Context(ctx).Do()
 		}
 		return s.api.Namespaces.Services.Delete(s.namespace() + "/services/" + name).Context(ctx).Do()
 	})

@@ -116,6 +116,24 @@ func TestHarnessPackageDirectory(t *testing.T) {
 		t.Fatalf("root %s is not the repository: %v", c.root, err)
 	}
 }
+
+// TestHarnessOwn checks that parallel scenarios can record what they own, and that the service,
+// owned by both of its scenarios, is deleted once.
+func TestHarnessOwn(t *testing.T) {
+	s := &suite{}
+	t.Run("scenarios", func(t *testing.T) {
+		for _, r := range []ownedResource{{"service", "svc"}, {"service", "svc"}, {"job", "svc-job"}} {
+			t.Run(r.kind, func(t *testing.T) {
+				t.Parallel()
+				s.own(r.kind, r.name)
+			})
+		}
+	})
+	got := s.ownedNow()
+	if len(got) != 2 {
+		t.Fatalf("owned = %+v, want the service and the job once each", got)
+	}
+}
 func TestHarnessRedaction(t *testing.T) {
 	text := "project-secret clrnd-e2e-20261019123456-abc-job-x7 https://svc-123456789012.run.app ci@example.com 123456789012 tester@project-secret.iam.gserviceaccount.com"
 	got := redact(text, "project-secret")
@@ -126,7 +144,7 @@ func TestHarnessRedaction(t *testing.T) {
 	}
 }
 func TestHarnessManifests(t *testing.T) {
-	for _, b := range [][]byte{serviceManifest("svc", "img"), jobManifest("job", "img")} {
+	for _, b := range [][]byte{serviceManifest("svc", "img"), jobManifest("job", "img"), workerPoolManifest("pool", "img")} {
 		var m map[string]any
 		if err := yaml.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)

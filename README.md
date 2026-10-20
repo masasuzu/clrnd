@@ -4,7 +4,8 @@
 It takes a service name and a manifest file as arguments and provides the subcommands
 `verify`, `render`, `diff`, `deploy`, `init`, `status`, `wait`, `revisions`, `rollback`, `traffic`,
 `delete`, and `refresh`. Cloud Run jobs are deployed the same way, and run, through `clrnd jobs`
-(see [jobs](#jobs)).
+(see [jobs](#jobs)), and worker pools through `clrnd worker-pools` (see
+[worker pools](#worker-pools)).
 
 ## Installation
 
@@ -118,6 +119,11 @@ gcloud auth application-default login
 | `jobs executions list` | `run.jobs.get`, `run.executions.list` |
 | `jobs executions wait` | `run.executions.get` |
 | `jobs executions cancel` | `run.executions.get`, `run.executions.cancel` |
+| `worker-pools verify` | the same as `verify` |
+| `worker-pools diff` | `run.workerpools.get` **and `run.workerpools.update`** — plus `run.workerpools.create` for a worker pool that does not exist yet, for the same reason as `diff` |
+| `worker-pools deploy` | `run.workerpools.get`, `run.workerpools.update`, and `run.workerpools.create` for a worker pool that does not exist yet |
+| `worker-pools status`, `worker-pools wait`, `worker-pools init` | `run.workerpools.get` |
+| `worker-pools delete` | `run.workerpools.get`, `run.workerpools.delete` |
 
 `roles/run.viewer` covers the read-only commands and `roles/run.developer` the rest — including
 `revisions --prune`, which is the one part of `revisions` that writes. Deploying a
@@ -171,6 +177,7 @@ project: my-project
 region: asia-northeast1
 service: my-svc            # optional; overridable by the positional argument
 # job: my-job             # instead of service, for the `clrnd jobs` commands
+# workerPool: my-pool     # instead of service, for the `clrnd worker-pools` commands
 manifest: manifest.yaml    # optional; overridable by the positional argument
 tfstate:
   - location: gs://my-tf-state/app/default.tfstate        # default state (name omitted): {{ tfstate "..." }}
@@ -197,6 +204,7 @@ Resolution order (highest first):
 | region   | `--region` → config `region` |
 | service  | positional `[service]` → config `service` |
 | job      | positional `[job]` → config `job` (the `clrnd jobs` commands) |
+| worker pool | positional `[worker-pool]` → config `workerPool` (the `clrnd worker-pools` commands) |
 | manifest | positional `[manifest]` → config `manifest` |
 | tfstate  | `--tfstate` (if any given, replaces config) → config `tfstate` |
 
@@ -213,8 +221,8 @@ Cloud Run region (`asia-northeast1`) and the project like a project ID (or numbe
 becomes part of the API's host name, so this also keeps a config file from sending your access
 token anywhere else (see [Trust boundary](#trust-boundary)).
 
-Every command that changes something prints its target — the service or job, the project and the
-region — on stderr before the diff or the prompt, `--auto-approve` or not, so a CI log records
+Every command that changes something prints its target — the service, job or worker pool, the
+project and the region — on stderr before the diff or the prompt, `--auto-approve` or not, so a CI log records
 where each change went.
 
 The config is parsed strictly: **an unknown key is an error**, not a warning. A misspelled
@@ -222,8 +230,8 @@ The config is parsed strictly: **an unknown key is an error**, not a warning. A 
 explicitly must exist (`init` is the exception — it is the command that creates it); an
 auto-detected `clrnd.yml` that is absent is simply an empty config.
 
-A config file describes one thing to deploy, so it sets **only one** of `service` and `job`. A
-command for the other kind does not fall back to that name: `clrnd delete` run next to a job's
+A config file describes one thing to deploy, so it sets **only one** of `service`, `job` and
+`workerPool`. A command for another kind does not fall back to that name: `clrnd delete` run next to a job's
 config refuses (`the config file names a job`) instead of deleting a service that happens to share
 the job's name.
 
@@ -381,7 +389,6 @@ express. These live next to it and are deliberately out of scope:
   capture it. A service `clrnd deploy` creates is private; and `clrnd delete` followed by a redeploy
   silently loses the public setting. Manage access with `gcloud run services add-iam-policy-binding`
   or Terraform.
-- **Cloud Run worker pools.** A `kind: WorkerPool` manifest is refused with a message saying so.
 - **Domain mappings.** `delete` removes the service without mentioning any mapping pointed at it.
 - **Traffic tags as a first-class concept.** Tags in the manifest are applied like any other field,
   and `rollback` / `traffic` preserve existing tags at 0%, but there is no command to add or move
@@ -414,6 +421,7 @@ clrnd [command]
 | `delete` | Delete a service.                                         |
 | `refresh` | Roll out a new revision without changing the definition. |
 | `jobs`   | Commands for Cloud Run jobs: `jobs verify`, `jobs diff`, `jobs deploy`, `jobs run`, `jobs status`, `jobs wait`, `jobs delete`, `jobs init`, `jobs executions list`, `jobs executions wait`, `jobs executions cancel`. |
+| `worker-pools` | Commands for Cloud Run worker pools: `worker-pools verify`, `worker-pools diff`, `worker-pools deploy`, `worker-pools status`, `worker-pools wait`, `worker-pools delete`, `worker-pools init`. |
 
 Run `clrnd [command] --help` for details on a specific command, and `clrnd --version` for the
 installed version.
@@ -577,7 +585,7 @@ specified but current version is '...'., aborted
 
 Re-run the command: the second attempt diffs against the new state, so you see what the other change
 did before deciding to apply on top of it. This applies to every command that shows a diff before
-applying it, for services and jobs alike.
+applying it, for every kind.
 
 ```sh
 clrnd deploy <service> <manifest> --project <PROJECT> --region <REGION> [--auto-approve] [--dry-run]
@@ -1119,6 +1127,71 @@ takes effect shortly after it is accepted, so the command waits until the execut
 (`--no-wait`, `--timeout`, `--interval` as for `delete`). It fails if the execution succeeded
 before the cancel took effect, since then nothing was cancelled.
 
+### worker pools
+
+Cloud Run worker pools (`kind: WorkerPool`) run background work — a queue consumer, say — with no
+URL and a fixed number of instances. They are deployed with the commands under
+`clrnd worker-pools`, which are the service commands of the same name built for worker pools: the
+same arguments (a worker pool name instead of a service name), the same flags, the same diff,
+confirmation and `--dry-run`, and the same compare-and-swap on `resourceVersion`.
+
+```sh
+clrnd worker-pools verify my-pool pool.yaml
+clrnd worker-pools diff my-pool pool.yaml
+clrnd worker-pools deploy my-pool pool.yaml --auto-approve
+```
+
+```yaml
+# pool.yaml
+apiVersion: run.googleapis.com/v1
+kind: WorkerPool
+metadata:
+  name: my-pool
+  annotations:
+    run.googleapis.com/scalingMode: manual
+    run.googleapis.com/manualInstanceCount: "2"   # optional; see below
+spec:
+  template:
+    spec:
+      containers:
+      - image: us-docker.pkg.dev/my-project/app/consumer:v1
+```
+
+What differs from a service:
+
+- The manifest's `apiVersion` is `run.googleapis.com/v1`. The revision template is the same as a
+  service's (`spec.template`), so `verify` checks the same references, and revision names are
+  handled the same way (see [Revision names](#revision-names)). Its `--format json` names the
+  worker pool under `workerPool`.
+- There is no traffic. What a worker pool splits between revisions is its instances
+  (`spec.instanceSplits`), which a manifest can set like any other field; there is no `rollback`,
+  `traffic` or `--no-traffic` for it yet.
+- In the config file, name the worker pool with `workerPool:` instead of `service:`. A worker pool
+  cannot share a name with a service in the same project.
+
+**The instance count** is the `run.googleapis.com/manualInstanceCount` annotation, written together
+with `run.googleapis.com/scalingMode: manual`. Changing only the count creates no revision; `deploy`
+still waits until the worker pool has settled. `0` stops every instance without deleting anything.
+
+- **Write the count** and every deploy sets it.
+- **Leave both annotations out** and a deploy keeps whatever count the worker pool runs now (1 when
+  it is created). This is how to let an external autoscaler own the count — Cloud Run's own
+  recipes for autoscaling worker pools work by rewriting that annotation — while clrnd deploys
+  everything else. `diff` shows no difference for it, except with `--no-server-defaults`, which
+  compares against the manifest as written.
+- `verify` and `deploy` refuse `scalingMode: manual` without a count, because Cloud Run reads it
+  as a count of 0 and stops the worker pool, and a count without `scalingMode: manual`, which Cloud
+  Run rejects.
+
+`worker-pools status` shows the Ready condition, the instance count, the latest ready and created
+revisions, the generation and how the instances are split between revisions (`--format json` too;
+`instanceCount` is left out only when the worker pool does not say). `worker-pools delete` shows the
+instance count among what goes, asks before deleting and waits until the worker pool is gone; its
+revisions go with it. `worker-pools init` scaffolds `manifest.yaml` with the count it runs now and
+a `clrnd.yml` that names it with `workerPool:`, so `clrnd worker-pools diff` right after it is
+empty — remove the two annotations from the manifest if an autoscaler should own the count.
+`worker-pools wait` waits until the worker pool is ready after a `worker-pools deploy --no-wait`.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -1185,9 +1258,9 @@ Releases are cut from `main` only: the release workflow refuses a tag whose comm
 ancestor of `main`, and runs the same checks as CI before it builds anything.
 
 Anything that touches the Cloud Run API should also be run through the end-to-end test in
-[test/e2e](test/e2e/), which creates and deletes a real service and job. The Go suite is gated by
-the `e2e` build tag; ordinary `go test ./...` excludes it. The cloud scenarios cannot run in CI
-and need a project intended for disposable services and jobs — see
+[test/e2e](test/e2e/), which creates and deletes a real resource of each kind. The Go suite is
+gated by the `e2e` build tag; ordinary `go test ./...` excludes it. The cloud scenarios cannot run
+in CI and need a project intended for disposable Cloud Run resources — see
 [test/e2e/README.md](test/e2e/README.md).
 
 ## License

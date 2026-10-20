@@ -172,10 +172,28 @@ func TestManifestOfTheWrongKind(t *testing.T) {
 			want:     []string{`kind is "Service"`, "'clrnd deploy'"},
 		},
 		{
-			name:     "a worker pool",
+			name:     "a worker pool to the service commands",
 			kind:     KindService,
-			manifest: "apiVersion: run.googleapis.com/v1\nkind: WorkerPool\nmetadata:\n  name: my-pool\n",
-			want:     []string{`kind is "WorkerPool"`, "does not support"},
+			manifest: validWorkerPoolManifest,
+			want:     []string{`kind is "WorkerPool"`, "'clrnd worker-pools'"},
+		},
+		{
+			name:     "a worker pool to the job commands",
+			kind:     KindJob,
+			manifest: validWorkerPoolManifest,
+			want:     []string{`kind is "WorkerPool"`, "'clrnd worker-pools'"},
+		},
+		{
+			name:     "a service to the worker pool commands",
+			kind:     KindWorkerPool,
+			manifest: validManifest,
+			want:     []string{`kind is "Service"`, "'clrnd deploy'"},
+		},
+		{
+			name:     "a job to the worker pool commands",
+			kind:     KindWorkerPool,
+			manifest: validJobManifest,
+			want:     []string{`kind is "Job"`, "'clrnd jobs'"},
 		},
 	}
 	for _, tt := range tests {
