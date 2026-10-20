@@ -50,7 +50,8 @@ Cloud Run API, and extend it when you add a command that does.
 - Commands: one file per command in [cmd/](cmd/), registered on `rootCmd` ([cmd/root.go](cmd/root.go)),
   `jobsCmd` ([cmd/jobs.go](cmd/jobs.go)), `jobsExecutionsCmd` or `workerPoolsCmd`
   ([cmd/worker_pools.go](cmd/worker_pools.go)). The commands every kind has —
-  `verify`, `diff`, `deploy`, `delete`, `init`, `wait` — are built once per `target`
+  `verify`, `diff`, `deploy`, `delete`, `init`, `wait`, plus `revisions` and `rollback` for the
+  kinds that have revisions — are built once per `target`
   ([cmd/target.go](cmd/target.go)) by `newXCmd(t)` factories.
 - Shared cmd pieces: the apply flow and confirmation ([cmd/apply.go](cmd/apply.go)), target and
   format flags and resolution ([cmd/flags.go](cmd/flags.go)), file writing
@@ -60,7 +61,8 @@ Cloud Run API, and extend it when you add a command that does.
   - kinds and the plan/diff/apply flow: [kind.go](internal/cloudrun/kind.go); the service kind and
     manifest normalization: [cloudrun.go](internal/cloudrun/cloudrun.go); the job kind:
     [job.go](internal/cloudrun/job.go); the worker pool kind and its instance-count rules:
-    [workerpool.go](internal/cloudrun/workerpool.go); revision-template helpers:
+    [workerpool.go](internal/cloudrun/workerpool.go); listing revisions and rolling back for any
+    kind that has them: [revisionkind.go](internal/cloudrun/revisionkind.go); revision-template helpers:
     [template.go](internal/cloudrun/template.go); what a manifest runs:
     [workload.go](internal/cloudrun/workload.go)
   - the client and target validation: [client.go](internal/cloudrun/client.go),

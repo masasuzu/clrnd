@@ -37,6 +37,8 @@ type Kind interface {
 	remove(ctx context.Context, c *Client, name string, dryRun bool) error
 	waitDeleted(ctx context.Context, c *Client, name string, opts WaitOptions) error
 	revisionName(manifest []byte) (string, error)
+	listRevisions(ctx context.Context, c *Client, name string) (Revisions, error)
+	planRollback(ctx context.Context, c *Client, name, requested string) (*DeployPlan, *Revision, error)
 }
 
 // The kinds clrnd deploys.
@@ -98,6 +100,9 @@ type kindOf[T resource] struct {
 	// template returns the revision template the resource holds, for a kind that has revisions
 	// (see template.go). nil for one that has none.
 	template func(T) *run.RevisionTemplate
+	// revisions lists the kind's revisions and rolls back between them (see revisionkind.go). nil
+	// for a kind that has none.
+	revisions *revisionsOf[T]
 }
 
 // Name implements Kind.

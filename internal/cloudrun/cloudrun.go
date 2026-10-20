@@ -70,8 +70,9 @@ var serviceKind = &kindOf[*run.Service]{
 		}
 		return keepTraffic(desired, current, name)
 	},
-	template: serviceTemplate,
-	align:    alignRevisionName,
+	template:  serviceTemplate,
+	revisions: serviceRevisions,
+	align:     alignRevisionName,
 	// Keeping the live revision name makes the second deploy that changes the template fail with
 	// "a revision with the same name and a different configuration cannot be created". The
 	// scaffold drops it and leaves naming to Cloud Run's automatic numbering.

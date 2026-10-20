@@ -78,7 +78,8 @@ var workerPoolKind = &kindOf[*run.WorkerPool]{
 		}
 		return desired, nil
 	},
-	template: workerPoolTemplate,
+	template:  workerPoolTemplate,
+	revisions: workerPoolRevisions,
 	// A worker pool holds the same revision template as a service, so it gets the same handling
 	// of revision names: init drops a pinned one and diff ignores a live one the manifest does not
 	// pin.
