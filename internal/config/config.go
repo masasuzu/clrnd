@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -16,13 +18,15 @@ type Config struct {
 	Project string `json:"project,omitempty"`
 	Region  string `json:"region,omitempty"`
 	Service string `json:"service,omitempty"`
-	// Job names a Cloud Run job instead of a service. A config file describes one deployable
-	// resource, so at most one of Service and Job is set (Load enforces it). Keeping a key per kind
-	// rather than one shared "name" means a command for the other kind finds nothing to act on,
-	// instead of acting on a resource of its own kind that happens to share the name.
-	Job      string    `json:"job,omitempty"`
-	Manifest string    `json:"manifest,omitempty"`
-	Tfstate  []Tfstate `json:"tfstate,omitempty"`
+	// Job names a Cloud Run job, and WorkerPool a worker pool, instead of a service. A config file
+	// describes one deployable resource, so at most one of Service, Job and WorkerPool is set (Load
+	// enforces it). Keeping a key per kind rather than one shared "name" means a command for another
+	// kind finds nothing to act on, instead of acting on a resource of its own kind that happens to
+	// share the name.
+	Job        string    `json:"job,omitempty"`
+	WorkerPool string    `json:"workerPool,omitempty"`
+	Manifest   string    `json:"manifest,omitempty"`
+	Tfstate    []Tfstate `json:"tfstate,omitempty"`
 }
 
 // Tfstate declares a named Terraform state. An omitted Name is treated as "default".
@@ -41,8 +45,17 @@ func Load(path string) (*Config, error) {
 	if err := yaml.UnmarshalStrict(data, &c); err != nil {
 		return nil, fmt.Errorf("failed to parse config %s: %w", path, err)
 	}
-	if c.Service != "" && c.Job != "" {
-		return nil, fmt.Errorf("config %s sets both service and job: a config file describes one of them", path)
+	var set []string
+	for key, value := range map[string]string{"service": c.Service, "job": c.Job, "workerPool": c.WorkerPool} {
+		if value != "" {
+			set = append(set, key)
+		}
+	}
+	if len(set) > 1 {
+		slices.Sort(set)
+		last := len(set) - 1
+		return nil, fmt.Errorf("config %s sets %s and %s: a config file describes one of them",
+			path, strings.Join(set[:last], ", "), set[last])
 	}
 	return &c, nil
 }

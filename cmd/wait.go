@@ -31,12 +31,12 @@ var waitCmd = newWaitCmd(serviceTarget)
 func newWaitCmd(t target) *cobra.Command {
 	o := &waitOptions{}
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("wait [%s]", t.noun),
+		Use:   fmt.Sprintf("wait [%s]", t.arg()),
 		Short: fmt.Sprintf("Wait until a %s is ready", t.noun),
 		Long: fmt.Sprintf("Poll the %[1]s until its Ready condition becomes True. If it becomes False the\n"+
 			"command fails immediately instead of waiting for the timeout. Progress is reported\n"+
 			"on stderr; nothing is written to stdout. Ctrl-C stops the wait.\n"+
-			"%[1]s may be omitted when set in the config file.", t.noun),
+			"%[2]s may be omitted when set in the config file.", t.noun, t.arg()),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWait(cmd, args, t, o)

@@ -25,7 +25,7 @@ var deployCmd = newDeployCmd(serviceTarget)
 func newDeployCmd(t target) *cobra.Command {
 	o := &deployOptions{}
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("deploy [%s] [manifest]", t.noun),
+		Use:   fmt.Sprintf("deploy [%s] [manifest]", t.arg()),
 		Short: "Deploy a manifest to Cloud Run",
 		Long:  t.deployLong,
 		Args:  cobra.MaximumNArgs(2),
@@ -45,7 +45,8 @@ func newDeployCmd(t target) *cobra.Command {
 	return cmd
 }
 
-// serviceDeployLong and jobDeployLong are deploy's help text for each target (target.deployLong).
+// serviceDeployLong, jobDeployLong and workerPoolDeployLong are deploy's help text for each target
+// (target.deployLong).
 const (
 	serviceDeployLong = "Show the diff against the live service, then (after confirmation) apply the manifest to\n" +
 		"Cloud Run, creating the service if it does not exist or replacing it otherwise. The manifest\n" +
@@ -71,6 +72,19 @@ const (
 		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
 		"--image replaces a container image without editing the manifest.\n" +
 		"job and manifest may be omitted when set in the config file."
+	workerPoolDeployLong = "Show the diff against the live worker pool, then (after confirmation) apply the manifest\n" +
+		"to Cloud Run, creating the worker pool if it does not exist or replacing it otherwise. The\n" +
+		"manifest is validated locally before the request is sent.\n" +
+		"After applying, deploy waits until the worker pool is ready and fails if the rollout\n" +
+		"fails; pass --no-wait to return as soon as the request is accepted.\n" +
+		"The instance count is the run.googleapis.com/manualInstanceCount annotation, written with\n" +
+		"run.googleapis.com/scalingMode: manual. Leave both out to keep the count the worker pool runs\n" +
+		"now, for instance when an autoscaler sets it.\n" +
+		"Use --auto-approve to skip the prompt (for CI/CD), or --dry-run to validate server-side\n" +
+		"without applying any changes. The diff resolves the fields Cloud Run defaults first, so a\n" +
+		"minimal manifest does not show them as a difference; --no-server-defaults skips that.\n" +
+		"--image replaces a container image without editing the manifest.\n" +
+		"worker-pool and manifest may be omitted when set in the config file."
 )
 
 func runDeploy(cmd *cobra.Command, args []string, t target, o *deployOptions) error {

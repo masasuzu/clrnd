@@ -90,14 +90,7 @@ func newJobStatusReport(obj *run.Job) *JobStatus {
 }
 
 // Ready returns the Ready condition (the job can be executed), or nil if there is none.
-func (s *JobStatus) Ready() *Condition {
-	for i := range s.Conditions {
-		if s.Conditions[i].Type == conditionReady {
-			return &s.Conditions[i]
-		}
-	}
-	return nil
-}
+func (s *JobStatus) Ready() *Condition { return readyCondition(s.Conditions) }
 
 // Text returns the human-readable formatted output. It ends with a newline.
 func (s *JobStatus) Text() string {

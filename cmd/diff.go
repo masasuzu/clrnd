@@ -24,7 +24,7 @@ var diffCmd = newDiffCmd(serviceTarget)
 func newDiffCmd(t target) *cobra.Command {
 	o := &diffOptions{}
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("diff [%s] [manifest]", t.noun),
+		Use:   fmt.Sprintf("diff [%s] [manifest]", t.arg()),
 		Short: fmt.Sprintf("Show the diff between an existing %s and a manifest", t.noun),
 		Long: fmt.Sprintf("Fetch the live definition of the %[1]s from Cloud Run and show a unified diff\n"+
 			"against the given manifest file. Both sides are normalized (read-only fields removed)\n"+
@@ -34,7 +34,7 @@ func newDiffCmd(t target) *cobra.Command {
 			"against the manifest as written, which also avoids needing update permission.\n"+
 			"Nothing is printed when there is no difference, and diff succeeds either way unless\n"+
 			"--exit-code is given.\n"+
-			"%[1]s and manifest may be omitted when set in the config file.", t.noun),
+			"%[2]s and manifest may be omitted when set in the config file.", t.noun, t.arg()),
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDiff(cmd, args, t, o)

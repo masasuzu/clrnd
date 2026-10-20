@@ -3,25 +3,25 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/masasuzu/clrnd/internal/cloudrun"
 	"github.com/masasuzu/clrnd/internal/config"
 )
 
-// target is the kind of resource a command works on: services (the top-level commands) or jobs
-// (under 'clrnd jobs'). The commands both kinds have — deploy, diff, verify, delete and init — are
-// built once per target from the same code, so what they do for a job cannot drift from what they
-// do for a service.
+// target is the kind of resource a command works on: services (the top-level commands), jobs
+// (under 'clrnd jobs') or worker pools (under 'clrnd worker-pools'). The commands every kind has —
+// deploy, diff, verify, wait, delete and init — are built once per target from the same code, so
+// what they do for one kind cannot drift from what they do for another.
 //
 // Everything those commands do differently for one kind is a field here, describing what the kind
-// has or how it is named, rather than a check of which kind it is. Another kind (a worker pool,
-// say) is then one more target: it says whether it has traffic, what deploy waits for, and so on,
-// instead of turning every "is it a service" into a three-way switch.
+// has or how it is named, rather than a check of which kind it is: a target says whether it has
+// traffic, what deploy waits for, and so on.
 type target struct {
 	kind cloudrun.Kind
-	// noun is what help and messages call one ("service", "job").
+	// noun is what help and messages call one ("service", "job", "worker pool").
 	noun string
-	// configKey is the config file key that names one ("service", "job"), and configName the field
+	// configKey is the config file key that names one ("service", "job", "workerPool"), and configName the field
 	// behind it, for reading the name and for init to write it.
 	configKey  string
 	configName func(*config.Config) *string
@@ -80,9 +80,27 @@ var (
 		deleteDetails:  jobDeleteDetails,
 		resultName:     func(r *verifyResult) *string { return &r.Job },
 	}
+	workerPoolTarget = target{
+		kind:           cloudrun.KindWorkerPool,
+		noun:           "worker pool",
+		configKey:      "workerPool",
+		configName:     func(c *config.Config) *string { return &c.WorkerPool },
+		commands:       "the 'clrnd worker-pools' commands",
+		hasRevisions:   true,
+		waitFor:        "the rollout",
+		deployLong:     workerPoolDeployLong,
+		manifestFormat: "YAML",
+		deleteGoes:     "the worker pool, all of its\nrevisions and its running instances go away",
+		deleteDetails:  workerPoolDeleteDetails,
+		resultName:     func(r *verifyResult) *string { return &r.WorkerPool },
+	}
 	// targets are every target, for the check that the config file does not name another kind.
-	targets = []target{serviceTarget, jobTarget}
+	targets = []target{serviceTarget, jobTarget, workerPoolTarget}
 )
+
+// arg is how usage lines and help name the positional argument: the noun, hyphenated, as gcloud
+// writes a worker pool's (WORKER_POOL in its own help, worker-pool here).
+func (t target) arg() string { return strings.ReplaceAll(t.noun, " ", "-") }
 
 // resolveName resolves the name in the order positional args[0] > the config file's key for this
 // target.
@@ -114,3 +132,6 @@ func resolveService(args []string) (string, error) { return serviceTarget.resolv
 
 // resolveJob resolves the job for a command only jobs have.
 func resolveJob(args []string) (string, error) { return jobTarget.resolveName(args) }
+
+// resolveWorkerPool resolves the worker pool for a command only worker pools have.
+func resolveWorkerPool(args []string) (string, error) { return workerPoolTarget.resolveName(args) }

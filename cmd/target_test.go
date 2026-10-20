@@ -7,7 +7,7 @@ import (
 )
 
 // TestTargetsAreComplete checks that every target fills in what the shared commands read from it,
-// so adding a kind (a worker pool) cannot leave one of them to fail at run time.
+// so adding a kind cannot leave one of them to fail at run time.
 func TestTargetsAreComplete(t *testing.T) {
 	keys := map[string]bool{}
 	for _, tg := range targets {
@@ -32,7 +32,13 @@ func TestTargetsAreComplete(t *testing.T) {
 		}
 		r := verifyResult{}
 		*tg.resultName(&r) = "x"
-		if (r.Service == "x") == (r.Job == "x") {
+		set := 0
+		for _, field := range []string{r.Service, r.Job, r.WorkerPool} {
+			if field == "x" {
+				set++
+			}
+		}
+		if set != 1 {
 			t.Errorf("%s's resultName = %+v, want exactly one field set", tg.noun, r)
 		}
 	}
@@ -50,6 +56,16 @@ func TestResolveNameRefusesAnotherKindsConfig(t *testing.T) {
 	if _, err := jobTarget.resolveName(nil); err == nil || err.Error() != "job is required: the config file "+
 		"names a service (service: my-svc); use the top-level commands such as 'clrnd deploy' for it" {
 		t.Errorf("job resolveName() error = %v", err)
+	}
+	withConfig(t, &config.Config{WorkerPool: "my-pool"})
+	if _, err := serviceTarget.resolveName(nil); err == nil || err.Error() != "service is required: the config file "+
+		"names a worker pool (workerPool: my-pool); use the 'clrnd worker-pools' commands for it" {
+		t.Errorf("service resolveName() error = %v", err)
+	}
+	withConfig(t, &config.Config{Job: "my-job"})
+	if _, err := workerPoolTarget.resolveName(nil); err == nil || err.Error() != "worker pool is required: the "+
+		"config file names a job (job: my-job); use the 'clrnd jobs' commands for it" {
+		t.Errorf("worker pool resolveName() error = %v", err)
 	}
 	withConfig(t, &config.Config{})
 	if _, err := jobTarget.resolveName(nil); err == nil || err.Error() != "job is required: pass it as an argument "+

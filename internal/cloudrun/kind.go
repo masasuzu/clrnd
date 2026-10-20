@@ -9,7 +9,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Kind is a kind of Cloud Run resource that clrnd deploys from a manifest: KindService or KindJob.
+// Kind is a kind of Cloud Run resource that clrnd deploys from a manifest: KindService, KindJob or
+// KindWorkerPool.
 //
 // Parsing and validating a manifest, comparing it with what is live, and applying it work the same
 // way for every kind — confirmed against the real API for jobs: the same resourceVersion
@@ -18,9 +19,9 @@ import (
 // described once per kind by a kindOf, and everything else is written against this interface.
 // Its methods are unexported, so no other package can add a kind.
 type Kind interface {
-	// Name is the manifest's kind field: "Service" or "Job".
+	// Name is the manifest's kind field: "Service", "Job" or "WorkerPool".
 	Name() string
-	// Noun is what messages call one: "service" or "job".
+	// Noun is what messages call one: "service", "job" or "worker pool".
 	Noun() string
 
 	validateManifest(manifest []byte, name string) error
@@ -40,19 +41,20 @@ type Kind interface {
 
 // The kinds clrnd deploys.
 var (
-	KindService Kind = serviceKind
-	KindJob     Kind = jobKind
+	KindService    Kind = serviceKind
+	KindJob        Kind = jobKind
+	KindWorkerPool Kind = workerPoolKind
 )
 
 // resource is the API type of a kind.
 type resource interface {
-	*run.Service | *run.Job
+	*run.Service | *run.Job | *run.WorkerPool
 }
 
 // kindOf describes one kind. The plan / diff / apply flow is written once on top of it.
 type kindOf[T resource] struct {
 	name       string // the manifest's kind field
-	noun       string // what messages call one ("service", "job")
+	noun       string // what messages call one ("service", "job", "worker pool")
 	apiVersion string // the apiVersion its manifest must declare
 
 	// conflictHint is added to the explanation of a 409 on apply. Empty adds nothing.
@@ -63,6 +65,9 @@ type kindOf[T resource] struct {
 	meta      func(T) *run.ObjectMeta
 	workload  func(T) workload
 	status    func(T) *Status
+	// check adds what only this kind requires of a valid definition to validate's checks. nil adds
+	// nothing.
+	check func(T) []error
 
 	// explicit adjusts a strictly parsed manifest for what only the raw manifest can tell: whether
 	// a field was written at all. A zero value and an absent field parse to the same thing. nil
@@ -175,6 +180,9 @@ func (k *kindOf[T]) validate(obj T, name string) error {
 	}
 
 	errs = append(errs, validateContainers(k.workload(obj))...)
+	if k.check != nil {
+		errs = append(errs, k.check(obj)...)
+	}
 	return errors.Join(errs...)
 }
 
@@ -431,7 +439,7 @@ func generationOf(meta *run.ObjectMeta) int64 {
 var kindHints = map[string]string{
 	"Service":    "a Cloud Run service manifest; use the top-level commands such as 'clrnd deploy'",
 	"Job":        "a Cloud Run job manifest; use the 'clrnd jobs' commands",
-	"WorkerPool": "a Cloud Run worker pool manifest, which clrnd does not support yet",
+	"WorkerPool": "a Cloud Run worker pool manifest; use the 'clrnd worker-pools' commands",
 }
 
 // checkManifestKind reports a manifest whose kind is one clrnd knows but not the one wanted.
@@ -452,7 +460,7 @@ func checkManifestKind(manifest []byte, want string) error {
 
 // DeployPlan is what is about to be applied. Computed by Plan and applied by Apply.
 type DeployPlan struct {
-	Name   string // the service or job name
+	Name   string // the name of the service, job or worker pool
 	Create bool   // whether it does not exist and will be created
 	Diff   string // unified diff of live and desired (empty when there are no differences)
 
@@ -467,7 +475,7 @@ func (p *DeployPlan) Project() string { return p.client.project }
 // Region returns the region the plan applies to.
 func (p *DeployPlan) Region() string { return p.client.region }
 
-// Noun returns what messages call the plan's resource: "service" or "job".
+// Noun returns what messages call the plan's resource: "service", "job" or "worker pool".
 func (p *DeployPlan) Noun() string { return p.kind.Noun() }
 
 // Apply applies the plan to Cloud Run and returns the metadata.generation it applied (0 when the
@@ -606,15 +614,15 @@ func (c *Client) LiveManifest(ctx context.Context, kind Kind, name string) ([]by
 	return kind.liveManifest(ctx, c, name)
 }
 
-// Delete deletes the service or job. When dryRun is true, the server only validates.
+// Delete deletes the resource of the given kind. When dryRun is true, the server only validates.
 // This cannot be undone, so the caller must obtain confirmation. Deletion is asynchronous; see
 // WaitDeleted.
 func (c *Client) Delete(ctx context.Context, kind Kind, name string, dryRun bool) error {
 	return kind.remove(ctx, c, name, dryRun)
 }
 
-// WaitDeleted waits until the service or job is actually gone. Cloud Run deletion is
-// asynchronous — confirmed for jobs as well as services — and the resource can still be fetched
+// WaitDeleted waits until the resource of the given kind is actually gone. Cloud Run deletion is
+// asynchronous — confirmed for every kind — and the resource can still be fetched
 // when the DELETE is accepted, so without this a procedure such as "delete, then recreate" races.
 func (c *Client) WaitDeleted(ctx context.Context, kind Kind, name string, opts WaitOptions) error {
 	return kind.waitDeleted(ctx, c, name, opts)

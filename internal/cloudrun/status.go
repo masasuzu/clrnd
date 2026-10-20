@@ -130,10 +130,14 @@ func newConditions(in []*run.GoogleCloudRunV1Condition) []Condition {
 
 // Ready returns the Ready condition, or nil if there is none. It is exported so that wait
 // (waiting for the service to settle) can use the same check.
-func (s *Status) Ready() *Condition {
-	for i := range s.Conditions {
-		if s.Conditions[i].Type == conditionReady {
-			return &s.Conditions[i]
+func (s *Status) Ready() *Condition { return readyCondition(s.Conditions) }
+
+// readyCondition returns the Ready condition among conds, or nil if there is none. Every status
+// reads Ready the same way.
+func readyCondition(conds []Condition) *Condition {
+	for i := range conds {
+		if conds[i].Type == conditionReady {
+			return &conds[i]
 		}
 	}
 	return nil
