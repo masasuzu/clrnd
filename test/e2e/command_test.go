@@ -28,7 +28,8 @@ type result struct {
 func (r result) text() string { return r.stdout + "\n" + r.stderr }
 
 type suite struct {
-	resourcesStarted                            bool
+	// owned are the resources the selected scenarios create, and the only ones cleanup deletes.
+	owned                                       []ownedResource
 	c                                           settings
 	ctx                                         context.Context
 	work, binary, oldBinary, service, job, pool string

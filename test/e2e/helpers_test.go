@@ -116,6 +116,30 @@ func TestHarnessPackageDirectory(t *testing.T) {
 		t.Fatalf("root %s is not the repository: %v", c.root, err)
 	}
 }
+func TestHarnessOwnedResources(t *testing.T) {
+	names := func(c settings) []string {
+		var out []string
+		for _, r := range ownedResources(c, "svc", "svc-job", "svc-wp") {
+			out = append(out, r.kind+"="+r.name)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		c    settings
+		want []string
+	}{
+		{settings{}, []string{"service=svc", "job=svc-job", "worker pool=svc-wp"}},
+		{settings{only: "current"}, []string{"service=svc"}},
+		{settings{only: "jobs"}, []string{"job=svc-job"}},
+		{settings{only: "worker-pools"}, []string{"worker pool=svc-wp"}},
+		// The comparison creates the service with gcloud even when the service scenario is not run.
+		{settings{only: "old", oldRef: "v0.1.0"}, []string{"service=svc"}},
+	} {
+		if got := names(tc.c); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("ownedResources(only=%q) = %q, want %q", tc.c.only, got, tc.want)
+		}
+	}
+}
 func TestHarnessRedaction(t *testing.T) {
 	text := "project-secret clrnd-e2e-20261019123456-abc-job-x7 https://svc-123456789012.run.app ci@example.com 123456789012 tester@project-secret.iam.gserviceaccount.com"
 	got := redact(text, "project-secret")

@@ -48,11 +48,9 @@ func (s *suite) cleanup(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if s.resourcesStarted {
-		for _, v := range []struct{ kind, name string }{{"service", s.service}, {"job", s.job}, {"worker pool", s.pool}} {
-			if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
-				s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
-			}
+	for _, v := range s.owned {
+		if err := s.deleteResource(t, ctx, v.kind, v.name); err != nil {
+			s.errorf(t, "%s cleanup failed; use --cleanup-orphans: %v", v.kind, err)
 		}
 	}
 	if s.transcript != nil {
@@ -71,6 +69,26 @@ func (s *suite) cleanup(t *testing.T) {
 
 // preflight checks gcloud, which pins revisions and cleans up orphans under its own login. Its
 // calls are independent, so they run at once rather than paying gcloud's start-up for each.
+// ownedResource is a resource a scenario creates, which cleanup deletes.
+type ownedResource struct{ kind, name string }
+
+// ownedResources lists what the scenarios c selects create. Cleanup deletes only these: a delete
+// sent for a resource no scenario touched needs a permission the run otherwise does not (a run
+// with ONLY=jobs would need run.workerpools.delete), and would fail a run whose scenarios passed.
+func ownedResources(c settings, service, job, pool string) []ownedResource {
+	var out []ownedResource
+	if c.only == "" || c.only == "current" || (c.oldRef != "" && c.only == "old") {
+		out = append(out, ownedResource{"service", service})
+	}
+	if c.only == "" || c.only == "jobs" {
+		out = append(out, ownedResource{"job", job})
+	}
+	if c.only == "" || c.only == "worker-pools" {
+		out = append(out, ownedResource{"worker pool", pool})
+	}
+	return out
+}
+
 func (s *suite) preflight(t *testing.T) {
 	t.Helper()
 	calls := [][]string{
@@ -245,7 +263,7 @@ func TestE2E(t *testing.T) {
 		}
 		s.build(t, src, s.oldBinary)
 	}
-	s.resourcesStarted = true
+	s.owned = ownedResources(c, s.service, s.job, s.pool)
 	// The service and the job are separate resources, so their scenarios run in parallel. The
 	// comparison reuses the service and stays behind the service scenario. Cleanup registered
 	// above runs only after every parallel subtest has finished.
