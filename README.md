@@ -842,8 +842,9 @@ clrnd revisions --prune --keep 20
 tag**, however old it is — deleting the first would take the service down, and the last would
 remove a tag URL. `spec.traffic` is consulted as well as the live split because the status side
 does not show a share until a rollout settles; when it says `latestRevision: true` — which names no
-revision at all — the newest created and newest ready revisions are protected too, so a prune that
-runs mid-rollout cannot delete the revision that is about to serve.
+revision at all — the newest ready revision is protected too, so a prune that runs mid-rollout
+cannot delete the revision that is about to serve. The newest created revision is always kept:
+Cloud Run refuses to delete it, even when a rollback has left it serving nothing.
 
 `--keep` counts from the newest revision down, protected or not, so `--keep 20` means "everything
 older than the 20 newest is a candidate". Anything protected in that older range stays, which is
