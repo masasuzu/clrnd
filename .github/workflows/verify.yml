@@ -128,9 +128,9 @@ jobs:
           go-version-file: go.mod
 
       # Pinning the action by SHA does not pin the linter the action downloads. Without a
-      # version it installs latest, so local runs (the go run ...@v2.13.1 in README / CLAUDE.md)
+      # version it installs latest, so local runs (the go run ...@v2.13.1 in README / AGENTS.md)
       # and CI run different versions, and CI results change on their own with upstream releases.
-      # When bumping this, bump the examples in README and CLAUDE.md along with it.
+      # When bumping this, bump the examples in README and AGENTS.md along with it.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
