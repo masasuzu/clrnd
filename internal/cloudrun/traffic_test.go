@@ -9,8 +9,9 @@ import (
 
 // serviceWithTraffic builds a live service with spec.traffic and status.traffic.
 // The spec side is "the split currently declared" and the status side is "the split actually
-// being served"; choosing where the remainder goes looks at the latter.
-func serviceWithTraffic(spec []*run.TrafficTarget, status []*run.TrafficTarget, latestReady string) *run.Service {
+// being served"; choosing where the remainder goes looks at the latter. latest is both the latest
+// ready and the latest created revision, the state once a rollout has settled.
+func serviceWithTraffic(spec []*run.TrafficTarget, status []*run.TrafficTarget, latest string) *run.Service {
 	return &run.Service{
 		ApiVersion: manifestAPIVersion,
 		Kind:       manifestKind,
@@ -22,8 +23,9 @@ func serviceWithTraffic(spec []*run.TrafficTarget, status []*run.TrafficTarget, 
 			Traffic: spec,
 		},
 		Status: &run.ServiceStatus{
-			LatestReadyRevisionName: latestReady,
-			Traffic:                 status,
+			LatestReadyRevisionName:   latest,
+			LatestCreatedRevisionName: latest,
+			Traffic:                   status,
 		},
 	}
 }
@@ -93,6 +95,29 @@ func TestShiftTrafficTargetToLatestRefusesWhenOnlyTheLatestServes(t *testing.T) 
 	if !strings.Contains(err.Error(), "--percent 100") {
 		t.Errorf("error = %v, want it to point at --percent 100", err)
 	}
+}
+
+// TestShiftTrafficTargetToLatestCanariesARevisionDeployedWithoutTraffic checks the canary right
+// after deploy --no-traffic: the new revision is the latest created but serves nothing, while
+// latestReadyRevisionName still names the stable revision serving 100%. --to-latest resolves to
+// the new revision, so the stable one keeps the rest rather than being refused as "already
+// serving".
+func TestShiftTrafficTargetToLatestCanariesARevisionDeployedWithoutTraffic(t *testing.T) {
+	live := serviceWithTraffic(
+		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
+		[]*run.TrafficTarget{{RevisionName: "my-svc-00007-abc", Percent: 100}},
+		"my-svc-00007-abc")
+	live.Status.LatestCreatedRevisionName = "my-svc-00008-ghi"
+
+	got, err := ShiftTrafficTarget(live, SplitRequest{Latest: true, Percent: 10})
+	if err != nil {
+		t.Fatalf("ShiftTrafficTarget() error = %v", err)
+	}
+	want := []*run.TrafficTarget{
+		{LatestRevision: true, Percent: 10},
+		{RevisionName: "my-svc-00007-abc", Percent: 90},
+	}
+	assertTraffic(t, got.Spec.Traffic, want)
 }
 
 // TestShiftTrafficTargetKeepsTags checks that tagged routes are kept at 0%.
@@ -306,6 +331,7 @@ func assertTraffic(t *testing.T, got, want []*run.TrafficTarget) {
 	for i := range want {
 		if got[i].RevisionName != want[i].RevisionName ||
 			got[i].Tag != want[i].Tag ||
+			got[i].LatestRevision != want[i].LatestRevision ||
 			got[i].Percent != want[i].Percent {
 			t.Errorf("traffic[%d] = %+v, want %+v", i, got[i], want[i])
 		}

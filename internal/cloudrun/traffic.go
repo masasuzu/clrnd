@@ -66,11 +66,16 @@ func ShiftTrafficTarget(live *run.Service, req SplitRequest) (*run.Service, erro
 
 	target := &run.TrafficTarget{Percent: req.Percent}
 	// The name used to exclude the target itself from the candidates when choosing where the
-	// remainder goes. With --to-latest, that is "the current latest Ready revision".
+	// remainder goes.
 	self := req.Revision
 	if req.Latest {
 		target.LatestRevision = true
-		self = status.LatestReadyRevision
+		// latestRevision resolves to the newest *created* revision, as for a worker pool
+		// (confirmed against the real API: after deploy --no-traffic, --to-latest moves the
+		// traffic onto the revision just created). While that revision serves nothing,
+		// latestReadyRevisionName can still name the stable one; excluding latestReady here would
+		// refuse the canary as "already serving 100%".
+		self = status.LatestCreatedRevision
 	} else {
 		target.RevisionName = req.Revision
 	}
