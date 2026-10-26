@@ -30,6 +30,8 @@ type revisionsOf[T resource] struct {
 	// pinsSplit reports whether a manifest sets the split itself (spec.traffic,
 	// spec.instanceSplits), which deploy's flag for keeping the current split replaces.
 	pinsSplit func(T) bool
+	// latestCreated names the newest created revision, the one latestRevision resolves to.
+	latestCreated func(T) string
 	// words are how messages put what the kind splits between revisions.
 	words splitWords
 }
@@ -117,10 +119,10 @@ func (k *kindOf[T]) validateSplit(req SplitRequest) error {
 	return validateSplitRequest(req, k.revisions.words)
 }
 
-// planSplit reads the resource once, checks that a revision named in req is one of its own, and
-// plans the split req asks for against that same read. Only the split changes, so no revision is
-// created. It returns the revision named in req, so that the caller can warn when it is not Ready;
-// nil for --to-latest.
+// planSplit reads the resource once, checks the revision req sends the share to against its
+// revisions (one of its own when named, not a failed one for --to-latest), and plans the split req
+// asks for against that same read. Only the split changes, so no revision is created. It returns
+// the revision named in req, so that the caller can warn when it is not Ready; nil for --to-latest.
 func (k *kindOf[T]) planSplit(ctx context.Context, c *Client, name string, req SplitRequest) (*DeployPlan, *Revision, error) {
 	if err := k.validateSplit(req); err != nil {
 		return nil, nil, err
@@ -129,15 +131,18 @@ func (k *kindOf[T]) planSplit(ctx context.Context, c *Client, name string, req S
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get %s %q: %w", k.noun, name, err)
 	}
+	revisions, err := k.listRevisionsOf(ctx, c, live)
+	if err != nil {
+		return nil, nil, err
+	}
 	var target *Revision
-	if req.Revision != "" {
-		revisions, err := k.listRevisionsOf(ctx, c, live)
-		if err != nil {
-			return nil, nil, err
-		}
-		if target, err = findRevision(revisions, req.Revision, k.noun); err != nil {
-			return nil, nil, err
-		}
+	if req.Latest {
+		err = checkLatestCanServe(revisions, k.revisions.latestCreated(live), k.revisions.words)
+	} else {
+		target, err = findRevision(revisions, req.Revision, k.noun)
+	}
+	if err != nil {
+		return nil, nil, err
 	}
 	desired, err := k.revisions.shift(live, req)
 	if err != nil {
@@ -188,13 +193,14 @@ func HasSplit(kind Kind, manifest []byte) (bool, error) {
 
 // serviceRevisions is the revisions hook of the service kind.
 var serviceRevisions = &revisionsOf[*run.Service]{
-	label:      serviceLabel,
-	shares:     func(svc *run.Service) map[string]revisionTraffic { return trafficByRevision(newStatus(svc)) },
-	protected:  pinnedRevisionNames,
-	routeAllTo: RollbackTarget,
-	shift:      ShiftTrafficTarget,
-	pinsSplit:  func(svc *run.Service) bool { return svc.Spec != nil && len(svc.Spec.Traffic) > 0 },
-	words:      serviceSplitWords,
+	label:         serviceLabel,
+	shares:        func(svc *run.Service) map[string]revisionTraffic { return trafficByRevision(newStatus(svc)) },
+	protected:     pinnedRevisionNames,
+	routeAllTo:    RollbackTarget,
+	shift:         ShiftTrafficTarget,
+	pinsSplit:     func(svc *run.Service) bool { return svc.Spec != nil && len(svc.Spec.Traffic) > 0 },
+	latestCreated: func(svc *run.Service) string { return newStatus(svc).LatestCreatedRevision },
+	words:         serviceSplitWords,
 }
 
 // workerPoolLabel is the label naming the worker pool a revision belongs to (confirmed against the
@@ -204,13 +210,14 @@ const workerPoolLabel = "run.googleapis.com/workerPool"
 // workerPoolRevisions is the revisions hook of the worker pool kind: what it splits between
 // revisions is its instances.
 var workerPoolRevisions = &revisionsOf[*run.WorkerPool]{
-	label:      workerPoolLabel,
-	shares:     instancesByRevision,
-	protected:  protectedWorkerPoolRevisions,
-	routeAllTo: workerPoolRollbackTarget,
-	shift:      shiftInstanceSplit,
-	pinsSplit:  func(pool *run.WorkerPool) bool { return pool.Spec != nil && len(pool.Spec.InstanceSplits) > 0 },
-	words:      workerPoolSplitWords,
+	label:         workerPoolLabel,
+	shares:        instancesByRevision,
+	protected:     protectedWorkerPoolRevisions,
+	routeAllTo:    workerPoolRollbackTarget,
+	shift:         shiftInstanceSplit,
+	pinsSplit:     func(pool *run.WorkerPool) bool { return pool.Spec != nil && len(pool.Spec.InstanceSplits) > 0 },
+	latestCreated: func(pool *run.WorkerPool) string { return newWorkerPoolStatus(pool).LatestCreatedRevision },
+	words:         workerPoolSplitWords,
 }
 
 // instancesByRevision gathers a worker pool's status.instanceSplits per revision. The status

@@ -120,6 +120,16 @@ func setEnv(m map[string]any, value string) {
 	c["env"] = append(entries, map[string]any{"name": "CLRND_E2E", "value": value})
 }
 
+// setCommand overrides the first container's command; an empty one restores the image's own.
+func setCommand(m map[string]any, command string) {
+	c := task(m)["containers"].([]any)[0].(map[string]any)
+	if command == "" {
+		delete(c, "command")
+		return
+	}
+	c["command"] = []any{command}
+}
+
 // setAnnotation sets one of the resource's own metadata.annotations.
 func setAnnotation(m map[string]any, key, value string) {
 	mapping(m, "metadata", "annotations")[key] = value

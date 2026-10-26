@@ -209,6 +209,30 @@ func (s *suite) services(t *testing.T) {
 		s.fatal(t, "unexpected verify JSON: %s", r.stdout)
 	}
 
+	t.Log("--to-latest refuses a latest revision that failed, before applying anything")
+	servingBefore = s.serving(t)
+	s.edit(t, manifest, func(m map[string]any) {
+		setEnv(m, "failing")
+		setCommand(m, "/clrnd-e2e-no-such-command")
+	})
+	s.fails(t, s.cli(t, dir, "deploy", "--auto-approve", "--timeout", "180s"))
+	failed := s.serviceState(t)
+	if failed.Status.LatestCreatedRevisionName == servingBefore {
+		s.fatal(t, "the failing deploy created no revision")
+	}
+	r = s.fails(t, s.cli(t, dir, "traffic", s.service, "--to-latest", "--percent", "10", "--auto-approve"))
+	s.contains(t, r.stderr, "--to-latest would send traffic to it")
+	if s.serviceState(t).Metadata.Generation != failed.Metadata.Generation {
+		s.fatal(t, "the refused split was applied")
+	}
+	s.percent(t, servingBefore, 100)
+	s.edit(t, manifest, func(m map[string]any) {
+		setEnv(m, "fixed")
+		setCommand(m, "")
+	})
+	s.code(t, s.cli(t, dir, "deploy", "--auto-approve", "--timeout", "180s"), 0)
+	s.ready(t)
+
 	t.Log("A pinned revision refuses template changes, including a retry")
 	pinnedFile := filepath.Join(dir, "pinned.yaml")
 	s.write(t, pinnedFile, s.read(t, manifest))

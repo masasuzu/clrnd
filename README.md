@@ -975,6 +975,12 @@ something would move it. The newest revision is the one created last, so right a
 `deploy --no-traffic` it is the revision that serves nothing yet, and `--percent` splits against
 the revision serving now.
 
+When the newest revision has failed — a `deploy` whose revision never became ready — `--to-latest`
+is refused before anything is applied: Cloud Run would accept the split but send nothing to it.
+Deploy a fixed manifest, or name a ready revision with `--to`. A revision deployed with
+`--no-traffic` is not started until it gets a share, so a container that cannot start shows up only
+then, as the command failing after the apply.
+
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `project:` is set in the config file. |

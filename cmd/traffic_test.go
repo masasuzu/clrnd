@@ -29,7 +29,7 @@ const pinnedServiceJSON = `{
 
 // startServiceAPI starts a fake API that answers with the given service definition and the
 // revision list, and makes the body of the apply (PUT) available.
-func startServiceAPI(t *testing.T, serviceBody string) func() []byte {
+func startServiceAPI(t *testing.T, serviceBody, revisionsBody string) func() []byte {
 	t.Helper()
 	var mu sync.Mutex
 	var put []byte
@@ -43,7 +43,7 @@ func startServiceAPI(t *testing.T, serviceBody string) func() []byte {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/revisions") {
-			_, _ = w.Write([]byte(revisionsJSON))
+			_, _ = w.Write([]byte(revisionsBody))
 			return
 		}
 		_, _ = w.Write([]byte(serviceBody))
@@ -101,7 +101,7 @@ func TestTrafficSplitsAgainstTheServingRevision(t *testing.T) {
 // the latest revision.
 func TestTrafficToLatestUnpinsTheSplit(t *testing.T) {
 	// Start from the state after a rollback (traffic pinned to an older revision).
-	sentBody := startServiceAPI(t, pinnedServiceJSON)
+	sentBody := startServiceAPI(t, pinnedServiceJSON, revisionsJSON)
 
 	if _, _, err := executeRoot(t, "traffic", "my-svc", "--to-latest",
 		"--auto-approve", "--no-wait",
@@ -138,6 +138,85 @@ func TestTrafficRejectsAnUnknownRevision(t *testing.T) {
 	}
 	if sentBody() != nil {
 		t.Errorf("a body was applied (%s), want nothing applied", sentBody())
+	}
+}
+
+// serviceWithNewRevisionJSON is a service that follows the latest revision, whose newest created
+// revision (my-svc-00008-ghi) serves nothing while my-svc-00007-abc serves everything.
+const serviceWithNewRevisionJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 8},
+  "spec": {
+    "template": {"spec": {"containers": [{"image": "gcr.io/project/image:newer"}]}},
+    "traffic": [{"latestRevision": true, "percent": 100}]
+  },
+  "status": {
+    "observedGeneration": 8,
+    "latestReadyRevisionName": "my-svc-00007-abc",
+    "latestCreatedRevisionName": "my-svc-00008-ghi",
+    "conditions": [{"type": "Ready", "status": "True"}],
+    "traffic": [{"revisionName": "my-svc-00007-abc", "percent": 100}]
+  }
+}`
+
+// revisionsWithNewest returns the revision list with my-svc-00008-ghi added on top, in the given
+// Ready state.
+func revisionsWithNewest(ready, reason string) string {
+	return `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "RevisionList",
+  "items": [
+    {
+      "metadata": {"name": "my-svc-00008-ghi", "creationTimestamp": "2026-08-23T10:00:00Z"},
+      "spec": {"containers": [{"image": "gcr.io/project/image:newer"}]},
+      "status": {"conditions": [{"type": "Ready", "status": "` + ready + `", "reason": "` + reason + `"}]}
+    },
+    {
+      "metadata": {"name": "my-svc-00007-abc", "creationTimestamp": "2026-08-22T10:00:00Z"},
+      "spec": {"containers": [{"image": "gcr.io/project/image:new"}]},
+      "status": {"conditions": [{"type": "Ready", "status": "True"}]}
+    }
+  ]
+}`
+}
+
+// TestTrafficToLatestRefusesAFailedRevision checks that --to-latest is refused before applying
+// when the newest created revision failed. The API would accept the split, route nothing to the
+// failed revision and leave the service not Ready, so the command could only fail after the write.
+func TestTrafficToLatestRefusesAFailedRevision(t *testing.T) {
+	sentBody := startServiceAPI(t, serviceWithNewRevisionJSON,
+		revisionsWithNewest("False", "HealthCheckContainerError"))
+
+	_, _, err := executeRoot(t, "traffic", "my-svc", "--to-latest", "--percent", "10",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1")
+	if err == nil {
+		t.Fatal("traffic error = nil, want the failed latest revision to be refused")
+	}
+	if !strings.Contains(err.Error(), `the latest revision "my-svc-00008-ghi" failed (HealthCheckContainerError)`) {
+		t.Errorf("traffic error = %v", err)
+	}
+	if sentBody() != nil {
+		t.Errorf("a body was applied (%s), want nothing applied", sentBody())
+	}
+}
+
+// TestTrafficToLatestSplitsToARevisionThatHasNotServed checks that a newest revision that has not
+// had a share yet is not taken for a failed one: it reports Ready=True (Retired) until it is
+// started, which is the state the canary after deploy --no-traffic starts from.
+func TestTrafficToLatestSplitsToARevisionThatHasNotServed(t *testing.T) {
+	sentBody := startServiceAPI(t, serviceWithNewRevisionJSON, revisionsWithNewest("True", "Retired"))
+
+	if _, _, err := executeRoot(t, "traffic", "my-svc", "--to-latest", "--percent", "10",
+		"--auto-approve", "--no-wait",
+		"--project", "test-project", "--region", "asia-northeast1"); err != nil {
+		t.Fatalf("traffic error = %v", err)
+	}
+	targets := trafficTargets(t, sentBody())
+	if len(targets) != 2 || targets[0]["latestRevision"] != true || targets[0]["percent"] != float64(10) ||
+		targets[1]["revisionName"] != "my-svc-00007-abc" || targets[1]["percent"] != float64(90) {
+		t.Errorf("spec.traffic = %v, want 10%% following the latest and 90%% on my-svc-00007-abc", targets)
 	}
 }
 
@@ -213,7 +292,7 @@ func TestDeployImageOverrideIsWhatGetsApplied(t *testing.T) {
 // TestDiffImageOverrideMatchesDeploy checks that diff compares using the overridden image. If
 // this did not match, the diff you saw and what gets applied would disagree.
 func TestDiffImageOverrideMatchesDeploy(t *testing.T) {
-	startServiceAPI(t, rollbackServiceJSON)
+	startServiceAPI(t, rollbackServiceJSON, revisionsJSON)
 
 	manifest := writeManifest(t, localManifest)
 	stdout, _, err := executeRoot(t, "diff", "my-svc", manifest,
