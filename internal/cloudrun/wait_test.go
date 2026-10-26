@@ -102,7 +102,7 @@ func TestWaitDone(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			done, err := waitDone(tt.status, subject("service", "my-svc"), tt.generation)
+			done, err := waitDone(tt.status, subject("service", "my-svc"), tt.generation, false)
 			if done != tt.wantDone {
 				t.Errorf("waitDone() done = %v, want %v", done, tt.wantDone)
 			}
@@ -111,6 +111,46 @@ func TestWaitDone(t *testing.T) {
 				t.Errorf("waitDone() error = %v, want nil", err)
 			case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
 				t.Errorf("waitDone() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestWaitDoneSplitOnly checks a split-only change on a service whose newest revision failed: it
+// succeeds once the traffic is routed (RoutesReady=True) although Ready stays False, keeps waiting
+// while RoutesReady is Unknown, and fails when the routes failed or the failure is not the newest
+// revision's. A plan that is not split-only fails on Ready=False as before.
+func TestWaitDoneSplitOnly(t *testing.T) {
+	status := func(configurations, routes string) *Status {
+		s := &Status{ObservedGeneration: 3, Conditions: []Condition{
+			{Type: conditionReady, Status: conditionFalse, Reason: "HealthCheckContainerError"},
+		}}
+		if configurations != "" {
+			s.Conditions = append(s.Conditions, Condition{Type: conditionConfigurationsReady, Status: configurations})
+		}
+		if routes != "" {
+			s.Conditions = append(s.Conditions, Condition{Type: conditionRoutesReady, Status: routes})
+		}
+		return s
+	}
+	tests := []struct {
+		name                   string
+		configurations, routes string
+		splitOnly              bool
+		wantDone, wantErr      bool
+	}{
+		{"routed while the newest revision failed", conditionFalse, conditionTrue, true, true, false},
+		{"routes still converging", conditionFalse, "Unknown", true, false, false},
+		{"routes failed", conditionFalse, conditionFalse, true, true, true},
+		{"routes failed with the configuration ready", conditionTrue, conditionFalse, true, true, true},
+		{"no route conditions (a worker pool)", "", "", true, true, true},
+		{"not a split-only plan", conditionFalse, conditionTrue, false, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			done, err := waitDone(status(tt.configurations, tt.routes), subject("service", "my-svc"), 3, tt.splitOnly)
+			if done != tt.wantDone || (err != nil) != tt.wantErr {
+				t.Errorf("waitDone() = %v, %v; want done %v, error %v", done, err, tt.wantDone, tt.wantErr)
 			}
 		})
 	}

@@ -88,7 +88,7 @@ func waitForDeletion(cmd *cobra.Command, client *cloudrun.Client, t target, name
 // waitForRollout runs wait (Client.Wait, or DeployPlan.Wait for whatever kind the plan applies),
 // printing progress to stderr whenever the state changes. It is shared by wait (waits on the current
 // state) and applyPlan (waits for the rollout of the generation it applied). On success it prints
-// nothing (following the convention that stdout is data-only).
+// nothing to stdout (following the convention that stdout is data-only).
 func waitForRollout(cmd *cobra.Command, name string,
 	wait func(context.Context, cloudrun.WaitOptions) (*cloudrun.Status, error), opts cloudrun.WaitOptions) error {
 	out := cmd.ErrOrStderr()
@@ -100,6 +100,17 @@ func waitForRollout(cmd *cobra.Command, name string,
 	opts.OnRetry = func(err error) {
 		fmt.Fprintf(out, "waiting for %s: could not read the status, retrying: %v\n", name, err)
 	}
-	_, err := wait(cmd.Context(), opts)
-	return err
+	s, err := wait(cmd.Context(), opts)
+	if err != nil {
+		return err
+	}
+	// A split-only change succeeds once the traffic is routed, even while the service stays not
+	// Ready because its newest revision failed (see DeployPlan.Wait). The progress line just
+	// printed shows Ready=False, so say why that is not an error, and what clears it.
+	if ready := s.Ready(); ready != nil && ready.Status == "False" {
+		fmt.Fprintf(out, "warning: %s: the traffic is in place, but it stays not ready (%s) because "+
+			"its newest revision %q failed; deploy a fixed manifest to clear it\n",
+			name, ready.Reason, s.LatestCreatedRevision)
+	}
+	return nil
 }

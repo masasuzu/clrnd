@@ -933,6 +933,12 @@ clrnd rollback --revision my-service-00006-def --auto-approve
 The diff is shown and confirmed the same way `deploy` does, and the rollout is waited for unless
 `--no-wait` is given.
 
+While the newest revision has failed, the service stays not ready until a deploy replaces it,
+whatever the traffic split. So `rollback` and `traffic` wait for the traffic itself: once it is
+routed as asked they succeed, with a warning on stderr that the service is still not ready. A split
+that gives a share to the failed revision still fails, and `clrnd wait` still reports the service
+as not ready.
+
 | Flag             | Description                                                    |
 | ---------------- | ------------------------------------------------------------- |
 | `--project`      | GCP project ID. Required unless `project:` is set in the config file. |

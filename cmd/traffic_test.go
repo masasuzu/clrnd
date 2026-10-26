@@ -220,6 +220,58 @@ func TestTrafficToLatestSplitsToARevisionThatHasNotServed(t *testing.T) {
 	}
 }
 
+// afterFailedDeployServiceJSON is a service whose newest revision (my-svc-00008-ghi) failed, with
+// the traffic still on my-svc-00007-abc. The fake API also answers it after the apply, as the state
+// a rollback away from a failed deploy settles in: ConfigurationsReady=False keeps Ready=False
+// until a deploy replaces the failed revision, while RoutesReady=True.
+const afterFailedDeployServiceJSON = `{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {"name": "my-svc", "namespace": "test-project", "generation": 9},
+  "spec": {
+    "template": {"spec": {"containers": [{"image": "gcr.io/project/image:newer"}]}},
+    "traffic": [{"latestRevision": true, "percent": 100}]
+  },
+  "status": {
+    "observedGeneration": 9,
+    "latestReadyRevisionName": "my-svc-00007-abc",
+    "latestCreatedRevisionName": "my-svc-00008-ghi",
+    "conditions": [
+      {"type": "Ready", "status": "False", "reason": "HealthCheckContainerError"},
+      {"type": "ConfigurationsReady", "status": "False", "reason": "HealthCheckContainerError"},
+      {"type": "RoutesReady", "status": "True"}
+    ],
+    "traffic": [{"revisionName": "my-svc-00007-abc", "percent": 100}]
+  }
+}`
+
+// TestSplitAfterAFailedDeploySucceedsOnceRouted checks that traffic and rollback to a ready
+// revision succeed with a warning once the traffic is routed, although the service stays Ready=False
+// because of its failed newest revision, while wait still reports that as a failure.
+func TestSplitAfterAFailedDeploySucceedsOnceRouted(t *testing.T) {
+	startServiceAPI(t, afterFailedDeployServiceJSON, revisionsWithNewest("False", "HealthCheckContainerError"))
+	target := []string{"--project", "test-project", "--region", "asia-northeast1", "--timeout", "5s", "--interval", "1ms"}
+
+	for _, args := range [][]string{
+		{"traffic", "my-svc", "--to", "my-svc-00007-abc", "--auto-approve"},
+		{"rollback", "my-svc", "--revision", "my-svc-00007-abc", "--auto-approve"},
+	} {
+		_, stderr, err := executeRoot(t, append(args, target...)...)
+		if err != nil {
+			t.Errorf("%s error = %v, want success once the traffic is routed", args[0], err)
+		}
+		if !strings.Contains(stderr, `warning: my-svc: the traffic is in place, but it stays not ready `+
+			`(HealthCheckContainerError) because its newest revision "my-svc-00008-ghi" failed`) {
+			t.Errorf("%s stderr = %q, want the warning", args[0], stderr)
+		}
+	}
+
+	if _, _, err := executeRoot(t, append([]string{"wait", "my-svc"}, target...)...); err == nil ||
+		!strings.Contains(err.Error(), "failed to become ready") {
+		t.Errorf("wait error = %v, want the service reported as not ready", err)
+	}
+}
+
 // TestTrafficValidatesTheFlagsFirst checks that the flag combination is validated before target
 // resolution and authentication (--project is not passed either, so if the order were reversed
 // "project is required" would come out instead).

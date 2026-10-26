@@ -109,6 +109,7 @@ func (k *kindOf[T]) planRollback(ctx context.Context, c *Client, name, requested
 	if err != nil {
 		return nil, nil, err
 	}
+	plan.splitOnly = true
 	return plan, target, nil
 }
 
@@ -153,6 +154,7 @@ func (k *kindOf[T]) planSplit(ctx context.Context, c *Client, name string, req S
 	if err != nil {
 		return nil, nil, err
 	}
+	plan.splitOnly = true
 	return plan, target, nil
 }
 
