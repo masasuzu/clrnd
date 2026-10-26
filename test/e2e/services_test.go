@@ -185,6 +185,14 @@ func (s *suite) services(t *testing.T) {
 	if s.serving(t) != servingBefore {
 		s.fatal(t, "--no-traffic moved traffic")
 	}
+	// The canary the README shows. latestReadyRevisionName can still name the serving revision
+	// here, which a split against "the latest ready" refused as already serving everything.
+	t.Logf("latest ready still names the serving revision: %t",
+		s.serviceState(t).Status.LatestReadyRevisionName == servingBefore)
+	s.code(t, s.cli(t, dir, "traffic", s.service, "--to-latest", "--percent", "10", "--auto-approve", "--timeout", "120s"), 0)
+	s.ready(t)
+	s.percent(t, newRevision, 10)
+	s.percent(t, servingBefore, 90)
 	s.code(t, s.cli(t, dir, "traffic", s.service, "--to-latest", "--auto-approve", "--timeout", "120s"), 0)
 	s.ready(t)
 	s.eventually(t, time.Minute, func() bool { return s.serving(t) == newRevision })

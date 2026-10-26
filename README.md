@@ -971,7 +971,9 @@ your `--percent` and hand the rest to an old one.
 `--to-latest` stops pinning the split to a revision name: traffic follows whatever revision is
 newest, now and after the next deploy. This is how you undo a `rollback` — while traffic is pinned,
 `refresh` refuses to run (a new revision would serve nothing) and only a `deploy` that changes
-something would move it.
+something would move it. The newest revision is the one created last, so right after
+`deploy --no-traffic` it is the revision that serves nothing yet, and `--percent` splits against
+the revision serving now.
 
 | Flag             | Description                                          |
 | ---------------- | ---------------------------------------------------- |
