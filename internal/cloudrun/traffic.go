@@ -107,6 +107,30 @@ func ShiftTrafficTarget(live *run.Service, req SplitRequest) (*run.Service, erro
 	return &out, nil
 }
 
+// checkLatestCanServe refuses --to-latest when the newest created revision, which latestRevision
+// resolves to, has failed (Ready=False). Confirmed against the real API for a service: Cloud Run
+// accepts such a split but routes nothing to the failed revision, the service reports Ready=False,
+// and the command fails only after the apply has written latestRevision into spec.traffic.
+//
+// It catches a revision a deploy rolled out and saw fail. A revision that has never had a share is
+// not started, so it reports Ready=True (Retired) even when its container cannot start, and a
+// failing worker pool revision stayed Ready=Unknown for minutes (both confirmed against the real
+// API); neither is known to have failed when the split is planned.
+func checkLatestCanServe(revisions Revisions, latest string, words splitWords) error {
+	for _, r := range revisions {
+		if r.Name != latest || r.Ready != conditionFalse {
+			continue
+		}
+		state := "failed"
+		if r.Reason != "" {
+			state = fmt.Sprintf("failed (%s)", r.Reason)
+		}
+		return fmt.Errorf("the latest revision %q %s, and --to-latest would %s it; deploy a fixed "+
+			"manifest first, or pass --to to choose a ready revision", r.Name, state, words.sendTo)
+	}
+	return nil
+}
+
 // remainderRevision chooses the revision that keeps the remaining share: the revision currently
 // receiving the most. If that is the target itself, there is nothing to split against, so it is
 // an error.

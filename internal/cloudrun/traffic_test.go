@@ -288,6 +288,30 @@ func TestPinnedTrafficFixesTheLatestPointer(t *testing.T) {
 	}
 }
 
+// TestCheckLatestCanServe checks that --to-latest is refused only when the newest created revision
+// failed: one that has not served yet (Ready=True, Retired) or is still rolling out (Unknown)
+// cannot be told apart from a working one, and an older failed revision is not the target.
+func TestCheckLatestCanServe(t *testing.T) {
+	revisions := func(newest Revision) Revisions {
+		return Revisions{newest, {Name: "my-pool-00002-bbb", Ready: conditionFalse, Reason: "ContainerMissing"},
+			{Name: "my-pool-00001-aaa", Ready: conditionTrue, Percent: 100}}
+	}
+	err := checkLatestCanServe(revisions(Revision{Name: "my-pool-00003-ccc", Ready: conditionFalse, Reason: "ContainerMissing"}),
+		"my-pool-00003-ccc", workerPoolSplitWords)
+	if err == nil || !strings.Contains(err.Error(),
+		`the latest revision "my-pool-00003-ccc" failed (ContainerMissing), and --to-latest would run the instances on it`) {
+		t.Errorf("checkLatestCanServe(failed) error = %v", err)
+	}
+	for _, newest := range []Revision{
+		{Name: "my-pool-00003-ccc", Ready: conditionTrue, Reason: "Retired"},
+		{Name: "my-pool-00003-ccc", Ready: "Unknown"},
+	} {
+		if err := checkLatestCanServe(revisions(newest), "my-pool-00003-ccc", workerPoolSplitWords); err != nil {
+			t.Errorf("checkLatestCanServe(%+v) error = %v, want nil", newest, err)
+		}
+	}
+}
+
 // TestValidateSplitRequestNamesWhatTheKindSplits checks that the message for a missing target puts
 // it in the kind's terms, and that a kind without revisions has no split to change.
 func TestValidateSplitRequestNamesWhatTheKindSplits(t *testing.T) {
