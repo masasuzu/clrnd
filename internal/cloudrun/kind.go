@@ -475,6 +475,9 @@ type DeployPlan struct {
 	client  *Client
 	kind    Kind
 	desired any // the definition Apply sends, of kind's API type
+	// splitOnly marks a plan that changes nothing but the split (rollback, traffic,
+	// instance-split), whose wait ends once the split is in place (see splitSettled).
+	splitOnly bool
 }
 
 // Project returns the project the plan applies to.
@@ -500,6 +503,7 @@ func (p *DeployPlan) Apply(ctx context.Context, dryRun bool) (int64, error) {
 // Wait polls until what the plan applies settles (see Client.Wait). It works whether or not the
 // plan has been applied: with no Generation it only checks that it is Ready now.
 func (p *DeployPlan) Wait(ctx context.Context, opts WaitOptions) (*Status, error) {
+	opts.splitOnly = p.splitOnly
 	return p.kind.wait(ctx, p.client, p.Name, opts)
 }
 

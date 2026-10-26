@@ -226,6 +226,19 @@ func (s *suite) services(t *testing.T) {
 		s.fatal(t, "the refused split was applied")
 	}
 	s.percent(t, servingBefore, 100)
+
+	t.Log("Moving the traffic off a failed revision succeeds once routed; a share for it fails")
+	// The failed revision keeps the service Ready=False until a deploy replaces it, so these end on
+	// RoutesReady rather than Ready.
+	r = s.code(t, s.cli(t, dir, "rollback", s.service, "--revision", servingBefore, "--auto-approve", "--timeout", "120s"), 0)
+	s.contains(t, r.stderr, "the traffic is in place, but it stays not ready")
+	s.percent(t, servingBefore, 100)
+	s.fails(t, s.cli(t, dir, "traffic", s.service, "--to", failed.Status.LatestCreatedRevisionName, "--percent", "10", "--auto-approve", "--timeout", "180s"))
+	r = s.code(t, s.cli(t, dir, "traffic", s.service, "--to", servingBefore, "--auto-approve", "--timeout", "120s"), 0)
+	s.contains(t, r.stderr, "the traffic is in place, but it stays not ready")
+	s.percent(t, servingBefore, 100)
+	// wait asks whether the service is Ready, and it is not.
+	s.fails(t, s.cli(t, dir, "wait", s.service, "--timeout", "60s"))
 	s.edit(t, manifest, func(m map[string]any) {
 		setEnv(m, "fixed")
 		setCommand(m, "")

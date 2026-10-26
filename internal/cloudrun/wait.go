@@ -43,6 +43,9 @@ type WaitOptions struct {
 	OnUpdate func(message string)
 	// OnRetry is called when fetching the state fails and is about to be retried. nil does nothing.
 	OnRetry func(err error)
+
+	// splitOnly is set by DeployPlan.Wait for a plan that only changes the split.
+	splitOnly bool
 }
 
 // Wait polls until the resource of the given kind settles. It succeeds once Ready=True, and
@@ -78,7 +81,7 @@ func waitReady(ctx context.Context, subject string, fetch func(context.Context) 
 			return s, err
 		},
 		progress: func(s *Status) string { return waitProgress(s, generation) },
-		done:     func(s *Status) (bool, error) { return waitDone(s, subject, generation) },
+		done:     func(s *Status) (bool, error) { return waitDone(s, subject, generation, opts.splitOnly) },
 		interrupted: func(parent, waitCtx context.Context, last *Status, timeout time.Duration, lastErr error) error {
 			return waitInterrupted(parent, waitCtx, subject, last, timeout, generation, lastErr)
 		},
@@ -228,7 +231,9 @@ func nextWaitInterval(interval time.Duration) time.Duration {
 //
 // As the Cloud Run documentation describes, until observedGeneration catches up to the target
 // generation the conditions belong to the previous generation, so no judgement is made.
-func waitDone(s *Status, subject string, generation int64) (bool, error) {
+//
+// splitOnly is for a plan that changes nothing but the split; see splitSettled.
+func waitDone(s *Status, subject string, generation int64, splitOnly bool) (bool, error) {
 	if s.ObservedGeneration < generation {
 		return false, nil
 	}
@@ -240,10 +245,57 @@ func waitDone(s *Status, subject string, generation int64) (bool, error) {
 	case conditionTrue:
 		return true, nil
 	case conditionFalse:
+		if splitOnly {
+			if settled, known := splitSettled(s); !known {
+				return false, nil
+			} else if settled {
+				return true, nil
+			}
+		}
 		return true, fmt.Errorf("%s failed to become ready: %s", subject, conditionDetail(ready))
 	}
 	// Unknown: not converged yet.
 	return false, nil
+}
+
+// Conditions a service's Ready is made of: its latest created revision, and its traffic.
+const (
+	conditionConfigurationsReady = "ConfigurationsReady"
+	conditionRoutesReady         = "RoutesReady"
+)
+
+// splitSettled decides a split-only change on a service that is Ready=False only because its
+// newest created revision failed (ConfigurationsReady=False). That stays until a deploy replaces
+// the revision, whatever the split, so a rollback away from a failed deploy would otherwise always
+// fail. settled is RoutesReady=True: the traffic goes where the split says. known is false while
+// RoutesReady is still Unknown. Anything else is not this case (settled false, known true), and
+// fails as before.
+//
+// Confirmed against the real API: after a failed deploy, rollback --revision or traffic --to a
+// ready revision ends at RoutesReady=True with status.traffic as asked, ConfigurationsReady=False
+// and Ready=False; a split giving a share to the failed revision ends at RoutesReady=False ("is not
+// ready and cannot serve traffic"). A worker pool has neither condition, so it is never this case;
+// its failing revisions stay Unknown rather than False.
+func splitSettled(s *Status) (settled, known bool) {
+	var configurations, routes *Condition
+	for i := range s.Conditions {
+		switch s.Conditions[i].Type {
+		case conditionConfigurationsReady:
+			configurations = &s.Conditions[i]
+		case conditionRoutesReady:
+			routes = &s.Conditions[i]
+		}
+	}
+	if configurations == nil || configurations.Status != conditionFalse || routes == nil {
+		return false, true
+	}
+	switch routes.Status {
+	case conditionTrue:
+		return true, true
+	case conditionFalse:
+		return false, true
+	}
+	return false, false
 }
 
 // waitInterrupted builds the reason the wait was cut short. If the caller's ctx was cancelled it
