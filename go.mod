@@ -8,7 +8,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	golang.org/x/term v0.48.0
-	google.golang.org/api v0.313.0
+	google.golang.org/api v0.316.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
